@@ -425,6 +425,7 @@ class VllmGenerationWorker:
             greedy=greedy,
             stop_strings=stop_strings,
         )
+        vlm_kwargs = data.get("vlm_kwargs", {})
 
         # verify inputs have correct padding
         verify_right_padding(data, pad_value=self.cfg["pad_token_id"])

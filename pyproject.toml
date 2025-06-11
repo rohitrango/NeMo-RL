@@ -36,6 +36,8 @@ dependencies = [
     "nvidia-ml-py",
     "hydra-core",
     "debugpy",
+    "sympy>=1.14.0",
+    "pillow>=11.2.1",
 ]
 
 [project.optional-dependencies]

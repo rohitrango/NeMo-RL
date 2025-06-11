@@ -15,7 +15,7 @@ from typing import Any, Optional, Union
 
 import torch
 from datasets import Dataset
-from transformers import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase, AutoProcessor
 
 from nemo_rl.data.interfaces import (
     DatumSpec,
@@ -29,7 +29,7 @@ from nemo_rl.data.llm_message_utils import (
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
-TokenizerType = PreTrainedTokenizerBase
+TokenizerType = Union[PreTrainedTokenizerBase, AutoProcessor]
 
 
 # TODO @sahilj handle too-long prompts and masking them out throughout the whole process and renormalizing on loss
@@ -75,6 +75,7 @@ class AllTaskProcessedDataset:
     def __len__(self) -> int:
         return len(self.dataset)
 
+    # TODO @rohitkumarj: not used anywhere
     def encode_single(
         self, text: Union[str, list[str]]
     ) -> tuple[list[int] | torch.Tensor, int]:

@@ -80,7 +80,7 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         stacked_dict: Self = cls()
         pad_value_dict = pad_value_dict or {}
 
-        for k in sorted(batches[0]):
+        for k in sorted(batches[0]):  
             list_of_tensors = [item[k] for item in batches]
 
             if isinstance(list_of_tensors[0], list):
@@ -269,7 +269,6 @@ class BatchedDataDict(UserDict, Generic[DictT]):
             assert batch_size is None, (
                 "batch_size must be None if allow_uneven_shards is True"
             )
-
         # Get the total batch size
         batch_sizes = set()
         for val in self.data.values():

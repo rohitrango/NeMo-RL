@@ -25,7 +25,7 @@ from torch.distributed.fsdp import (
     FSDPModule,
 )
 from torch.distributed.tensor import DTensor
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.integrations.accelerate import find_tied_parameters
 
 from nemo_rl.algorithms.interfaces import LossFunction, LossType
@@ -120,6 +120,7 @@ class DTensorPolicyWorker:
         self,
         config: PolicyConfig,
         tokenizer: AutoTokenizer,
+        processor: Optional[AutoProcessor] = None,
         weights_path: Optional[str] = None,
         optimizer_path: Optional[str] = None,
         init_optimizer: bool = True,
@@ -164,6 +165,8 @@ class DTensorPolicyWorker:
         ) or ModelFlag.SKIP_DTENSOR_TIED_WEIGHTS_CHECK.matches(model_name)
 
         self.tokenizer = tokenizer
+        self.processor = processor
+        self.is_vlm = processor is not None
         # ------------------------------------------------
         # 3) Move to GPU + Composable FSDP
         #    (Initialize device mesh, shard submodules, then shard entire model)
@@ -272,6 +275,27 @@ class DTensorPolicyWorker:
         """Return information about the GPU being used by this worker."""
         return get_gpu_info(self.model)
 
+    def _extract_vlm_kwargs(self, mb: BatchedDataDict[Any]) -> dict[str, Any]:
+        """Extract VLM (Vision Language Model) specific kwargs from a message batch.
+        
+        This function extracts VLM-specific keys from the message batch while filtering out
+        keys that are already handled by the model input (input_ids, attention_mask).
+        
+        Args:
+            mb: Message batch containing potentially VLM-specific keys
+            
+        Returns:
+            Dictionary of VLM kwargs to pass to the model, empty if not a VLM or no VLM keys
+        """
+        vlm_kwargs = {}
+        if self.is_vlm:
+            for vlmkey in mb.get("vlm_keys", [[]])[0]:
+                # ignore input_ids and attention_mask as they're handled separately
+                if vlmkey == 'input_ids' or vlmkey == 'attention_mask':
+                    continue
+                vlm_kwargs[vlmkey] = mb.get(vlmkey)
+        return vlm_kwargs
+
     def train(
         self,
         data: BatchedDataDict[Any],
@@ -301,11 +325,13 @@ class DTensorPolicyWorker:
         # dim 1 is always assumed to be the sequence dim, sanity check this here
         sequence_dim = 1
         seq_dim_size = data.get("input_ids").shape[sequence_dim]
-        for k, v in data.items():
-            if torch.is_tensor(v) and len(v.shape) > 1:
-                assert v.shape[sequence_dim] == seq_dim_size, (
-                    f"Dim 1 must be the sequence dim, expected dim 1={seq_dim_size} but got shape {v.shape}"
-                )
+
+        # @rohitkumarj;; WARNING: this is not true for VLMs, commenting it for now
+        # for k, v in data.items():
+        #     if torch.is_tensor(v) and len(v.shape) > 1:
+        #         assert v.shape[sequence_dim] == seq_dim_size, (
+        #             f"Dim 1 must be the sequence dim, expected dim 1={seq_dim_size} but got shape {v.shape}"
+        #         )
 
         if eval_mode:
             ctx: AbstractContextManager[Any] = torch.no_grad()
@@ -387,11 +413,15 @@ class DTensorPolicyWorker:
                             seq_len, device=input_ids.device
                         ).repeat(batch_size, 1)
 
+                        # add vlm kwargs to model call
+                        vlm_kwargs = self._extract_vlm_kwargs(mb)
+
                         outputs = self.model(
                             input_ids=input_ids,
                             attention_mask=attention_mask_input_all_ones,
                             position_ids=position_ids,
                             use_cache=False,
+                            **vlm_kwargs,
                         )
 
                     # Get logprobs
@@ -549,11 +579,14 @@ class DTensorPolicyWorker:
                         (batch_size, seq_len), dtype=torch.long, device=input_ids.device
                     )
 
+                    vlm_kwargs = self._extract_vlm_kwargs(lp_batch)
+
                     outputs = self.model(
                         input_ids=input_ids,
                         attention_mask=attention_mask_input_all_ones,
                         position_ids=position_ids,
                         use_cache=False,
+                        **vlm_kwargs,
                     )
 
                 if isinstance(outputs.logits, DTensor):
@@ -865,10 +898,13 @@ class DTensorPolicyWorker:
         save_checkpoint(
             model=self.model,
             weights_path=weights_path,
+            # optimizer and scheduler
             optimizer=self.optimizer if optimizer_path else None,
             scheduler=self.scheduler if optimizer_path else None,
             optimizer_path=optimizer_path,
+            # tokenizer and processor
             tokenizer=self.tokenizer if tokenizer_path else None,
+            processor=self.processor if tokenizer_path else None,
             tokenizer_path=tokenizer_path,
         )
 

@@ -13,12 +13,12 @@
 # limitations under the License.
 import os
 from pathlib import Path
-from typing import Any, Optional, TypedDict, cast
+from typing import Any, Optional, TypedDict, cast, Union
 
 import numpy as np
 import torch
 from torchdata.stateful_dataloader import StatefulDataLoader
-from transformers import PreTrainedTokenizerBase
+from transformers import AutoProcessor, PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.interfaces import LossFunction
 from nemo_rl.algorithms.loss_functions import (
@@ -60,6 +60,7 @@ from nemo_rl.utils.timer import Timer
 # ===============================================================================
 # Configuration
 # ===============================================================================
+# TokenizerType = Union[PreTrainedTokenizerBase, AutoProcessor]
 TokenizerType = PreTrainedTokenizerBase
 
 
@@ -116,6 +117,7 @@ def setup(
     tokenizer: TokenizerType,
     dataset: AllTaskProcessedDataset,
     val_dataset: Optional[AllTaskProcessedDataset],
+    processor: Optional[AutoProcessor] = None,
 ) -> tuple[
     ColocatablePolicyInterface,
     Optional[GenerationInterface],
@@ -141,6 +143,9 @@ def setup(
     grpo_config = master_config["grpo"]
     logger_config = master_config["logger"]
     cluster_config = master_config["cluster"]
+
+    # check if tokenizer is a processor
+    is_vlm = processor is not None
 
     assert generation_config is not None, (
         "A generation config in the PolicyConfig is required for GRPO"
@@ -249,6 +254,7 @@ def setup(
         cluster=cluster,
         config=policy_config,
         tokenizer=tokenizer,
+        processor=processor,
         weights_path=Path(last_checkpoint_path) / "policy" / "weights"
         if last_checkpoint_path
         else None,
@@ -335,6 +341,7 @@ def grpo_train(
     checkpointer: CheckpointManager,
     grpo_save_state: GRPOSaveState,
     master_config: MasterConfig,
+    processor: Optional[AutoProcessor] = None,
 ) -> None:
     """Run GRPO training algorithm."""
     timer = Timer()
@@ -351,6 +358,7 @@ def grpo_train(
     consumed_samples = grpo_save_state["consumed_samples"]
     val_period = master_config["grpo"]["val_period"]
     val_at_start = master_config["grpo"]["val_at_start"]
+    is_vlm = processor is not None
 
     # Run validation at the start if configured
     if val_at_start and step == 0:
@@ -391,7 +399,9 @@ def grpo_train(
                 # Convert LLMMessageLogType to FlatMessagesType for generation
                 batched_flat, input_lengths = batched_message_log_to_flat_message(
                     repeated_batch["message_log"],
-                    pad_value_dict={"token_ids": tokenizer.pad_token_id},
+                    pad_value_dict={
+                        "token_ids": tokenizer.pad_token_id
+                    },
                 )
                 input_ids = batched_flat["token_ids"]
 
@@ -404,6 +414,7 @@ def grpo_train(
                 else:
                     policy_generation.prepare_for_generation()
 
+            # TODO: @rohitrango: add vlm kwargs to the generation input data
             with timer.time("generation"):
                 repeated_batch, rollout_metrics = run_multi_turn_rollout(
                     policy_generation=policy_generation,
@@ -480,6 +491,17 @@ def grpo_train(
                         "sample_mask": repeated_batch["loss_multiplier"],
                     }
                 )
+                # check for vlm kwargs
+                vlm_kwargs = {}
+                if is_vlm:
+                    vlm_keys = set()
+                    for keylist in flat_messages['vlm_keys']:
+                        vlm_keys.update(keylist)
+                    for key in vlm_keys:
+                        vlm_kwargs[key] = flat_messages[key]
+                    # add to train_data
+                    train_data['vlm_kwargs'] = vlm_kwargs
+
                 train_data.to("cpu")
 
             print("▶ Preparing for logprob inference...")
