@@ -29,7 +29,7 @@ from torch.distributed.fsdp import (
 )
 from torch.distributed.fsdp.api import ShardedStateDictConfig, StateDictType
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
-from transformers import AutoModelForCausalLM, PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM, PreTrainedTokenizerBase, AutoProcessor
 from transformers.integrations.accelerate import find_tied_parameters
 
 from nemo_rl.algorithms.interfaces import LossFunction, LossType
@@ -71,6 +71,7 @@ class FSDP1PolicyWorker:
         self,
         config: PolicyConfig,
         tokenizer: PreTrainedTokenizerBase,
+        processor: Optional[AutoProcessor] = None,
         weights_path: Optional[str] = None,
         optimizer_path: Optional[str] = None,
         init_optimizer: bool = True,
@@ -119,6 +120,7 @@ class FSDP1PolicyWorker:
             self.reference_model = None
 
         self.tokenizer = tokenizer
+        self.processor = processor
 
         # ------------------------------------------------
         # 3) Move to GPU + Composable FSDP

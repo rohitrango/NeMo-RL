@@ -15,7 +15,7 @@
 # Generate rollouts for arbitrary environments
 # Supports multi-turn rollouts and many simultaneous environments (E.g. you can train on math, code, multi-turn games and more at once)
 
-from typing import Any
+from typing import Any, Optional
 
 import ray
 import torch
@@ -49,6 +49,7 @@ def generate_responses(
     batch: BatchedDataDict[DatumSpec],
     tokenizer: TokenizerType,
     input_lengths: torch.Tensor,
+    vlm_kwargs: Optional[dict[str, Any]] = None,
     include_logprobs: bool = True,
     greedy: bool = False,
 ) -> tuple[BatchedDataDict[DatumSpec], list[torch.Tensor], dict[str, float | int]]:
@@ -273,6 +274,13 @@ def run_multi_turn_rollout(
 
         # Extract input_ids and lengths from the flat messages
         active_input_ids = active_flat_messages["token_ids"]
+        vlm_kwargs = {}
+        if 'vlm_keys' in active_flat_messages:
+            vlm_keys = set()
+            for keylist in active_flat_messages['vlm_keys']:
+                vlm_keys.update(keylist)
+            for key in vlm_keys:
+                vlm_kwargs[key] = active_flat_messages[key]
 
         generation_input_data = BatchedDataDict[GenerationDatumSpec](
             {
@@ -281,6 +289,8 @@ def run_multi_turn_rollout(
                 "stop_strings": active_stop_strings,
             }
         )
+        if vlm_kwargs:
+            generation_input_data["vlm_kwargs"] = vlm_kwargs
 
         # generate_responses updates active_batch["message_log"] in-place
         active_batch, generated_ids, gen_metrics = generate_responses(

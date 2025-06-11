@@ -17,7 +17,7 @@ from typing import Any, Optional, Union
 
 import numpy as np
 import ray
-from transformers import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase, AutoProcessor
 
 from nemo_rl.algorithms.interfaces import LossFunction
 from nemo_rl.distributed.batched_data_dict import (
@@ -49,6 +49,7 @@ class HfPolicy(ColocatablePolicyInterface, GenerationInterface):
         cluster: RayVirtualCluster,
         config: PolicyConfig,
         tokenizer: PreTrainedTokenizerBase,
+        processor: Optional[AutoProcessor] = None,
         name_prefix: str = "hf_policy",
         workers_per_node: Optional[Union[int, list[int]]] = None,
         init_optimizer: bool = True,
@@ -87,6 +88,7 @@ class HfPolicy(ColocatablePolicyInterface, GenerationInterface):
             worker_builder_cls,
             config,
             tokenizer=tokenizer,
+            processor=processor,
             init_optimizer=init_optimizer,
             weights_path=weights_path,
             optimizer_path=optimizer_path,

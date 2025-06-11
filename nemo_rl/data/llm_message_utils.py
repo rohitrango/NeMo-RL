@@ -313,6 +313,7 @@ def batched_message_log_to_flat_message(
     result = BatchedDataDict()
     for key in all_keys:
         values = [seq.get(key) for seq in sequenced_lists]
+        # if not a tensor or DNE, then return the list of values
         if not values or not isinstance(values[0], Tensor):
             result[key] = values
             continue
@@ -335,7 +336,17 @@ def batched_message_log_to_flat_message(
         # Pad and stack tensors (always right padding)
         pad_value = pad_value_dict.get(key, 0) if pad_value_dict else 0
         padded = [_pad_tensor(t, max_len, "right", pad_value) for t in filled_values]
-        result[key] = torch.stack(padded)
+
+        # special case for `pixel_values` which is a flattened (N, D) tensor with potentially different Ns for each message
+        # keys_to_concat = ['pixel_values']
+        ## TODO: @rohitrango assuming that all images are the same size for now (so stacking them is fine)
+        ## this will have consequences for data sharding for VLM models (split along the batch dim but from [start_patch:end_patch])
+        keys_to_concat = []
+
+        if key in keys_to_concat:
+            result[key] = torch.cat(padded)
+        else:
+            result[key] = torch.stack(padded)
 
     return result, input_lengths_tensor
 
