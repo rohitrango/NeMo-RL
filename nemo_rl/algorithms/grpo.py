@@ -144,9 +144,6 @@ def setup(
     logger_config = master_config["logger"]
     cluster_config = master_config["cluster"]
 
-    # check if tokenizer is a processor
-    is_vlm = processor is not None
-
     assert generation_config is not None, (
         "A generation config in the PolicyConfig is required for GRPO"
     )
@@ -494,13 +491,26 @@ def grpo_train(
                 # check for vlm kwargs
                 vlm_kwargs = {}
                 if is_vlm:
-                    vlm_keys = set()
-                    for keylist in flat_messages['vlm_keys']:
-                        vlm_keys.update(keylist)
-                    for key in vlm_keys:
-                        vlm_kwargs[key] = flat_messages[key]
-                    # add to train_data
-                    train_data['vlm_kwargs'] = vlm_kwargs
+                    vlm_keys_lists = flat_messages.get('vlm_keys', [])
+                    if vlm_keys_lists:
+                        # Collect all unique vlm_keys from all samples
+                        # Handle 3-level nesting: batch -> conversation -> message -> keys
+                        vlm_keys = set()
+                        for conversation_vlm_keys in vlm_keys_lists:  # Each conversation
+                            if conversation_vlm_keys:  # Check if conversation has vlm_keys
+                                for message_vlm_keys in conversation_vlm_keys:  # Each message in conversation
+                                    if message_vlm_keys:  # Check if message has vlm_keys
+                                        for key in message_vlm_keys:  # Individual keys
+                                            vlm_keys.add(key)
+                        
+                        # Extract each VLM key from the flattened messages
+                        for key in vlm_keys:
+                            if key in flat_messages:
+                                vlm_kwargs[key] = flat_messages[key]
+                    
+                    # Add vlm_kwargs to train_data if any exist
+                    if vlm_kwargs:
+                        train_data['vlm_kwargs'] = vlm_kwargs
 
                 train_data.to("cpu")
 

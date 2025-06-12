@@ -23,7 +23,7 @@ loss_fn:
 
 checkpointing:
   enabled: true
-  checkpoint_dir: "results/grpo"
+  checkpoint_dir: "results/clevr_grpo"
   metric_name: "val_reward"
   higher_is_better: true
   keep_top_k: 3
@@ -31,7 +31,7 @@ checkpointing:
 
 policy:
   # Qwen/Qwen2.5-1.5B has tied weights which are only supported with dtensor policy with tp size 1 (https://github.com/NVIDIA/NeMo-RL/issues/227)
-  model_name: "Qwen/Qwen2-VL-2B-Instruct"
+  model_name: "Qwen/Qwen2.5-VL-3B-Instruct"
   tokenizer:
     name: ${policy.model_name} ## specify if you'd like to use a tokenizer different from the model's default
   train_global_batch_size: 512
@@ -92,8 +92,8 @@ policy:
     - milestones: [50]
 
   generation:
-    # backend: "vllm"
-    backend: "hf"   # TODO: @rohitrango: change this back to vllm after implementing vllm generation for VLM models
+    backend: "vllm"
+    # backend: "hf"   # TODO: @rohitrango: change this back to vllm after implementing vllm generation for VLM models
     max_new_tokens: ${policy.max_total_sequence_length}
     temperature: 1.0
     top_p: 1.0
@@ -114,11 +114,12 @@ data:
   system_prompt_file: null
   dataset_name: "clevr-cogent"
   split: "trainA"
+  task_name: "clevr-cogent"   # must match the task_name in the dataset
   seed: 42
 
 
 env:
-  math:
+  clevr-cogent:
     num_workers: 8
 
 logger:

@@ -438,15 +438,33 @@ class VllmGenerationWorker:
         # Prepare prompts for vLLM (removing padding)
         prompts = []
 
-        for i in range(batch_size):
-            # Use input_lengths to get only valid tokens (not padding)
-            valid_length = input_lengths[i].item()
-            valid_ids = (
-                input_ids[i, :valid_length] if valid_length > 0 else input_ids[i, :0]
-            )
-            token_ids = valid_ids.tolist()
+        # Check if this is VLM generation by looking for message_log with images
+        if 'message_log' in data and any('images' in msg for msg in data['message_log']):
+            # VLM generation using content and multi_modal_data
+            for i in range(batch_size):
+                msg = data['message_log'][i]
+                prompt_dict = {
+                    'prompt': msg['content']
+                }
+                
+                # Add multi-modal data if images are present
+                if 'images' in msg and msg['images']:
+                    prompt_dict['multi_modal_data'] = {
+                        'image': msg['images'][0]
+                    }
+                
+                prompts.append(prompt_dict)
+        else:
+            # Regular LLM generation using token_ids
+            for i in range(batch_size):
+                # Use input_lengths to get only valid tokens (not padding)
+                valid_length = input_lengths[i].item()
+                valid_ids = (
+                    input_ids[i, :valid_length] if valid_length > 0 else input_ids[i, :0]
+                )
+                token_ids = valid_ids.tolist()
 
-            prompts.append({"prompt_token_ids": token_ids})
+                prompts.append({"prompt_token_ids": token_ids})
 
         # Generate outputs
         assert self.llm is not None, (
@@ -574,14 +592,29 @@ class VllmGenerationWorker:
             return final_request_output
 
         for i in range(batch_size):
-            # Prepare prompt token IDs for this specific sample
-            current_input_actual_length = input_lengths_batch[i].item()
-            prompt_token_ids_list = (
-                input_ids_batch[i, :current_input_actual_length].tolist()
-                if current_input_actual_length > 0
-                else []
-            )
-            prompt = {"prompt_token_ids": prompt_token_ids_list}
+            # Check if this is VLM generation by looking for message_log with images
+            if 'message_log' in data and any('images' in msg for msg in data['message_log']):
+                # VLM generation using content and multi_modal_data
+                msg = data['message_log'][i]
+                prompt = {
+                    'prompt': msg['content']
+                }
+                
+                # Add multi-modal data if images are present
+                if 'images' in msg and msg['images']:
+                    prompt['multi_modal_data'] = {
+                        'image': msg['images'][0]
+                    }
+            else:
+                                 # Regular LLM generation using token_ids
+                # Prepare prompt token IDs for this specific sample
+                current_input_actual_length = input_lengths_batch[i].item()
+                prompt_token_ids_list = (
+                    input_ids_batch[i, :current_input_actual_length].tolist()
+                    if current_input_actual_length > 0
+                    else []
+                )
+                prompt = {"prompt_token_ids": prompt_token_ids_list}
 
             per_sample_stop_strings = None
             if batch_specific_stop_strings_list and i < len(
