@@ -68,7 +68,6 @@ def unshard_fsdp2_model(model: nn.Module) -> Generator[None, None, None]:
                 module.reshard()
 
 
-
 def load_hf_model(model_name: str) -> nn.Module:
     """Load a Hugging Face model with optional sliding window support."""
 
@@ -81,6 +80,10 @@ def load_hf_model(model_name: str) -> nn.Module:
             torch_dtype=torch.float32,
             trust_remote_code=True,
         )
+    
+        # .model  # the model is wrapped in another model, and vllm backend seems to unwrap it
+        # without calling .model, the weights dont load correctly in `update_weights_from_ipc_handles`
+        ## update: calling model gets rid of the `lm_head` 
     else:
         return AutoModelForCausalLM.from_pretrained(
             model_name,
@@ -758,50 +761,7 @@ class DTensorPolicyWorker:
         self.model = self.move_to_cuda(self.model)
         full_state_dict = self.model.state_dict()
 
-        # Filter out problematic weights for VL models
-        if self.is_vlm:
-            # Define prefixes and specific weight names to exclude for vLLM compatibility
-            exclude_prefixes = [
-                "model.visual.",                         # Qwen2.5-VL vision transformer
-                "visual.",                               # Vision model weights (actual structure)
-                "vision_model.",                         # Alternative vision model prefix
-                "vision_tower.",                         # Some models use this prefix
-                "mm_projector.",                         # Multimodal projector
-                "vision_projection.",                    # Vision projection layer
-            ]
-            
-            exclude_specific_weights = [
-                "model.language_model.embed_tokens.weight",  # vLLM can't handle VL embed_tokens structure
-                "language_model.embed_tokens.weight",        # Alternative path
-                "embed_tokens.weight",                       # Fallback
-                "model.language_model.rotary_emb.inv_freq",  # vLLM handles rotary embeddings differently
-                "language_model.rotary_emb.inv_freq",        # Alternative path
-                "rotary_emb.inv_freq",                       # Fallback
-                "visual.patch_embed.proj.weight",            # Specific vision weight causing error
-                "visual.patch_embed.proj.bias",              # Related bias
-            ]
-            
-            # Filter state dict to exclude problematic weights
-            filtered_state_dict = {}
-            for name, tensor in full_state_dict.items():
-                # Skip weights with problematic prefixes
-                if any(name.startswith(prefix) for prefix in exclude_prefixes):
-                    print(f"Filtering out vision weight: {name}")
-                    continue
-                # Skip specific problematic weights
-                if name in exclude_specific_weights:
-                    print(f"Filtering out incompatible weight: {name}")
-                    continue
-                filtered_state_dict[name] = tensor
-            
-            self._held_sharded_state_dict_reference = filtered_state_dict
-            print(f"Filtered {len(full_state_dict) - len(filtered_state_dict)} incompatible weights out of {len(full_state_dict)} total weights")
-            
-            # Debug: Print first few weight names being sent to vLLM
-            weight_names = list(filtered_state_dict.keys())
-            print(f"Sample weights being sent to vLLM: {weight_names[:10]}")
-        else:
-            self._held_sharded_state_dict_reference = full_state_dict
+        self._held_sharded_state_dict_reference = full_state_dict
 
         # Collect info for streaming multiple tensors
         state_dict_info = []

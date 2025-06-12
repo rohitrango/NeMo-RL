@@ -62,4 +62,12 @@ class VllmInternalWorkerExtension:
             print(
                 f"Error in VllmInternalWorkerExtension.update_weights_from_ipc_handles: {e}"
             )
+            # print the stack trace
+            import traceback
+
+            print("Model runner:")
+            print(self.model_runner.model)
+
+            traceback.print_exc()
+            # print(f"Content of ipc_handles: {ipc_handles.keys()}")
             return False
