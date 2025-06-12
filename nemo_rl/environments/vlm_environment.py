@@ -45,7 +45,7 @@ def _mute_output():
     ):
         yield
 
-def format_and_exact_answer(response: str, ground_truth: str) -> str:
+def format_and_exact_answer(ground_truth: str, response: str) -> str:
     ''' 
     Reward the agent for the following:
     1. response follows the format: (.*) <think> (.*) </think> <answer> (.*) </answer>
@@ -54,15 +54,23 @@ def format_and_exact_answer(response: str, ground_truth: str) -> str:
     TODO: rohitkumarj: write better reward functions
     '''
     rew = 0.0
-    print("response: ", response)
-    print("ground_truth: ", ground_truth)
-    print("--------------------------------")
-    if not re.match(r".*<think>.*</think>.*<answer>.*</answer>", response):
-        return rew
-    rew += 1.0  # one point for the format
-    if re.search(r"<answer>(.*)</answer>", response).group(1).lower() == ground_truth.lower():
-        rew += 4.0  # four points for the answer
-    return rew
+    # Check for <think> tags
+    if re.search(r"<think>[\s\S]*</think>", response):
+        rew += 0.25  # 0.25 points for having think tags
+    
+    # Check for <answer> tags
+    if re.search(r"<answer>[\s\S]*</answer>", response):
+        rew += 0.75  # 0.75 points for having answer tags
+    
+    match = re.search(r"<answer>([\s\S]*)</answer>", response)
+    if match:
+        answer = match.group(1)
+        # Remove all non-alphanumeric characters (including whitespace, punctuation, etc.)
+        answer_clean = ''.join(c for c in answer if c.isalnum()).lower()
+        ground_truth_clean = ''.join(c for c in ground_truth if c.isalnum()).lower()
+        if answer_clean == ground_truth_clean:
+            rew += 4.0  # four points for the answer
+    return rew, None
 
 
 @ray.remote
@@ -93,10 +101,12 @@ class VLMVerifyWorker:
                         ret_score, _ = self.verify_func(
                             ground_truth, response
                         )
-                    except Exception:
+                    except Exception as e:
                         ret_score = 0.0
+                        print(f"Error in verify_func: {e}")
                 results.append(float(ret_score))
-            except Exception:
+            except Exception as e:
+                print(f"Error in verify: {e}")
                 results.append(0.0)
         return results
 
