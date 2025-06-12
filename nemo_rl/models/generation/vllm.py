@@ -444,13 +444,13 @@ class VllmGenerationWorker:
             for i in range(batch_size):
                 msg = data['message_log'][i]
                 prompt_dict = {
-                    'prompt': msg['content']
+                    'prompt': msg['content'][0]  # TODO: @rohitrango: investigate this (why do we have to put [0] here?)
                 }
                 
                 # Add multi-modal data if images are present
                 if 'images' in msg and msg['images']:
                     prompt_dict['multi_modal_data'] = {
-                        'image': msg['images'][0]
+                        'image': msg['images'][0][0]     # TODO: @rohitrango: investigate this (why do we have to put [0] here?)
                     }
                 
                 prompts.append(prompt_dict)

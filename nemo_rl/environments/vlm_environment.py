@@ -53,11 +53,16 @@ def format_and_exact_answer(response: str, ground_truth: str) -> str:
 
     TODO: rohitkumarj: write better reward functions
     '''
+    rew = 0.0
+    print("response: ", response)
+    print("ground_truth: ", ground_truth)
+    print("--------------------------------")
     if not re.match(r".*<think>.*</think>.*<answer>.*</answer>", response):
-        return 0.0
+        return rew
+    rew += 1.0  # one point for the format
     if re.search(r"<answer>(.*)</answer>", response).group(1).lower() == ground_truth.lower():
-        return 1.0
-    return 0.0
+        rew += 4.0  # four points for the answer
+    return rew
 
 
 @ray.remote

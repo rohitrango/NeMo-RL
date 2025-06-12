@@ -1,6 +1,6 @@
 # GRPO Algorithm Configuration
 grpo:
-  num_prompts_per_step: 32
+  num_prompts_per_step: 16
   num_generations_per_prompt: 16
   max_rollout_turns: 1 # for multi-turn rollouts. Math Environments just have 1 turn (answering the question)
   max_num_steps: 1000000
@@ -34,11 +34,11 @@ policy:
   model_name: "Qwen/Qwen2.5-VL-3B-Instruct"
   tokenizer:
     name: ${policy.model_name} ## specify if you'd like to use a tokenizer different from the model's default
-  train_global_batch_size: 512
-  train_micro_batch_size: 4
+  train_global_batch_size: 32
+  train_micro_batch_size: 1
   generation_batch_size: 32 # Only used when generating using HF backend
   logprob_batch_size: 4
-  max_total_sequence_length: 512
+  max_total_sequence_length: 2048
   precision: "bfloat16"
   fsdp_offload_enabled: false
   activation_checkpointing_enabled: false

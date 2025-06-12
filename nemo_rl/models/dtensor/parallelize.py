@@ -43,9 +43,10 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
 # Add VL model imports
 try:
-    from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLForConditionalGeneration
+    from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLForConditionalGeneration, Qwen2_5_VLModel
 except ImportError:
     Qwen2VLForConditionalGeneration = None
+    Qwen2_5_VLModel = None
 
 try:
     from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
@@ -456,8 +457,8 @@ def _parallelize_model(
         LlamaForCausalLM,
         Gemma3ForCausalLM,
         Gemma3ForConditionalGeneration,
-        "Qwen2VLForConditionalGeneration",
-        "Qwen2_5_VLForConditionalGeneration",
+        # "Qwen2_5_VLModel",
+        Qwen2_5_VLForConditionalGeneration,
     ],
     dp_mesh: DeviceMesh,
     tp_mesh: DeviceMesh,
@@ -495,11 +496,12 @@ def _parallelize_model(
         layers: torch.nn.ModuleList = model.language_model.model.layers  # type: ignore
         num_attention_heads = model.config.text_config.num_attention_heads
         num_key_value_heads = model.config.text_config.num_key_value_heads
-    elif model_cls.__name__ in ["Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration"]:
+    # elif model_cls.__name__ in ["Qwen2_5_VLModel"]:
+    elif model_cls.__name__ in ["Qwen2_5_VLForConditionalGeneration"]:
         # VL models have the language model at model.language_model
-        layers: torch.nn.ModuleList = model.model.language_model.layers  # type: ignore
-        num_attention_heads = model.model.language_model.config.num_attention_heads
-        num_key_value_heads = model.model.language_model.config.num_key_value_heads
+        layers: torch.nn.ModuleList = model.language_model.layers  # type: ignore
+        num_attention_heads = model.language_model.config.num_attention_heads
+        num_key_value_heads = model.language_model.config.num_key_value_heads
     else:
         layers: torch.nn.ModuleList = model.model.layers  # type: ignore
         num_attention_heads = model.config.num_attention_heads

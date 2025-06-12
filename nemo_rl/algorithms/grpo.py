@@ -293,6 +293,8 @@ def refit_policy_generation(
 ) -> None:
     """Refit the policy generation interface with the latest policy weights.
 
+    This is only called with vllm backend (NEEDS_REFIT is True)
+
     Args:
         policy: The policy to provide weights to the inference engine.
         policy_generation: The inference engine to refit.
@@ -309,6 +311,7 @@ def refit_policy_generation(
     # do update
     for keys in grouped_param_keys:
         ipc_handles = policy.get_weights_ipc_handles(keys)
+        # ipc_handles = policy.hf_to_vllm_weight_mapping(ipc_handles)
         if not policy_generation.update_weights(ipc_handles):
             error_message = (
                 "❌ Error: Updating weights for the generation policy failed during refit.\n"
