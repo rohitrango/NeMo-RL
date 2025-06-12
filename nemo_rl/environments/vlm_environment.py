@@ -62,6 +62,7 @@ def format_and_exact_answer(ground_truth: str, response: str) -> str:
     if re.search(r"<answer>[\s\S]*</answer>", response):
         rew += 0.75  # 0.75 points for having answer tags
     
+    is_correct_answer = False
     match = re.search(r"<answer>([\s\S]*)</answer>", response)
     if match:
         answer = match.group(1)
@@ -70,7 +71,8 @@ def format_and_exact_answer(ground_truth: str, response: str) -> str:
         ground_truth_clean = ''.join(c for c in ground_truth if c.isalnum()).lower()
         if answer_clean == ground_truth_clean:
             rew += 4.0  # four points for the answer
-    return rew, None
+            is_correct_answer = True
+    return rew, is_correct_answer
 
 
 @ray.remote
