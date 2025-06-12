@@ -99,7 +99,7 @@ class AllTaskProcessedDataset:
         entry = self.dataset[idx]
 
         if isinstance(self.task_data_processors, dict):
-            task_name = entry["task_name"]
+            task_name = entry["task_name"]   # if 
 
             assert task_name in self.task_data_processors, (
                 f"task processor not provided for {task_name}. Provided processors: {self.task_data_processors.keys()}"

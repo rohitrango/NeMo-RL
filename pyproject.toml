@@ -38,6 +38,7 @@ dependencies = [
     "debugpy",
     "sympy>=1.14.0",
     "pillow>=11.2.1",
+    "torchvision>=0.22.0",
 ]
 
 [project.optional-dependencies]

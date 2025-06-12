@@ -34,7 +34,7 @@ from nemo_rl.data.datasets import AllTaskProcessedDataset
 from nemo_rl.environments.vlm_environment import VLMEnvironment
 # from nemo_rl.data.hf_datasets.deepscaler import DeepScalerDataset
 # from nemo_rl.data.hf_datasets.openmathinstruct2 import OpenMathInstruct2Dataset
-from nemo_rl.data.hf_datasets.clevr import CLEVRCoGenTDataset
+from nemo_rl.data.hf_datasets.clevr import CLEVRCoGenTDataset, format_clevr_cogent_dataset
 from nemo_rl.data.interfaces import (
     DatumSpec,
     LLMMessageLogType,
@@ -108,6 +108,9 @@ def hf_data_processor(
     task_type: TaskType = TaskType.VLM,
 ) -> DatumSpec:
     """Process a datum dictionary (directly loaded from data/hf_datasets/openmathinstruct2.py) into a DatumSpec for the Math Environment."""
+
+    datum_dict = format_clevr_cogent_dataset(datum_dict)
+
     user_message = datum_dict["messages"]
     problem = user_message[0]["content"]
     extra_env_info = {"ground_truth": user_message[1]["content"]}
@@ -163,7 +166,7 @@ def hf_data_processor(
     user_message['vlm_keys'] = []
     for key, value in message.items():
         # ignore keys (already specified in token_ids)
-        if key in ['input_ids']:
+        if key in ['input_ids', 'attention_mask']:
             continue
         # ignore the batch index if provided
         user_message[key] = value[0] if key in ['input_ids', 'attention_mask', 'image_grid_thw'] else value
@@ -174,19 +177,21 @@ def hf_data_processor(
     # user_message['pixel_values'] = message['pixel_values']
     # user_message['image_grid_thw'] = message['image_grid_thw']
 
-    # get the system prompt content?!
+    # get the system prompt content?! (use this for vllm)
+    # add images for vllm serving
     user_message["content"] = processor.apply_chat_template(
         [user_message],
         tokenize=False,
         add_generation_prompt=True,
     )
-    # add images for vllm serving
+    if isinstance(user_message["content"], list):
+        user_message["content"] = user_message["content"][0]
     user_message["images"] = images
 
+    ### append to user message
     message_log.append(user_message)
 
     length = sum(len(m["token_ids"]) for m in message_log)
-
     loss_multiplier = 1.0
     if length > max_seq_length:
         # make smaller and mask out
@@ -202,7 +207,8 @@ def hf_data_processor(
         "extra_env_info": extra_env_info,
         "loss_multiplier": loss_multiplier,
         "idx": idx,
-        "task_name": datum_dict["task_name"],
+        # "task_name": datum_dict["task_name"],
+        "task_name": task_data_spec.task_name,
     }
     return output
 
@@ -233,7 +239,7 @@ def setup_data(
     # Load OpenMathInstruct2Dataset using nemo rl datasets
     if data_config['dataset_name'] == 'clevr-cogent':
         data: Any = CLEVRCoGenTDataset(split=data_config['split'], 
-                                       seed=data_config['seed'])
+                                       seed=data_config['seed'], task_name=data_config['task_name'])
     else:
         raise ValueError(f"No processor for dataset {data_config['dataset_name']}.")
 
@@ -241,15 +247,6 @@ def setup_data(
         defaultdict(lambda: (vlm_task_spec, hf_data_processor))
     )
     task_data_processors[task_name] = (vlm_task_spec, hf_data_processor)
-
-    # math_env = Environment.options(  # type: ignore # it's wrapped with ray.remote
-    #     runtime_env={
-    #         "py_executable": get_actor_python_env(
-    #             "nemo_rl.environments.math_environment.MathEnvironment"
-    #         ),
-    #         "env_vars": dict(os.environ),  # Pass thru all user environment variables
-    #     }
-    # ).remote(env_configs["math"])
 
     # TODO @rohitkumarj: fill in the environment for the VLM task
     vlm_env = VLMEnvironment.options(  # type: ignore # it's wrapped with ray.remote

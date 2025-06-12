@@ -68,6 +68,28 @@ def unshard_fsdp2_model(model: nn.Module) -> Generator[None, None, None]:
                 module.reshard()
 
 
+
+def load_hf_model(model_name: str) -> nn.Module:
+    """Load a Hugging Face model with optional sliding window support."""
+
+    if "qwen2.5-vl" in model_name.lower():
+        print(f"Loading Qwen2.5-VL model {model_name} on CPU...")
+        from transformers import Qwen2_5_VLForConditionalGeneration
+        return Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            model_name,
+            device_map="cpu",  # load weights onto CPU initially
+            torch_dtype=torch.float32,
+            trust_remote_code=True,
+        )
+    else:
+        return AutoModelForCausalLM.from_pretrained(
+            model_name,
+            device_map="cpu",  # load weights onto CPU initially
+            torch_dtype=torch.float32,
+            trust_remote_code=True,
+            **sliding_window_overwrite(model_name),
+        )
+
 @torch.no_grad()
 def get_cpu_state_dict(
     state_generator: Iterable[tuple[str, Union[torch.Tensor, DTensor]]],
@@ -146,18 +168,7 @@ class DTensorPolicyWorker:
             raise ValueError(f"Unknown precision: {self.cfg['precision']}")
 
         print(f"[Rank {rank}] Loading model {model_name} on CPU...")
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map="cpu",  # load weights onto CPU initially
-            # Always load the model in float32 to keep master weights in float32.
-            # Keeping the master weights in lower precision has shown to cause issues with convergence.
-            # https://github.com/NVIDIA/NeMo-RL/issues/279 will fix the issue of CPU OOM for larger models.
-            torch_dtype=torch.float32,
-            trust_remote_code=True,
-            **sliding_window_overwrite(
-                model_name
-            ),  # due to https://github.com/huggingface/transformers/issues/38002
-        )
+        self.model = load_hf_model(model_name)
         # caching since this property is not always preserved after FSDP
         self.num_tied_weights = len(find_tied_parameters(self.model))
         self.skip_tie_check = os.environ.get(
@@ -289,11 +300,29 @@ class DTensorPolicyWorker:
         """
         vlm_kwargs = {}
         if self.is_vlm:
-            for vlmkey in mb.get("vlm_keys", [[]])[0]:
-                # ignore input_ids and attention_mask as they're handled separately
-                if vlmkey == 'input_ids' or vlmkey == 'attention_mask':
-                    continue
-                vlm_kwargs[vlmkey] = mb.get(vlmkey)
+            # Handle vlm_keys from flattened message data
+            vlm_keys_lists = mb.get("vlm_keys", [])
+            if vlm_keys_lists:
+                # Collect all unique vlm_keys from all samples in the batch
+                # Handle 3-level nesting: batch -> conversation -> message -> keys
+                all_vlm_keys = set()
+                for conversation_vlm_keys in vlm_keys_lists:  # Each conversation
+                    if conversation_vlm_keys:  # Check if conversation has vlm_keys
+                        for message_vlm_keys in conversation_vlm_keys:  # Each message in conversation
+                            if message_vlm_keys:  # Check if message has vlm_keys
+                                for key in message_vlm_keys:  # Individual keys
+                                    all_vlm_keys.add(key)
+                
+                # Extract each VLM key from the batch data
+                for vlmkey in all_vlm_keys:
+                    # Skip keys that are already handled separately
+                    if vlmkey in ['input_ids', 'attention_mask']:
+                        continue
+                    
+                    # Add the key if it exists in the batch
+                    if vlmkey in mb:
+                        vlm_kwargs[vlmkey] = mb[vlmkey]
+        
         return vlm_kwargs
 
     def train(
@@ -727,9 +756,52 @@ class DTensorPolicyWorker:
 
         # Get state_dict
         self.model = self.move_to_cuda(self.model)
-        self._held_sharded_state_dict_reference: dict[str, torch.Tensor] = (
-            self.model.state_dict()
-        )
+        full_state_dict = self.model.state_dict()
+
+        # Filter out problematic weights for VL models
+        if self.is_vlm:
+            # Define prefixes and specific weight names to exclude for vLLM compatibility
+            exclude_prefixes = [
+                "model.visual.",                         # Qwen2.5-VL vision transformer
+                "visual.",                               # Vision model weights (actual structure)
+                "vision_model.",                         # Alternative vision model prefix
+                "vision_tower.",                         # Some models use this prefix
+                "mm_projector.",                         # Multimodal projector
+                "vision_projection.",                    # Vision projection layer
+            ]
+            
+            exclude_specific_weights = [
+                "model.language_model.embed_tokens.weight",  # vLLM can't handle VL embed_tokens structure
+                "language_model.embed_tokens.weight",        # Alternative path
+                "embed_tokens.weight",                       # Fallback
+                "model.language_model.rotary_emb.inv_freq",  # vLLM handles rotary embeddings differently
+                "language_model.rotary_emb.inv_freq",        # Alternative path
+                "rotary_emb.inv_freq",                       # Fallback
+                "visual.patch_embed.proj.weight",            # Specific vision weight causing error
+                "visual.patch_embed.proj.bias",              # Related bias
+            ]
+            
+            # Filter state dict to exclude problematic weights
+            filtered_state_dict = {}
+            for name, tensor in full_state_dict.items():
+                # Skip weights with problematic prefixes
+                if any(name.startswith(prefix) for prefix in exclude_prefixes):
+                    print(f"Filtering out vision weight: {name}")
+                    continue
+                # Skip specific problematic weights
+                if name in exclude_specific_weights:
+                    print(f"Filtering out incompatible weight: {name}")
+                    continue
+                filtered_state_dict[name] = tensor
+            
+            self._held_sharded_state_dict_reference = filtered_state_dict
+            print(f"Filtered {len(full_state_dict) - len(filtered_state_dict)} incompatible weights out of {len(full_state_dict)} total weights")
+            
+            # Debug: Print first few weight names being sent to vLLM
+            weight_names = list(filtered_state_dict.keys())
+            print(f"Sample weights being sent to vLLM: {weight_names[:10]}")
+        else:
+            self._held_sharded_state_dict_reference = full_state_dict
 
         # Collect info for streaming multiple tensors
         state_dict_info = []

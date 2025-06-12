@@ -13,10 +13,31 @@
 # limitations under the License.
 
 from typing import Any, Optional
+import json
 
 from datasets import Dataset, load_dataset
 
 from nemo_rl.data.interfaces import TaskDataSpec
+from PIL import Image
+import io
+import base64
+
+def pil_to_base64(image: Image.Image, format: str = "PNG") -> str:
+    """
+    Converts a PIL Image object to a base64 encoded string.
+
+    Args:
+        image: The PIL Image object to convert.
+        format: The image format (e.g., "PNG", "JPEG"). Defaults to "PNG".
+
+    Returns:
+        A base64 encoded string representation of the image.
+    """
+    buffered = io.BytesIO()
+    image.save(buffered, format=format)
+    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+    # append data:image/png;base64,
+    return f"data:image/png;base64,{img_str}"
 
 def format_answer_fromtags(answer: str) -> str:
     """
@@ -26,38 +47,48 @@ def format_answer_fromtags(answer: str) -> str:
     import re
     pattern = r"<answer>(.*?)</answer>"
     match = re.search(pattern, answer)
-    return match.group(1).strip() if match else ""
+    ret = match.group(1).strip() if match else answer.strip()
+    return ret
 
+# ⚠️ this does not work because datasets.Dataset.from_pandas(pd.DataFrame(data)) does not take mix of list and non-list strings
 def format_clevr_cogent_dataset(example: dict[str, Any]) -> dict[str, Any]:
     """
     Format the CLEVR-CoGenT dataset.
     """
-    return {
+    # Ensure consistent data types
+    user_content = [
+        {
+            "type": "image",
+            "image": pil_to_base64(example['image']),
+        },
+        {
+            "type": "text", 
+            "text": str(example["problem"]),
+        }
+    ]
+    
+    assistant_content = format_answer_fromtags(str(example["solution"]))
+    
+    ret = {
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "image": example['image'],
-                    },
-                    {
-                        "type": "text",
-                        "text": example["problem"],
-                    }
-                ]
+                "content": user_content
             },
             {
-                "role": "assistant",
-                "content": format_answer_fromtags(example["solution"]),
+                "role": "assistant", 
+                "content": assistant_content,
             },
         ],
-        "task_name": "CLEVR-CoGenT",
+        "task_name": "clevr-cogent",
     }
+    return ret
     
 
 # contain different variants of the CLEVR dataset 
-def prepare_clevr_cogent_dataset(split: str = "trainA", seed: int = 42):
+def prepare_clevr_cogent_dataset(split: str = "trainA", seed: int = 42, task_name: Optional[str] = None):
+    if task_name is None:
+        task_name = "clevr-cogent"
 
     if split == "trainA":
         tr_dataset = load_dataset("MMInstruction/Clevr_CoGenT_TrainA_70K_Complex")['train']
@@ -72,9 +103,13 @@ def prepare_clevr_cogent_dataset(split: str = "trainA", seed: int = 42):
         tr_dataset = load_dataset("MMInstruction/Clevr_CoGenT_ValB")['train']
         val_dataset = load_dataset("MMInstruction/Clevr_CoGenT_ValB")['train']
     
-    # format
-    tr_dataset = tr_dataset.map(format_clevr_cogent_dataset)
-    val_dataset = val_dataset.map(format_clevr_cogent_dataset)
+    # format - disable features to avoid schema conflicts
+    tr_dataset = tr_dataset.add_column("task_name", [task_name] * len(tr_dataset))
+    val_dataset = val_dataset.add_column("task_name", [task_name] * len(val_dataset))
+
+    ### dont do it here, do it in `hf_data_processor`
+    # tr_dataset = tr_dataset.map(format_clevr_cogent_dataset, remove_columns=tr_dataset.column_names, num_proc=32)
+    # val_dataset = val_dataset.map(format_clevr_cogent_dataset, remove_columns=val_dataset.column_names, num_proc=32)
 
     return {
         'train': tr_dataset,
@@ -83,14 +118,14 @@ def prepare_clevr_cogent_dataset(split: str = "trainA", seed: int = 42):
         
 
 class CLEVRCoGenTDataset:
-    def __init__(self, split: str = "trainA", seed: int = 42, prompt_file: Optional[str] = None):
+    def __init__(self, split: str = "trainA", seed: int = 42, prompt_file: Optional[str] = None, task_name: str = "clevr-cogent"):
         """
         """
         if split not in ['trainA', 'trainB', 'valA', 'valB']:
             raise ValueError(f"Invalid split: {split}. Please use 'trainA', 'trainB', 'valA', or 'valB'.")
         
         # self.formatted_ds = load_dataset("MMInstruction/Clevr_CoGenT_TrainA_70K_Complex", split=split)
-        self.formatted_ds = prepare_clevr_cogent_dataset(split=split, seed=seed, )
+        self.formatted_ds = prepare_clevr_cogent_dataset(split=split, seed=seed, task_name=task_name)
         self.task_spec = TaskDataSpec(
             task_name="CLEVR",
             prompt_file=prompt_file,
