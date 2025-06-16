@@ -69,16 +69,10 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
 #                             Math Data Processor
 # ===============================================================================
 
-class TaskType(Enum):
-    MATH = "math"
-    VLM = "vlm"
-    VLM_CONVERSATIONAL = "vlm_conversational"
-
-
 def resolve_to_image(image_path: str) -> Image.Image:
     """ Resolve the image path to a PIL.Image object. 
     
-    image can be either:
+    image_path can be either:
     - path to local file
     - url to image
     - base64 encoded image
@@ -105,7 +99,6 @@ def hf_data_processor(
     processor: AutoProcessor,
     max_seq_length: int,
     idx: int,
-    task_type: TaskType = TaskType.VLM,
 ) -> DatumSpec:
     """Process a datum dictionary (directly loaded from data/hf_datasets/openmathinstruct2.py) into a DatumSpec for the Math Environment."""
 
@@ -137,20 +130,15 @@ def hf_data_processor(
             elif content["type"] == "text":
                 user_message["content"].append({
                     "type": "text",
-                    "text": task_data_spec.prompt.format(content["text"]),
+                    "text": task_data_spec.prompt.format(content["text"]) if task_data_spec.prompt else content["text"],
                 })
     else:
         # problem is a text-only message
         user_message["content"] = task_data_spec.prompt.format(problem)
     
-    # message: list[str] = tokenizer.apply_chat_template(  # type: ignore
-    #     [user_message],
-    #     tokenize=False,
-    #     add_generation_prompt=True,
-    #     add_special_tokens=False,
-    # )
     images = [resolve_to_image(image) for image in images]
 
+    # this is the id-tokenized and image processed conversation template for the policy
     message: dict = processor.apply_chat_template(
         [user_message],
         tokenize=True,
@@ -158,10 +146,17 @@ def hf_data_processor(
         return_tensors="pt",
         return_dict=True,
     )
+    # this is the string-tokenized conversation template for the generation policy (for vllm)
+    string_formatted_dialog = processor.apply_chat_template(
+        [user_message],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    if isinstance(string_formatted_dialog, list):
+        string_formatted_dialog = string_formatted_dialog[0]
 
     # add this for backward compatibility
     user_message['token_ids'] = message['input_ids'][0]
-
     # add all keys and values to the user message, and the list of keys
     user_message['vlm_keys'] = []
     for key, value in message.items():
@@ -172,20 +167,9 @@ def hf_data_processor(
         user_message[key] = value[0] if key in ['input_ids', 'attention_mask', 'image_grid_thw'] else value
         user_message['vlm_keys'].append(key)
     
-    # user_message['token_ids'] = message['input_ids'][0]
-    # user_message['attention_mask'] = message['attention_mask'][0]
-    # user_message['pixel_values'] = message['pixel_values']
-    # user_message['image_grid_thw'] = message['image_grid_thw']
-
     # get the system prompt content?! (use this for vllm)
     # add images for vllm serving
-    user_message["content"] = processor.apply_chat_template(
-        [user_message],
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-    if isinstance(user_message["content"], list):
-        user_message["content"] = user_message["content"][0]
+    user_message["content"] = string_formatted_dialog
     user_message["images"] = images
 
     ### append to user message
@@ -207,7 +191,6 @@ def hf_data_processor(
         "extra_env_info": extra_env_info,
         "loss_multiplier": loss_multiplier,
         "idx": idx,
-        # "task_name": datum_dict["task_name"],
         "task_name": task_data_spec.task_name,
     }
     return output
@@ -225,7 +208,9 @@ def setup_data(
 ]:
     '''
     This function will create a TaskSpec, DatumSpec, and connect the two 
-    TODO @rohitkumarj: fill in more details here
+    
+    task_spec contains the task name as well as prompt and system prompt modifiers that can be used by data processor
+
     '''
     print("\n▶ Setting up data...")
     # define task name and use it (make it as generic as possible)
