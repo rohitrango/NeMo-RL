@@ -20,6 +20,7 @@ from typing import Any, Optional
 import ray
 import torch
 from transformers import PreTrainedTokenizerBase
+from nemo_rl.data.llm_message_utils import get_vlm_keys_from_batch
 
 from nemo_rl.data.interfaces import (
     DatumSpec,
@@ -269,6 +270,7 @@ def run_multi_turn_rollout(
             batched_message_log_to_flat_message(
                 active_batch["message_log"],
                 pad_value_dict={"token_ids": tokenizer.pad_token_id},
+                skip_padding_keys=get_vlm_keys_from_batch(active_batch)
             )
         )
 

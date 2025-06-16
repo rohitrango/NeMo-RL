@@ -308,6 +308,18 @@ def _parallelize_qwen_vl(
             "model.language_model.layers.*.mlp.up_proj": ColwiseParallel(),
             "model.language_model.layers.*.mlp.gate_proj": ColwiseParallel(),
             "model.language_model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
+            # visual model
+            "model.visual.blocks.*.norm1": SequenceParallel(),
+            "model.visual.blocks.*.norm2": SequenceParallel(),
+            "model.visual.blocks.*.attn.qkv": ColwiseParallel(use_local_output=False),
+            "model.visual.blocks.*.attn.proj": RowwiseParallel(output_layouts=Shard(1)),
+            "model.visual.blocks.*.mlp.up_proj": ColwiseParallel(),
+            "model.visual.blocks.*.mlp.gate_proj": ColwiseParallel(),
+            "model.visual.blocks.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
+            # merger
+            "model.visual.merger.ln_q": SequenceParallel(),
+            "model.visual.merger.mlp.0": ColwiseParallel(),
+            "model.visual.merger.mlp.2": RowwiseParallel(output_layouts=Shard(1)),
         }
     else:
         base_model_tp_plan = {
@@ -324,6 +336,18 @@ def _parallelize_qwen_vl(
             "model.language_model.layers.*.mlp.up_proj": ColwiseParallel(),
             "model.language_model.layers.*.mlp.gate_proj": ColwiseParallel(),
             "model.language_model.layers.*.mlp.down_proj": RowwiseParallel(),
+            # visual model
+            "model.visual.blocks.*.norm1": SequenceParallel(),
+            "model.visual.blocks.*.norm2": SequenceParallel(),
+            "model.visual.blocks.*.attn.qkv": ColwiseParallel(use_local_output=False),
+            "model.visual.blocks.*.attn.proj": RowwiseParallel(output_layouts=Shard(1)),
+            "model.visual.blocks.*.mlp.up_proj": ColwiseParallel(),
+            "model.visual.blocks.*.mlp.gate_proj": ColwiseParallel(),
+            "model.visual.blocks.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
+            # merger
+            "model.visual.merger.ln_q": SequenceParallel(),
+            "model.visual.merger.mlp.0": ColwiseParallel(),
+            "model.visual.merger.mlp.2": RowwiseParallel(output_layouts=Shard(1)),
         }
     
     return base_model_tp_plan
@@ -499,7 +523,14 @@ def _parallelize_model(
     # elif model_cls.__name__ in ["Qwen2_5_VLModel"]:
     elif model_cls.__name__ in ["Qwen2_5_VLForConditionalGeneration"]:
         # VL models have the language model at model.language_model
-        layers: torch.nn.ModuleList = model.language_model.layers  # type: ignore
+        # layers: torch.nn.ModuleList = model.language_model.layers  # type: ignore
+        layers: list = []
+        # append language model layers
+        for layer in model.language_model.layers:
+            layers.append(layer)
+        # append visual model layers
+        for layer in model.visual.blocks:
+            layers.append(layer)
         num_attention_heads = model.language_model.config.num_attention_heads
         num_key_value_heads = model.language_model.config.num_key_value_heads
     else:
@@ -543,6 +574,8 @@ def _parallelize_model(
                 print("Using optimized parallel plan.")
             # fall back to the HF tp plan
             except Exception as e:
+                import traceback
+                traceback.print_exc()
                 print(
                     f"Optimized parallel plan is not available: {e}. Falling back to the HF tp plan."
                 )

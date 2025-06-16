@@ -513,6 +513,13 @@ class BatchedDataDict(UserDict, Generic[DictT]):
     def truncate_tensors(self, dim: int, truncated_len: int):
         """Truncates tensors in this dict of a given dim to a given length."""
         for k, v in self.items():
+            # keys not to truncate (anything other than input_ids, attention_mask, etc.)
+            # @rohitkumarj;; TODO: make this configurable later
+            if k in ['image_grid_thw', 'pixel_values']:
+                # skip truncation
+                self.data[k] = v
+                continue
+
             if torch.is_tensor(v) and len(v.shape) >= dim + 1:
                 self.data[k] = torch.narrow(v, dim=dim, start=0, length=truncated_len)
 
