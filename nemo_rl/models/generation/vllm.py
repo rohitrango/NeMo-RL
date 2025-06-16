@@ -439,12 +439,13 @@ class VllmGenerationWorker:
         prompts = []
 
         # Check if this is VLM generation by looking for message_log with images
+        # TODO: @rohitrango: this is a hack, need better design for specifying what VLM/multimodal keys to expect here
         if 'message_log' in data and any('images' in msg for msg in data['message_log']):
             # VLM generation using content and multi_modal_data
             for i in range(batch_size):
                 msg = data['message_log'][i]
                 prompt_dict = {
-                    'prompt': msg['content'][0]  # TODO: @rohitrango: investigate this (why do we have to put [0] here?)
+                    'prompt': msg['content'][0]
                 }
                 
                 # Add multi-modal data if images are present
