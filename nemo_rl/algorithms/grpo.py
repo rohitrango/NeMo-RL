@@ -45,6 +45,7 @@ from nemo_rl.experience.rollouts import run_multi_turn_rollout
 from nemo_rl.models.generation.interfaces import (
     GenerationInterface,
 )
+from nemo_rl.data.llm_message_utils import get_vlm_keys_from_batch
 from nemo_rl.models.generation.vllm import VllmConfig, VllmGeneration
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.hf_policy import HfPolicy
@@ -388,6 +389,9 @@ def grpo_train(
         )
         val_metrics, validation_timings = None, None
 
+        # get vlm keys from batch
+        skip_padding_keys = get_vlm_keys_from_batch(batch)
+
         with timer.time("total_step_time"):
             # Prepare batch
             print("▶ Preparing batch...")
@@ -402,6 +406,7 @@ def grpo_train(
                     pad_value_dict={
                         "token_ids": tokenizer.pad_token_id
                     },
+                    skip_padding_keys=skip_padding_keys
                 )
                 input_ids = batched_flat["token_ids"]
 
@@ -478,6 +483,7 @@ def grpo_train(
                     make_sequence_length_divisible_by=master_config["policy"][
                         "make_sequence_length_divisible_by"
                     ],
+                    skip_padding_keys=skip_padding_keys
                 )
 
                 # Create training data from flattened messages
@@ -512,8 +518,13 @@ def grpo_train(
                                 vlm_kwargs[key] = flat_messages[key]
                     
                     # Add vlm_kwargs to train_data if any exist
-                    if vlm_kwargs:
-                        train_data['vlm_kwargs'] = vlm_kwargs
+                    if len(vlm_kwargs) > 0:
+                        print(f"  ✓ Adding {len(vlm_kwargs)} VLM keys to train_data")
+                        print(f"  ✓ VLM keys: {vlm_kwargs.keys()}")
+                        train_data['vlm_keys'] = [vlm_kwargs for _ in range(len(train_data['input_ids']))]
+                        for key in vlm_kwargs:
+                            print(f"  ✓ {key}: {vlm_kwargs[key].shape}")
+                            train_data[key] = vlm_kwargs[key]
 
                 train_data.to("cpu")
 

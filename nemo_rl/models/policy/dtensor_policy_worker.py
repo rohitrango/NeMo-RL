@@ -181,6 +181,7 @@ class DTensorPolicyWorker:
         self.tokenizer = tokenizer
         self.processor = processor
         self.is_vlm = processor is not None
+        print(f"Initializing DTensorPolicyWorker with is_vlm={self.is_vlm}")
         # ------------------------------------------------
         # 3) Move to GPU + Composable FSDP
         #    (Initialize device mesh, shard submodules, then shard entire model)
@@ -304,28 +305,33 @@ class DTensorPolicyWorker:
         vlm_kwargs = {}
         if self.is_vlm:
             # Handle vlm_keys from flattened message data
-            vlm_keys_lists = mb.get("vlm_keys", [])
+            vlm_keys_lists = mb.get("vlm_keys", [[]])[0]
             if vlm_keys_lists:
                 # Collect all unique vlm_keys from all samples in the batch
                 # Handle 3-level nesting: batch -> conversation -> message -> keys
-                all_vlm_keys = set()
-                for conversation_vlm_keys in vlm_keys_lists:  # Each conversation
-                    if conversation_vlm_keys:  # Check if conversation has vlm_keys
-                        for message_vlm_keys in conversation_vlm_keys:  # Each message in conversation
-                            if message_vlm_keys:  # Check if message has vlm_keys
-                                for key in message_vlm_keys:  # Individual keys
-                                    all_vlm_keys.add(key)
+                # all_vlm_keys = set()
+                # for conversation_vlm_keys in vlm_keys_lists:  # Each conversation
+                #     if conversation_vlm_keys:  # Check if conversation has vlm_keys
+                #         for message_vlm_keys in conversation_vlm_keys:  # Each message in conversation
+                #             if message_vlm_keys:  # Check if message has vlm_keys
+                #                 for key in message_vlm_keys:  # Individual keys
+                #                     all_vlm_keys.add(key)
                 
-                # Extract each VLM key from the batch data
-                for vlmkey in all_vlm_keys:
-                    # Skip keys that are already handled separately
-                    if vlmkey in ['input_ids', 'attention_mask']:
-                        continue
+                # # Extract each VLM key from the batch data
+                # for vlmkey in all_vlm_keys:
+                #     # Skip keys that are already handled separately
+                #     if vlmkey in ['input_ids', 'attention_mask']:
+                #         continue
                     
-                    # Add the key if it exists in the batch
-                    if vlmkey in mb:
-                        vlm_kwargs[vlmkey] = mb[vlmkey]
-        
+                #     # Add the key if it exists in the batch
+                #     if vlmkey in mb:
+                #         vlm_kwargs[vlmkey] = mb[vlmkey]
+                for key in vlm_keys_lists:
+                    if key in mb:
+                        vlm_kwargs[key] = mb[key]
+        # line below works, uncomment to see the keys and shapes
+        # for key in vlm_kwargs:
+        #     print(f"DTensorPolicyWorker:  ✓ {key}: {vlm_kwargs[key].shape}")
         return vlm_kwargs
 
     def train(
@@ -567,11 +573,13 @@ class DTensorPolicyWorker:
         # dim 1 is always assumed to be the sequence dim, sanity check this here
         sequence_dim = 1
         seq_dim_size = data.get("input_ids").shape[sequence_dim]
-        for k, v in data.items():
-            if torch.is_tensor(v) and len(v.shape) > 1:
-                assert v.shape[sequence_dim] == seq_dim_size, (
-                    f"Dim 1 must be the sequence dim, expected dim 1={seq_dim_size} but got shape {v.shape}"
-                )
+
+        # @rohitkumarj;; WARNING: this is not true for VLMs, commenting it for now
+        # for k, v in data.items():
+        #     if torch.is_tensor(v) and len(v.shape) > 1:
+        #         assert v.shape[sequence_dim] == seq_dim_size, (
+        #             f"Dim 1 must be the sequence dim, expected dim 1={seq_dim_size} but got shape {v.shape}"
+        #         )
 
         all_log_probs = []
         self.model.eval()
