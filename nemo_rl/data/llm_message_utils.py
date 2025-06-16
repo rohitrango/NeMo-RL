@@ -339,7 +339,8 @@ def batched_message_log_to_flat_message(
 
         # special case for `pixel_values` which is a flattened (N, D) tensor with potentially different Ns for each message
         # keys_to_concat = ['pixel_values']
-        ## TODO: @rohitrango assuming that all images are the same size for now (so stacking them is fine)
+
+        ## TODO: @rohitrango assuming for now that that all images are the same size (so stacking them is fine)
         ## this will have consequences for data sharding for VLM models (split along the batch dim but from [start_patch:end_patch])
         keys_to_concat = []
 
