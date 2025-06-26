@@ -16,24 +16,20 @@ import argparse
 import os
 import pprint
 from collections import defaultdict
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
 import torch
 from omegaconf import OmegaConf
-from transformers import PreTrainedTokenizerBase, AutoProcessor
-from enum import Enum
+from transformers import AutoProcessor
 from PIL import Image
 import requests
 from io import BytesIO
 import base64
 
 from nemo_rl.algorithms.grpo import MasterConfig, grpo_train, setup
-from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data import DataConfig
 from nemo_rl.data.datasets import AllTaskProcessedDataset
 from nemo_rl.environments.vlm_environment import VLMEnvironment
-# from nemo_rl.data.hf_datasets.deepscaler import DeepScalerDataset
-# from nemo_rl.data.hf_datasets.openmathinstruct2 import OpenMathInstruct2Dataset
 from nemo_rl.data.hf_datasets.clevr import CLEVRCoGenTDataset, format_clevr_cogent_dataset
 from nemo_rl.data.interfaces import (
     DatumSpec,
@@ -46,7 +42,6 @@ from nemo_rl.distributed.ray_actor_environment_registry import (
 )
 from nemo_rl.distributed.virtual_cluster import init_ray
 from nemo_rl.environments.interfaces import EnvironmentInterface
-from nemo_rl.environments.math_environment import MathEnvironment
 from nemo_rl.models.generation import configure_vlm_generation_config
 from nemo_rl.utils.config import load_config, parse_hydra_overrides
 from nemo_rl.utils.logger import get_next_experiment_dir
@@ -66,7 +61,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
 
 
 # ===============================================================================
-#                             Math Data Processor
+#                             VLM Data Processor
 # ===============================================================================
 
 def resolve_to_image(image_path: str) -> Image.Image:
@@ -100,7 +95,7 @@ def hf_data_processor(
     max_seq_length: int,
     idx: int,
 ) -> DatumSpec:
-    """Process a datum dictionary (directly loaded from data/hf_datasets/openmathinstruct2.py) into a DatumSpec for the Math Environment."""
+    """Process a datum dictionary (directly loaded from data/hf_datasets/clevr.py) into a DatumSpec for the VLM Environment."""
 
     datum_dict = format_clevr_cogent_dataset(datum_dict)
 
@@ -109,7 +104,7 @@ def hf_data_processor(
     extra_env_info = {"ground_truth": user_message[1]["content"]}
 
     message_log: LLMMessageLogType = []
-    ### TODO: assumed only one interaction, extend this to conversational setting
+    ### only one round of interaction is assumed, this can easily be extended to a conversational setting
     user_message = {
         "role": "user",
         "content": []
@@ -125,7 +120,6 @@ def hf_data_processor(
                 if content["type"] == "image":
                     images.append(content["image"])
                 else:
-                    # TODO: add support for video, audio, etc.
                     raise ValueError(f"Unsupported content type: {content['type']}")
             elif content["type"] == "text":
                 user_message["content"].append({
@@ -133,7 +127,7 @@ def hf_data_processor(
                     "text": task_data_spec.prompt.format(content["text"]) if task_data_spec.prompt else content["text"],
                 })
     else:
-        # problem is a text-only message
+        # conversation consists of a text-only message
         user_message["content"] = task_data_spec.prompt.format(problem)
     
     images = [resolve_to_image(image) for image in images]
@@ -167,7 +161,7 @@ def hf_data_processor(
         user_message[key] = value[0] if key in ['input_ids', 'attention_mask', 'image_grid_thw'] else value
         user_message['vlm_keys'].append(key)
     
-    # get the system prompt content?! (use this for vllm)
+    # get the system prompt content! (use this for vllm-backend that needs formatted dialog and list of images)
     # add images for vllm serving
     user_message["content"] = string_formatted_dialog
     user_message["images"] = images
@@ -221,7 +215,8 @@ def setup_data(
         system_prompt_file=data_config["system_prompt_file"],
     )
 
-    # Load OpenMathInstruct2Dataset using nemo rl datasets
+    # Load CLEVR-CoGenT dataset using nemo rl datasets
+    # other VLM datasets can be added here
     if data_config['dataset_name'] == 'clevr-cogent':
         data: Any = CLEVRCoGenTDataset(split=data_config['split'], 
                                        seed=data_config['seed'], task_name=data_config['task_name'])
@@ -233,11 +228,10 @@ def setup_data(
     )
     task_data_processors[task_name] = (vlm_task_spec, hf_data_processor)
 
-    # TODO @rohitkumarj: fill in the environment for the VLM task
     vlm_env = VLMEnvironment.options(  # type: ignore # it's wrapped with ray.remote
         runtime_env={
             "py_executable": get_actor_python_env(
-                "nemo_rl.environments.math_environment.MathEnvironment"
+                "nemo_rl.environments.vlm_environment.VLMEnvironment"
             ),
             "env_vars": dict(os.environ),  # Pass thru all user environment variables
         }
@@ -270,7 +264,6 @@ def setup_data(
 
 def main() -> None:
     """Main entry point."""
-    # Parse arguments
     args, overrides = parse_args()
 
     if not args.config:
@@ -303,7 +296,6 @@ def main() -> None:
     init_ray()
 
     # setup tokenizer
-    # tokenizer = get_tokenizer(config["policy"]["tokenizer"])
     processor = AutoProcessor.from_pretrained(config["policy"]["model_name"])
     tokenizer = processor.tokenizer
     assert config["policy"]["generation"] is not None, (
@@ -314,7 +306,7 @@ def main() -> None:
     )
 
     # setup data
-    # this function is specific to the VLM config 
+    # this function is local to this script, and can be extended to other VLM datasets
     (
         dataset,
         val_dataset,

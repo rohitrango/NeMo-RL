@@ -107,10 +107,6 @@ def prepare_clevr_cogent_dataset(split: str = "trainA", seed: int = 42, task_nam
     tr_dataset = tr_dataset.add_column("task_name", [task_name] * len(tr_dataset))
     val_dataset = val_dataset.add_column("task_name", [task_name] * len(val_dataset))
 
-    ### dont do it here, do it in `hf_data_processor`
-    # tr_dataset = tr_dataset.map(format_clevr_cogent_dataset, remove_columns=tr_dataset.column_names, num_proc=32)
-    # val_dataset = val_dataset.map(format_clevr_cogent_dataset, remove_columns=val_dataset.column_names, num_proc=32)
-
     return {
         'train': tr_dataset,
         'validation': val_dataset,
@@ -120,11 +116,17 @@ def prepare_clevr_cogent_dataset(split: str = "trainA", seed: int = 42, task_nam
 class CLEVRCoGenTDataset:
     def __init__(self, split: str = "trainA", seed: int = 42, prompt_file: Optional[str] = None, task_name: str = "clevr-cogent"):
         """
+        Simple wrapper around the CLEVR-CoGenT dataset.
+
+        Args:
+            split: The split of the dataset to use.
+            seed: The seed for the dataset.
+            prompt_file: The file containing the prompt for the dataset.
+            task_name: The name of the task.
         """
         if split not in ['trainA', 'trainB', 'valA', 'valB']:
             raise ValueError(f"Invalid split: {split}. Please use 'trainA', 'trainB', 'valA', or 'valB'.")
         
-        # self.formatted_ds = load_dataset("MMInstruction/Clevr_CoGenT_TrainA_70K_Complex", split=split)
         self.formatted_ds = prepare_clevr_cogent_dataset(split=split, seed=seed, task_name=task_name)
         self.task_spec = TaskDataSpec(
             task_name="CLEVR",

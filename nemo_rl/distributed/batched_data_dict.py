@@ -512,11 +512,16 @@ class BatchedDataDict(UserDict, Generic[DictT]):
 
     def truncate_tensors(self, dim: int, truncated_len: int):
         """Truncates tensors in this dict of a given dim to a given length."""
+        vlm_keys = self.get('vlm_keys', [])
+        if len(vlm_keys) > 0:
+            # this is a dict of vlm_keys to their tensors, so we need to collect all the keys
+            if isinstance(vlm_keys[0], dict):
+                vlm_keys = [key for subdict in vlm_keys for key in subdict.keys()]
+                vlm_keys = list(set(vlm_keys))
+
         for k, v in self.items():
-            # keys not to truncate (anything other than input_ids, attention_mask, etc.)
-            # @rohitkumarj;; TODO: make this configurable later
-            if k in ['image_grid_thw', 'pixel_values']:
-                # skip truncation
+            # skip truncation for VLM keys
+            if k in vlm_keys:
                 self.data[k] = v
                 continue
 

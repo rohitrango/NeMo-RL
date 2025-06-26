@@ -306,12 +306,7 @@ def run_multi_turn_rollout(
                 if key in active_flat_messages:
                     generation_input_data[key] = active_flat_messages[key]
         
-            # Add message_log for VLLM generation (contains the key `images``)
-            # if 'content' in active_flat_messages or 'images' in active_flat_messages:
-            # TODO: @rohitrango: this is a hack, need better design for specifying what VLM/multimodal keys to expect here
-            ## if 'images' in active_flat_messages:    
-            ## if 'vlm_keys' in active_flat_messages:
-            ## Reconstruct message_log from flat messages for VLLM
+            ## Reconstruct message_log from flat messages for vLLM generation
             for i in range(len(active_batch["message_log"])):
                 msg = {
                     'content': active_flat_messages.get('content', [None] * len(active_batch["message_log"]))[i],

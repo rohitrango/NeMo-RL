@@ -481,7 +481,6 @@ def _parallelize_model(
         LlamaForCausalLM,
         Gemma3ForCausalLM,
         Gemma3ForConditionalGeneration,
-        # "Qwen2_5_VLModel",
         Qwen2_5_VLForConditionalGeneration,
     ],
     dp_mesh: DeviceMesh,
@@ -520,10 +519,8 @@ def _parallelize_model(
         layers: torch.nn.ModuleList = model.language_model.model.layers  # type: ignore
         num_attention_heads = model.config.text_config.num_attention_heads
         num_key_value_heads = model.config.text_config.num_key_value_heads
-    # elif model_cls.__name__ in ["Qwen2_5_VLModel"]:
     elif model_cls.__name__ in ["Qwen2_5_VLForConditionalGeneration"]:
         # VL models have the language model at model.language_model
-        # layers: torch.nn.ModuleList = model.language_model.layers  # type: ignore
         layers: list = []
         # append language model layers
         for layer in model.language_model.layers:
