@@ -80,10 +80,6 @@ def load_hf_model(model_name: str) -> nn.Module:
             torch_dtype=torch.float32,
             trust_remote_code=True,
         )
-    
-        # .model  # the model is wrapped in another model, and vllm backend seems to unwrap it
-        # without calling .model, the weights dont load correctly in `update_weights_from_ipc_handles`
-        ## update: calling model gets rid of the `lm_head` 
     else:
         return AutoModelForCausalLM.from_pretrained(
             model_name,
@@ -92,6 +88,20 @@ def load_hf_model(model_name: str) -> nn.Module:
             trust_remote_code=True,
             **sliding_window_overwrite(model_name),
         )
+
+def get_vlm_keys_from_batch(batch: BatchedDataDict[Any]) -> list[str]:
+    """Get VLM keys from a batch of data."""
+    vlm_keys = batch.get("vlm_keys", [])
+    if len(vlm_keys) > 0:
+        if isinstance(vlm_keys[0], dict):
+            vlm_keys = [key for subdict in vlm_keys for key in subdict.keys()]
+            vlm_keys = list(set(vlm_keys))
+        elif isinstance(vlm_keys[0], str):
+            vlm_keys = list(set(vlm_keys))
+        elif isinstance(vlm_keys[0], list):
+            vlm_keys = [key for sublist in vlm_keys for key in sublist]
+            vlm_keys = list(set(vlm_keys))
+    return vlm_keys
 
 @torch.no_grad()
 def get_cpu_state_dict(
@@ -307,31 +317,9 @@ class DTensorPolicyWorker:
             # Handle vlm_keys from flattened message data
             vlm_keys_lists = mb.get("vlm_keys", [[]])[0]
             if vlm_keys_lists:
-                # Collect all unique vlm_keys from all samples in the batch
-                # Handle 3-level nesting: batch -> conversation -> message -> keys
-                # all_vlm_keys = set()
-                # for conversation_vlm_keys in vlm_keys_lists:  # Each conversation
-                #     if conversation_vlm_keys:  # Check if conversation has vlm_keys
-                #         for message_vlm_keys in conversation_vlm_keys:  # Each message in conversation
-                #             if message_vlm_keys:  # Check if message has vlm_keys
-                #                 for key in message_vlm_keys:  # Individual keys
-                #                     all_vlm_keys.add(key)
-                
-                # # Extract each VLM key from the batch data
-                # for vlmkey in all_vlm_keys:
-                #     # Skip keys that are already handled separately
-                #     if vlmkey in ['input_ids', 'attention_mask']:
-                #         continue
-                    
-                #     # Add the key if it exists in the batch
-                #     if vlmkey in mb:
-                #         vlm_kwargs[vlmkey] = mb[vlmkey]
                 for key in vlm_keys_lists:
                     if key in mb:
                         vlm_kwargs[key] = mb[key]
-        # line below works, uncomment to see the keys and shapes
-        # for key in vlm_kwargs:
-        #     print(f"DTensorPolicyWorker:  ✓ {key}: {vlm_kwargs[key].shape}")
         return vlm_kwargs
 
     def train(
@@ -364,12 +352,17 @@ class DTensorPolicyWorker:
         sequence_dim = 1
         seq_dim_size = data.get("input_ids").shape[sequence_dim]
 
-        # @rohitkumarj;; WARNING: this is not true for VLMs, commenting it for now
-        # for k, v in data.items():
-        #     if torch.is_tensor(v) and len(v.shape) > 1:
-        #         assert v.shape[sequence_dim] == seq_dim_size, (
-        #             f"Dim 1 must be the sequence dim, expected dim 1={seq_dim_size} but got shape {v.shape}"
-        #         )
+        # get vlm keys from data
+        vlm_keys = get_vlm_keys_from_batch(data)
+
+        for k, v in data.items():
+            if k in vlm_keys:
+                continue
+
+            if torch.is_tensor(v) and len(v.shape) > 1:
+                assert v.shape[sequence_dim] == seq_dim_size, (
+                    f"Dim 1 must be the sequence dim, expected dim 1={seq_dim_size} but got shape {v.shape}"
+                )
 
         if eval_mode:
             ctx: AbstractContextManager[Any] = torch.no_grad()
@@ -574,12 +567,17 @@ class DTensorPolicyWorker:
         sequence_dim = 1
         seq_dim_size = data.get("input_ids").shape[sequence_dim]
 
-        # @rohitkumarj;; WARNING: this is not true for VLMs, commenting it for now
-        # for k, v in data.items():
-        #     if torch.is_tensor(v) and len(v.shape) > 1:
-        #         assert v.shape[sequence_dim] == seq_dim_size, (
-        #             f"Dim 1 must be the sequence dim, expected dim 1={seq_dim_size} but got shape {v.shape}"
-        #         )
+        # get vlm keys from data
+        vlm_keys = get_vlm_keys_from_batch(data)
+
+        for k, v in data.items():
+            if k in vlm_keys:
+                continue
+
+            if torch.is_tensor(v) and len(v.shape) > 1:
+                assert v.shape[sequence_dim] == seq_dim_size, (
+                    f"Dim 1 must be the sequence dim, expected dim 1={seq_dim_size} but got shape {v.shape}"
+                )
 
         all_log_probs = []
         self.model.eval()
@@ -767,9 +765,8 @@ class DTensorPolicyWorker:
 
         # Get state_dict
         self.model = self.move_to_cuda(self.model)
-        full_state_dict = self.model.state_dict()
 
-        self._held_sharded_state_dict_reference = full_state_dict
+        self._held_sharded_state_dict_reference = self.model.state_dict()
 
         # Collect info for streaming multiple tensors
         state_dict_info = []

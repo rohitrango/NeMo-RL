@@ -69,5 +69,4 @@ class VllmInternalWorkerExtension:
             print(self.model_runner.model)
 
             traceback.print_exc()
-            # print(f"Content of ipc_handles: {ipc_handles.keys()}")
             return False

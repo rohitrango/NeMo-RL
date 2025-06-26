@@ -49,9 +49,7 @@ def format_and_exact_answer(ground_truth: str, response: str) -> str:
     ''' 
     Reward the agent for the following:
     1. response follows the format: (.*) <think> (.*) </think> <answer> (.*) </answer>
-    2. the answer within the <answer> tags is the same as the ground truth (lowercased)
-
-    TODO: rohitkumarj: write better reward functions
+    2. the answer within the <answer> tags is the same as the ground truth (case-insensitive)
     '''
     rew = 0.0
     # Check for <think> tags
@@ -80,7 +78,7 @@ class VLMVerifyWorker:
     def __init__(self) -> None:
         logging.getLogger("vlm_worker").setLevel(logging.CRITICAL)
 
-        # TODO @rohitkumarj: change this to a more complex reward function
+        # this is a simple reward function that rewards the agent for correct answer and correct format
         self.verify_func = format_and_exact_answer
 
     def verify(
@@ -231,7 +229,6 @@ class VLMEnvironment(EnvironmentInterface):
             correct_solution_generation_lengths = 0
 
         metrics = {
-            # "table": table, TODO @rohitkumarj WIP
             "accuracy": batch["rewards"].mean().item(),
             "pass@samples_per_prompt": calculate_pass_rate_per_prompt(
                 batch["text"], batch["rewards"]

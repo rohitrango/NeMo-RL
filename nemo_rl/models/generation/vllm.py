@@ -439,7 +439,7 @@ class VllmGenerationWorker:
         prompts = []
 
         # Check if this is VLM generation by looking for message_log with images
-        # TODO: @rohitrango: this is a hack, need better design for specifying what VLM/multimodal keys to expect here
+        # Support for videos/audio/etc. can be added here
         if 'message_log' in data and any('images' in msg for msg in data['message_log']):
             # VLM generation using content and multi_modal_data
             for i in range(batch_size):
@@ -451,7 +451,7 @@ class VllmGenerationWorker:
                 # Add multi-modal data if images are present
                 if 'images' in msg and msg['images']:
                     prompt_dict['multi_modal_data'] = {
-                        'image': msg['images'][0][0]     # TODO: @rohitrango: investigate this (why do we have to put [0] here?)
+                        'image': msg['images'][0][0]     
                     }
                 
                 prompts.append(prompt_dict)

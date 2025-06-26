@@ -61,9 +61,7 @@ from nemo_rl.utils.timer import Timer
 # ===============================================================================
 # Configuration
 # ===============================================================================
-# TokenizerType = Union[PreTrainedTokenizerBase, AutoProcessor]
 TokenizerType = PreTrainedTokenizerBase
-
 
 class GRPOConfig(TypedDict):
     num_prompts_per_step: int
@@ -294,8 +292,6 @@ def refit_policy_generation(
 ) -> None:
     """Refit the policy generation interface with the latest policy weights.
 
-    This is only called with vllm backend (NEEDS_REFIT is True)
-
     Args:
         policy: The policy to provide weights to the inference engine.
         policy_generation: The inference engine to refit.
@@ -312,7 +308,6 @@ def refit_policy_generation(
     # do update
     for keys in grouped_param_keys:
         ipc_handles = policy.get_weights_ipc_handles(keys)
-        # ipc_handles = policy.hf_to_vllm_weight_mapping(ipc_handles)
         if not policy_generation.update_weights(ipc_handles):
             error_message = (
                 "❌ Error: Updating weights for the generation policy failed during refit.\n"
@@ -419,7 +414,6 @@ def grpo_train(
                 else:
                     policy_generation.prepare_for_generation()
 
-            # TODO: @rohitrango: add vlm kwargs to the generation input data
             with timer.time("generation"):
                 repeated_batch, rollout_metrics = run_multi_turn_rollout(
                     policy_generation=policy_generation,
