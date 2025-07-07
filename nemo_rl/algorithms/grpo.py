@@ -45,7 +45,7 @@ from nemo_rl.experience.rollouts import run_multi_turn_rollout
 from nemo_rl.models.generation.interfaces import (
     GenerationInterface,
 )
-from nemo_rl.data.llm_message_utils import get_vlm_keys_from_batch
+from nemo_rl.data.llm_message_utils import get_vlm_keys_from_datumspec_batch
 from nemo_rl.models.generation.vllm import VllmConfig, VllmGeneration
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.hf_policy import HfPolicy
@@ -385,7 +385,7 @@ def grpo_train(
         val_metrics, validation_timings = None, None
 
         # get vlm keys from batch
-        skip_padding_keys = get_vlm_keys_from_batch(batch)
+        skip_padding_keys = get_vlm_keys_from_datumspec_batch(batch)
 
         with timer.time("total_step_time"):
             # Prepare batch

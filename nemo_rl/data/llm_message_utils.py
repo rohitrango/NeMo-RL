@@ -506,7 +506,7 @@ def remap_dataset_keys(
     )
 
 
-def get_vlm_keys_from_batch(batch: BatchedDataDict[DatumSpec]) -> list[str]:
+def get_vlm_keys_from_datumspec_batch(batch: BatchedDataDict[DatumSpec]) -> list[str]:
     """Extract VLM keys from a batch of data.
     
     Args:

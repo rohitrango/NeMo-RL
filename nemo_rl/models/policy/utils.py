@@ -17,7 +17,8 @@ import os
 from typing import Any
 
 import torch
-from transformers import AutoConfig
+from torch import nn
+from transformers import AutoConfig, AutoModelForCausalLM
 
 
 def import_class_from_path(name: str) -> Any:
@@ -127,3 +128,23 @@ def sliding_window_overwrite(model_name: str) -> dict[str, Any]:
         )
 
     return overwrite_dict
+
+def load_hf_model(model_name: str) -> nn.Module:
+    """Load a Hugging Face model with optional sliding window support."""
+    if "qwen2.5-vl" in model_name.lower():
+        print(f"Loading Qwen2.5-VL model {model_name} on CPU...")
+        from transformers import Qwen2_5_VLForConditionalGeneration
+        return Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            model_name,
+            device_map="cpu",  # load weights onto CPU initially
+            torch_dtype=torch.float32,
+            trust_remote_code=True,
+        )
+    else:
+        return AutoModelForCausalLM.from_pretrained(
+            model_name,
+            device_map="cpu",  # load weights onto CPU initially
+            torch_dtype=torch.float32,
+            trust_remote_code=True,
+            **sliding_window_overwrite(model_name),
+        )

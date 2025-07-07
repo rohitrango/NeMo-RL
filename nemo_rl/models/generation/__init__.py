@@ -43,26 +43,3 @@ def configure_generation_config(
             config["vllm_cfg"]["skip_tokenizer_init"] = True
 
     return config
-
-def configure_vlm_generation_config(
-    config: GenerationConfig, processor: AutoProcessor, is_eval=False
-) -> GenerationConfig:
-    """Apply specific configurations to generation config."""
-    # tokenizer setting
-    config["pad_token_id"] = processor.tokenizer.pad_token_id
-    if config["stop_token_ids"] is None:
-        config["stop_token_ids"] = [processor.tokenizer.eos_token_id]
-
-    # vllm setting
-    if config["backend"] == "vllm":
-        config = cast(VllmConfig, config)
-        # set load_format
-        config["vllm_cfg"]["load_format"] = "auto" if is_eval else "dummy"
-
-        # set skip_tokenizer_init
-        if is_eval or config["stop_strings"] is not None:
-            config["vllm_cfg"]["skip_tokenizer_init"] = False
-        else:
-            config["vllm_cfg"]["skip_tokenizer_init"] = True
-
-    return config

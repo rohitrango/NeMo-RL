@@ -25,7 +25,7 @@ from torch.distributed.fsdp import (
     FSDPModule,
 )
 from torch.distributed.tensor import DTensor
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from transformers import AutoProcessor, AutoTokenizer
 from transformers.integrations.accelerate import find_tied_parameters
 
 from nemo_rl.algorithms.interfaces import LossFunction, LossType
@@ -52,6 +52,7 @@ from nemo_rl.utils.native_checkpoint import (
     load_checkpoint,
     save_checkpoint,
 )
+from nemo_rl.models.policy.utils import load_hf_model
 
 
 @contextmanager
@@ -67,30 +68,15 @@ def unshard_fsdp2_model(model: nn.Module) -> Generator[None, None, None]:
             if isinstance(module, FSDPModule):
                 module.reshard()
 
+def get_vlm_keys_from_clippedpgloss_batch(batch: BatchedDataDict[Any]) -> list[str]:
+    """
+    Get VLM keys from a batch of data in the ClippedPGLossDataDict format.
 
-def load_hf_model(model_name: str) -> nn.Module:
-    """Load a Hugging Face model with optional sliding window support."""
+    Note that in this case, the `vlm_keys` key is added to the batch dict before `get_logprobs` or `get_reference_policy_logprobs` functions are called.
 
-    if "qwen2.5-vl" in model_name.lower():
-        print(f"Loading Qwen2.5-VL model {model_name} on CPU...")
-        from transformers import Qwen2_5_VLForConditionalGeneration
-        return Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_name,
-            device_map="cpu",  # load weights onto CPU initially
-            torch_dtype=torch.float32,
-            trust_remote_code=True,
-        )
-    else:
-        return AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map="cpu",  # load weights onto CPU initially
-            torch_dtype=torch.float32,
-            trust_remote_code=True,
-            **sliding_window_overwrite(model_name),
-        )
-
-def get_vlm_keys_from_batch(batch: BatchedDataDict[Any]) -> list[str]:
-    """Get VLM keys from a batch of data."""
+    This function is fundamentally different from the `get_vlm_keys_from_datumspec_batch` function, which is used for the `DatumSpec` format, and is 
+    only supposed to be used inside the `get_logprobs` function. Try not to use it elsewhere.
+    """
     vlm_keys = batch.get("vlm_keys", [])
     if len(vlm_keys) > 0:
         if isinstance(vlm_keys[0], dict):
@@ -353,7 +339,7 @@ class DTensorPolicyWorker:
         seq_dim_size = data.get("input_ids").shape[sequence_dim]
 
         # get vlm keys from data
-        vlm_keys = get_vlm_keys_from_batch(data)
+        vlm_keys = get_vlm_keys_from_clippedpgloss_batch(data)
 
         for k, v in data.items():
             if k in vlm_keys:
@@ -568,7 +554,7 @@ class DTensorPolicyWorker:
         seq_dim_size = data.get("input_ids").shape[sequence_dim]
 
         # get vlm keys from data
-        vlm_keys = get_vlm_keys_from_batch(data)
+        vlm_keys = get_vlm_keys_from_clippedpgloss_batch(data)
 
         for k, v in data.items():
             if k in vlm_keys:

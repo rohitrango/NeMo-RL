@@ -72,6 +72,8 @@ class HfPolicy(ColocatablePolicyInterface, GenerationInterface):
             )
             tp_size = config["dtensor_cfg"]["tensor_parallel_size"]
         else:
+            # note that multimodal models are not supported for FSDP1 backend yet
+            assert processor is None, "Multimodal models are not supported for FSDP1 backend yet"
             worker_builder_cls = (
                 "nemo_rl.models.policy.fsdp1_policy_worker.FSDP1PolicyWorker"
             )

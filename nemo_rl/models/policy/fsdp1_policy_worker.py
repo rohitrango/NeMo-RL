@@ -120,8 +120,6 @@ class FSDP1PolicyWorker:
             self.reference_model = None
 
         self.tokenizer = tokenizer
-        self.processor = processor
-        self.is_vlm = processor is not None
 
         # ------------------------------------------------
         # 3) Move to GPU + Composable FSDP
@@ -828,7 +826,6 @@ class FSDP1PolicyWorker:
         This function:
         - Prepares the state_dict of the model.
         - Collects the info for streaming multiple tensors.
-        - Filters out vision model weights for VL models (vLLM only needs language model weights).
 
         Returns:
             list: The list of parameters sizes.
@@ -840,7 +837,7 @@ class FSDP1PolicyWorker:
         # For an FSDP model, model.state_dict() will move the params to the GPU
         if not isinstance(self.model, FullyShardedDataParallel):
             self.model = self.manual_load_to_gpu(self.model)
-            full_state_dict = self.model.state_dict()
+            self._held_sharded_state_dict_reference = self.model.state_dict()
         else:
             # Get sharded state dict instead of full state dict for FSDP1
             with FullyShardedDataParallel.state_dict_type(
@@ -848,32 +845,7 @@ class FSDP1PolicyWorker:
                 state_dict_type=StateDictType.SHARDED_STATE_DICT,
                 state_dict_config=ShardedStateDictConfig(),
             ):
-                full_state_dict = self.model.state_dict()
-
-        # Filter out vision model weights for VL models
-        if self.is_vlm:
-            # Define vision model prefixes to exclude
-            vision_prefixes = [
-                "visual.",           # Standard vision model prefix
-                "vision_model.",     # Alternative vision model prefix
-                "vision_tower.",     # Some models use this prefix
-                "mm_projector.",     # Multimodal projector
-                "vision_projection.", # Vision projection layer
-            ]
-            
-            # Filter state dict to only include language model weights
-            filtered_state_dict = {}
-            for name, tensor in full_state_dict.items():
-                # Skip vision model weights
-                if any(name.startswith(prefix) for prefix in vision_prefixes):
-                    print(f"Filtering out vision weight: {name}")
-                    continue
-                filtered_state_dict[name] = tensor
-            
-            self._held_sharded_state_dict_reference = filtered_state_dict
-            print(f"Filtered {len(full_state_dict) - len(filtered_state_dict)} vision weights out of {len(full_state_dict)} total weights")
-        else:
-            self._held_sharded_state_dict_reference = full_state_dict
+                self._held_sharded_state_dict_reference = self.model.state_dict()
 
         # Collect info for streaming multiple tensors
         state_dict_info = []
