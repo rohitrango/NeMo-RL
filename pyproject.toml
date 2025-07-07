@@ -42,12 +42,15 @@ dependencies = [
     "debugpy",
     "nvtx",
     "matplotlib",
-    "plotly"
+    "plotly",
+    "sympy>=1.14.0",
+    "pillow>=11.2.1",
+    "torchvision>=0.22.0",
 ]
 
 [project.optional-dependencies]
 vllm = [
-    "vllm==0.9.0",
+    "vllm==0.9.1",
 ]
 mcore = [
     # also need cudnn (https://developer.nvidia.com/cudnn-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=20.04&target_type=deb_network)
