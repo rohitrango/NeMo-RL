@@ -134,7 +134,9 @@ def get_cpu_state_dict(
     return new_state_dict
 
 
-@ray.remote(runtime_env=get_runtime_env_for_policy_worker("dtensor_policy_worker"))
+@ray.remote(
+    runtime_env=get_runtime_env_for_policy_worker("dtensor_policy_worker")
+)  # pragma: no cover
 class DTensorPolicyWorker:
     def __repr__(self) -> str:
         """Customizes the actor's prefix in the Ray logs.
@@ -258,7 +260,7 @@ class DTensorPolicyWorker:
 
         # Manually broadcast buffers
         for _, buf in self.model.named_buffers():
-            torch.distributed.broadcast(buf, src=0)
+            torch.distributed.broadcast(to_local_if_dtensor(buf), src=0)
 
         if self.cpu_offload:
             self.model = self.move_to_device(self.model, "cpu")
@@ -991,7 +993,10 @@ class DTensorPolicyWorker:
             handle = reduce_tensor(p.detach())
             all_handles.append((key, handle))
 
-        return {device_uuid: all_handles}
+        # (pack_tensor_for_ipc: bool, handles: list)
+        serialized = (False, all_handles)
+
+        return {device_uuid: serialized}
 
     @torch.no_grad()
     def prepare_info_for_collective(self) -> dict[str, Any]:
