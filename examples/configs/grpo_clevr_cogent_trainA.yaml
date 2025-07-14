@@ -43,6 +43,14 @@ policy:
   fsdp_offload_enabled: false
   activation_checkpointing_enabled: false
 
+  # dont freeze anything by default
+  freeze_language_model: false
+  freeze_visual_model: false
+
+  freeze_param_regex: null  # provide a regex to freeze parameters
+  # examples: "visual" or "visual\.patch_embed|language_model\.embed_tokens"
+  # note: dots must be escaped by the user
+
   dtensor_cfg:
     enabled: true
     cpu_offload: False
@@ -131,6 +139,18 @@ data:
 env:
   clevr-cogent:
     num_workers: 8
+    reward_functions:
+      - name: format
+        weight: 0.2
+      - name: exact_alnum
+        weight: 0.8
+  refcoco:
+    num_workers: 8
+    reward_functions:
+      - name: format
+        weight: 0.1
+      - name: bbox_giou
+        weight: 0.9
 
 logger:
   log_dir: "logs"  # Base directory for all logs

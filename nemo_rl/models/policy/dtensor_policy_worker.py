@@ -58,6 +58,8 @@ from nemo_rl.models.policy.utils import (
     get_runtime_env_for_policy_worker,
     import_class_from_path,
     sliding_window_overwrite,
+    freeze_hf_model_by_regex,
+    freeze_hf_model_towers
 )
 from nemo_rl.utils.native_checkpoint import (
     load_checkpoint,
@@ -189,6 +191,10 @@ class DTensorPolicyWorker:
 
         print(f"[Rank {self.rank}] Loading model {model_name} on CPU...")
         self.model, full_state_dict = load_hf_model(model_name, self)
+
+        # freeze parameters by provided regex
+        freeze_hf_model_towers(self.model, self.cfg.get("freeze_language_model", False), self.cfg.get("freeze_vision_model", False))
+        freeze_hf_model_by_regex(self.model, self.cfg.get("freeze_param_regex", None))
 
         # caching since this property is not always preserved after FSDP
         self.num_tied_weights = len(find_tied_parameters(self.model))

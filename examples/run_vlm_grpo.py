@@ -31,6 +31,7 @@ from nemo_rl.data import DataConfig
 from nemo_rl.data.datasets import AllTaskProcessedDataset
 from nemo_rl.environments.vlm_environment import VLMEnvironment
 from nemo_rl.data.hf_datasets.clevr import CLEVRCoGenTDataset, format_clevr_cogent_dataset
+from nemo_rl.data.hf_datasets.refcoco import RefCOCODataset, format_refcoco_dataset
 from nemo_rl.data.interfaces import (
     DatumSpec,
     LLMMessageLogType,
@@ -48,7 +49,6 @@ from nemo_rl.utils.logger import get_next_experiment_dir
 
 OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
 
-
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Run GRPO training with configuration")
@@ -64,7 +64,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
 #                             VLM Data Processor
 # ===============================================================================
 
-def resolve_to_image(image_path: str) -> Image.Image:
+def resolve_to_image(image_path_or_image: str | Image.Image) -> Image.Image:
     """ Resolve the image path to a PIL.Image object. 
     
     image_path can be either:
@@ -72,20 +72,23 @@ def resolve_to_image(image_path: str) -> Image.Image:
     - url to image
     - base64 encoded image
     """
-    if image_path.startswith(("http://", "https://")):
+    if isinstance(image_path_or_image, Image.Image):
+        return image_path_or_image
+
+    if image_path_or_image.startswith(("http://", "https://")):
         # Handle URL
-        response = requests.get(image_path)
+        response = requests.get(image_path_or_image)
         response.raise_for_status()
         return Image.open(BytesIO(response.content))
-    elif image_path.startswith("data:"):
+    elif image_path_or_image.startswith("data:"):
         # Handle base64 encoded image
         # Format: data:image/jpeg;base64,/9j/4AAQSkZJRg...
-        header, encoded = image_path.split(",", 1)
+        header, encoded = image_path_or_image.split(",", 1)
         image_data = base64.b64decode(encoded)
         return Image.open(BytesIO(image_data))
     else:
         # Handle local file path
-        return Image.open(image_path)
+        return Image.open(image_path_or_image)
 
 
 def hf_data_processor(
@@ -97,7 +100,13 @@ def hf_data_processor(
 ) -> DatumSpec:
     """Process a datum dictionary (directly loaded from data/hf_datasets/clevr.py) into a DatumSpec for the VLM Environment."""
 
-    datum_dict = format_clevr_cogent_dataset(datum_dict)
+    # depending on the task, format the data differently
+    if task_data_spec.task_name == "clevr-cogent":
+        datum_dict = format_clevr_cogent_dataset(datum_dict)
+    elif task_data_spec.task_name == "refcoco":
+        datum_dict = format_refcoco_dataset(datum_dict)
+    else:
+        raise ValueError(f"No data processor for task {task_data_spec.task_name}")
 
     user_message = datum_dict["messages"]
     problem = user_message[0]["content"]
@@ -220,9 +229,12 @@ def setup_data(
     if data_config['dataset_name'] == 'clevr-cogent':
         data: Any = CLEVRCoGenTDataset(split=data_config['split'], 
                                        seed=data_config['seed'], task_name=data_config['task_name'])
+    elif data_config['dataset_name'] == 'refcoco':
+        data: Any = RefCOCODataset(split=data_config['split'], seed=data_config['seed'], task_name=data_config['task_name'], path_to_coco_images=data_config.get('path_to_coco_images', None))
     else:
         raise ValueError(f"No processor for dataset {data_config['dataset_name']}.")
 
+    # add data processor for different tasks
     task_data_processors: dict[str, tuple[TaskDataSpec, TaskDataProcessFnCallable]] = (
         defaultdict(lambda: (vlm_task_spec, hf_data_processor))
     )

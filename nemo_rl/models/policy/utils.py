@@ -14,7 +14,8 @@
 
 import importlib
 import os
-from typing import Any
+import re
+from typing import Any, Optional
 from accelerate import init_empty_weights
 
 import torch
@@ -131,6 +132,31 @@ def sliding_window_overwrite(model_name: str) -> dict[str, Any]:
         )
 
     return overwrite_dict
+
+def freeze_hf_model_towers(model: nn.Module, freeze_language_model: bool = False, freeze_vision_model: bool = False):
+    # TODO: needs to be updated for different model architectures
+    if freeze_language_model:
+        language_tower_names = ["language_model", "lm_head"]
+        for name, param in model.named_parameters():
+            if any([name.startswith(x) or name.startswith("model." + x) for x in language_tower_names]):
+                param.requires_grad = False
+                print(f"Freezing {name} as part of language model")
+
+    if freeze_vision_model:
+        visual_tower_names = ["vision_model", "vision_tower", "visual", "projection_layer", "multi_modal_projector"]
+        for name, param in model.named_parameters():
+            if any([name.startswith(x) or name.startswith("model." + x) for x in visual_tower_names]):
+                param.requires_grad = False
+                print(f"Freezing {name} as part of vision model")
+
+
+def freeze_hf_model_by_regex(model: nn.Module, regex: Optional[str] = None):
+    if regex is None:
+        return
+    for name, param in model.named_parameters():
+        if re.match(regex, name):
+            param.requires_grad = False
+
 
 def load_hf_model(model_name: str, policy_worker) -> nn.Module:
     """Load a Hugging Face model with optional sliding window support."""

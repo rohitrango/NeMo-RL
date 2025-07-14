@@ -14,8 +14,7 @@
 import contextlib
 import io
 import logging
-from typing import Any, Optional, TypedDict
-import re
+from typing import Any, Optional, TypedDict, Callable, List, Tuple
 
 import ray
 import torch
@@ -30,11 +29,18 @@ from nemo_rl.environments.metrics import (
     calculate_pass_rate_per_prompt,
 )
 from nemo_rl.environments.utils import chunk_list_to_workers
+from nemo_rl.environments.rewards import (
+    format_reward,
+    exact_answer_alphanumeric_reward,
+    bbox_giou_reward,
+    combine_reward_functions,
+)
 
 
 class VLMEnvConfig(TypedDict):
     num_workers: int
     stop_strings: Optional[list[str]]  # Default stop strings for this env
+    reward_functions: List[Tuple[str, float]]   # list of reward functions and their weights
 
 @contextlib.contextmanager
 def _mute_output():
@@ -45,41 +51,31 @@ def _mute_output():
     ):
         yield
 
-def format_and_exact_answer(ground_truth: str, response: str) -> str:
-    ''' 
-    Reward the agent for the following:
-    1. response follows the format: (.*) <think> (.*) </think> <answer> (.*) </answer>
-    2. the answer within the <answer> tags is the same as the ground truth (case-insensitive)
-    '''
-    rew = 0.0
-    # Check for <think> tags
-    if re.search(r"<think>[\s\S]*</think>", response):
-        rew += 0.25  # 0.25 points for having think tags
-    
-    # Check for <answer> tags
-    if re.search(r"<answer>[\s\S]*</answer>", response):
-        rew += 0.75  # 0.75 points for having answer tags
-    
-    is_correct_answer = False
-    match = re.search(r"<answer>([\s\S]*)</answer>", response)
-    if match:
-        answer = match.group(1)
-        # Remove all non-alphanumeric characters (including whitespace, punctuation, etc.)
-        answer_clean = ''.join(c for c in answer if c.isalnum()).lower()
-        ground_truth_clean = ''.join(c for c in ground_truth if c.isalnum()).lower()
-        if answer_clean == ground_truth_clean:
-            rew += 4.0  # four points for the answer
-            is_correct_answer = True
-    return rew, is_correct_answer
-
-
 @ray.remote
 class VLMVerifyWorker:
-    def __init__(self) -> None:
+    def __init__(self, cfg: VLMEnvConfig) -> None:
         logging.getLogger("vlm_worker").setLevel(logging.CRITICAL)
-
         # this is a simple reward function that rewards the agent for correct answer and correct format
-        self.verify_func = format_and_exact_answer
+        reward_functions = []
+        # loop over all configs
+        for reward_func_cfg in cfg["reward_functions"]:
+            # get name and weight
+            reward_func_name = reward_func_cfg["name"]
+            reward_func_weight = reward_func_cfg["weight"]
+            if reward_func_name == "format":
+                reward_functions.append((format_reward, reward_func_weight))
+            elif reward_func_name == "exact_alnum":
+                reward_functions.append((exact_answer_alphanumeric_reward, reward_func_weight))
+            elif reward_func_name == "bbox_giou":
+                reward_functions.append((bbox_giou_reward, reward_func_weight))
+            else:
+                raise ValueError(f"Invalid reward function: {reward_func_name}")
+        if len(reward_functions) == 0:
+            raise ValueError("No reward functions provided")
+        
+        # combine the reward functions
+        self.verify_func = combine_reward_functions(reward_functions)
+
 
     def verify(
         self, pred_responses: list[str], ground_truths: list[str]
@@ -123,7 +119,7 @@ class VLMEnvironment(EnvironmentInterface):
         self.workers = [
             VLMVerifyWorker.options(  # type: ignore # (decorated with @ray.remote)
                 runtime_env={"py_executable": PY_EXECUTABLES.SYSTEM}
-            ).remote()
+            ).remote(cfg)
             for _ in range(self.num_workers)
         ]
 

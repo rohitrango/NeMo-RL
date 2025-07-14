@@ -50,7 +50,6 @@ def format_answer_fromtags(answer: str) -> str:
     ret = match.group(1).strip() if match else answer.strip()
     return ret
 
-# ⚠️ this does not work because datasets.Dataset.from_pandas(pd.DataFrame(data)) does not take mix of list and non-list strings
 def format_clevr_cogent_dataset(example: dict[str, Any]) -> dict[str, Any]:
     """
     Format the CLEVR-CoGenT dataset.
