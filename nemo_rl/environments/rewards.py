@@ -42,7 +42,7 @@ def exact_answer_alphanumeric_reward(ground_truth: str, response: str) -> tuple[
             return 1.0, True
     return 0.0, False
 
-def bbox_giou_reward(ground_truth: str, response: str) -> tuple[float, bool]:
+def bbox_giou_reward(ground_truth: str, response: str, giou_penalty_thres: float = 10.0) -> tuple[float, bool]:
     '''
     Given [x1, y1, x2, y2] normalized bounding box coordinates, compute the GIoU between the ground truth and the response
     '''
@@ -66,18 +66,22 @@ def bbox_giou_reward(ground_truth: str, response: str) -> tuple[float, bool]:
     # compute the area of the intersection
     area_i = max(0, x2i - x1i) * max(0, y2i - y1i)
     # compute the area of the union
-    area_u = area_g + area_r - area_i
+    area_u = max(1e-3, area_g + area_r - area_i)
     # compute the iou
     iou = area_i / area_u
-    # compute convex hull as min
-    x1c = min(x1g, x1r)
-    y1c = min(y1g, y1r)
-    x2c = max(x2g, x2r)
-    y2c = max(y2g, y2r)
-    # compute the area of the convex hull
-    area_c = (x2c - x1c) * (y2c - y1c)
-    # compute the giou
-    giou = iou + (area_c - area_u) / area_c
+    # if iou is too low, introduce a giou term to compensate
+    if iou < giou_penalty_thres:
+        # compute convex hull as min
+        x1c = min(x1g, x1r)
+        y1c = min(y1g, y1r)
+        x2c = max(x2g, x2r)
+        y2c = max(y2g, y2r)
+        # compute the area of the convex hull
+        area_c = max(1e-3, (x2c - x1c) * (y2c - y1c))
+        # compute the giou
+        giou = iou + (area_c - area_u) / area_c
+    else:
+        giou = iou
     return giou, giou > 0.5
 
 

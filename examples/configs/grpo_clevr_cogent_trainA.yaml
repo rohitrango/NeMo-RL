@@ -151,6 +151,9 @@ env:
         weight: 0.1
       - name: bbox_giou
         weight: 0.9
+        kwargs: 
+          giou_penalty_thres: 0.5
+
 
 logger:
   log_dir: "logs"  # Base directory for all logs

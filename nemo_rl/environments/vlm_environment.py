@@ -18,6 +18,7 @@ from typing import Any, Optional, TypedDict, Callable, List, Tuple
 
 import ray
 import torch
+from functools import partial
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.virtual_cluster import PY_EXECUTABLES
@@ -62,14 +63,22 @@ class VLMVerifyWorker:
             # get name and weight
             reward_func_name = reward_func_cfg["name"]
             reward_func_weight = reward_func_cfg["weight"]
+            reward_func_kwargs = reward_func_cfg.get("kwargs", None)
             if reward_func_name == "format":
-                reward_functions.append((format_reward, reward_func_weight))
+                reward_func = format_reward
             elif reward_func_name == "exact_alnum":
-                reward_functions.append((exact_answer_alphanumeric_reward, reward_func_weight))
+                reward_func = exact_answer_alphanumeric_reward
             elif reward_func_name == "bbox_giou":
-                reward_functions.append((bbox_giou_reward, reward_func_weight))
+                reward_func = bbox_giou_reward
             else:
                 raise ValueError(f"Invalid reward function: {reward_func_name}")
+            
+            # check for additional kwargs
+            if reward_func_kwargs is not None:
+                reward_func = partial(reward_func, **reward_func_kwargs)
+
+            reward_functions.append((reward_func, reward_func_weight))
+
         if len(reward_functions) == 0:
             raise ValueError("No reward functions provided")
         
