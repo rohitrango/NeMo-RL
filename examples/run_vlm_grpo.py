@@ -162,15 +162,16 @@ def hf_data_processor(
     user_message['token_ids'] = message['input_ids'][0]
     # add all keys and values to the user message, and the list of keys
     user_message['vlm_keys'] = []
+    # other keys in the message dict are going to be extra vllm tokens, remove batch index for 'image_grid_thw' (and future keys that will have an implicit batch index) 
     for key, value in message.items():
         # ignore keys (already specified in token_ids)
         if key in ['input_ids', 'attention_mask']:
             continue
         # ignore the batch index if provided
-        user_message[key] = value[0] if key in ['input_ids', 'attention_mask', 'image_grid_thw'] else value
+        user_message[key] = value[0] if key in ['image_grid_thw'] else value
         user_message['vlm_keys'].append(key)
     
-    # get the system prompt content! (use this for vllm-backend that needs formatted dialog and list of images)
+    # get the prompt content! (use this for vllm-backend that needs formatted dialog and list of images)
     # add images for vllm serving
     user_message["content"] = string_formatted_dialog
     user_message["images"] = images

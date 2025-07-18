@@ -653,31 +653,18 @@ def grpo_train(
                         "sample_mask": repeated_batch["loss_multiplier"],
                     }
                 )
-                # check for vlm kwargs
+                # add vlm kwargs
                 vlm_kwargs = {}
                 if is_vlm:
-                    vlm_keys_lists = flat_messages.get('vlm_keys', [])
-                    if vlm_keys_lists:
-                        # Collect all unique vlm_keys from all samples
-                        # Handle 3-level nesting: batch -> conversation -> message -> keys
-                        vlm_keys = set()
-                        for conversation_vlm_keys in vlm_keys_lists:  # Each conversation
-                            if conversation_vlm_keys:  # Check if conversation has vlm_keys
-                                for message_vlm_keys in conversation_vlm_keys:  # Each message in conversation
-                                    if message_vlm_keys:  # Check if message has vlm_keys
-                                        for key in message_vlm_keys:  # Individual keys
-                                            vlm_keys.add(key)
-                        
-                        # Extract each VLM key from the flattened messages
-                        for key in vlm_keys:
-                            if key in flat_messages:
-                                vlm_kwargs[key] = flat_messages[key]
+                    for key in skip_padding_keys:
+                        if key in flat_messages:
+                            vlm_kwargs[key] = flat_messages[key]
                     
                     # Add vlm_kwargs to train_data if any exist
                     if len(vlm_kwargs) > 0:
                         print(f"  ✓ Adding {len(vlm_kwargs)} VLM keys to train_data")
                         print(f"  ✓ VLM keys: {vlm_kwargs.keys()}")
-                        train_data['vlm_keys'] = [vlm_kwargs for _ in range(len(train_data['input_ids']))]
+                        train_data['vlm_keys'] = [list(vlm_kwargs.keys()) for _ in range(len(train_data['input_ids']))]  # list of lists of str
                         for key in vlm_kwargs:
                             print(f"  ✓ {key}: {vlm_kwargs[key].shape}")
                             train_data[key] = vlm_kwargs[key]

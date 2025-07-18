@@ -97,7 +97,7 @@ def download_and_unzip(url: str, target_directory: str, subdir_name: str = "."):
         # print(f"Removed downloaded zip file: {filepath}")
         pass
 
-def format_refcoco_dataset(example: dict[str, Any], width: int = 448 , height: int = 448, img_flip_prob: float = 0.5, caption_type: str = 'random') -> dict[str, Any]:
+def format_refcoco_dataset(example: dict[str, Any], width: int = 448 , height: int = 448, caption_type: str = 'random') -> dict[str, Any]:
     """
     Format the RefCOCO dataset from huggingface.
 
@@ -112,19 +112,12 @@ def format_refcoco_dataset(example: dict[str, Any], width: int = 448 , height: i
 
     split = example['split']
     if 'val' in split:
-        img_flip_prob = 0.0
         caption_type = 'descriptive'
-        print(f"Using descriptive caption and no flipping for {split} set")
 
     # resize image for easy image processing across batches
     image = Image.open(example['image_path'])
     orig_width, orig_height = image.size
     resized_image = image.resize((width, height))
-    flip = False
-
-    if random.random() < img_flip_prob:
-        flip = True
-        resized_image = resized_image.transpose(Image.FLIP_LEFT_RIGHT)
 
     # get caption from many types
     if caption_type == 'random':
@@ -144,8 +137,6 @@ def format_refcoco_dataset(example: dict[str, Any], width: int = 448 , height: i
     bbox = example['bbox']
     bbox = [bbox[0] / orig_width * 1000, bbox[1] / orig_height * 1000, bbox[2] / orig_width * 1000, bbox[3] / orig_height * 1000]
     bbox = [int(round(coord)) for coord in bbox]
-    if flip:
-        bbox = [1000 - bbox[2], bbox[1], 1000 - bbox[0], bbox[3]]
     solution = f"[{bbox[0]}, {bbox[1]}, {bbox[2]}, {bbox[3]}]"
 
     user_content = [

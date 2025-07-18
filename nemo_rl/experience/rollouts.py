@@ -360,12 +360,15 @@ def run_multi_turn_rollout(
         active_batch = current_batch.select_indices(active_indices)
         active_stop_strings = [current_stop_strings[i] for i in active_indices.tolist()]
 
+        # get vlm keys from the active batch to skip padding and augment `generation_input_data`
+        vlm_keys = get_vlm_keys_from_datumspec_batch(active_batch)
+
         active_flat_messages: BatchedDataDict[FlatMessagesType]
         active_flat_messages, active_input_lengths = (
             batched_message_log_to_flat_message(
                 active_batch["message_log"],
                 pad_value_dict={"token_ids": tokenizer.pad_token_id},
-                skip_padding_keys=get_vlm_keys_from_datumspec_batch(active_batch)
+                skip_padding_keys=vlm_keys
             )
         )
 
@@ -382,21 +385,11 @@ def run_multi_turn_rollout(
         )
         
         message_log_for_generation = []
-        # Add VLM-specific data if available
+
+        # Add VLM-specific data if available (the second predicate makes sure that at least of the list is not empty)
         if 'vlm_keys' in active_flat_messages and any(active_flat_messages['vlm_keys']):
             # Pass VLM keys for model input
             generation_input_data['vlm_keys'] = active_flat_messages['vlm_keys']
-            
-            # Add VLM-specific tensors
-            # Handle 3-level nesting: batch -> conversation -> message -> keys
-            vlm_keys = set()
-            for conversation_vlm_keys in active_flat_messages['vlm_keys']:  # Each conversation
-                if conversation_vlm_keys:  # Check if conversation has vlm_keys
-                    for message_vlm_keys in conversation_vlm_keys:  # Each message in conversation
-                        if message_vlm_keys:  # Check if message has vlm_keys
-                            for key in message_vlm_keys:  # Individual keys
-                                vlm_keys.add(key)
-            
             for key in vlm_keys:
                 if key in active_flat_messages:
                     generation_input_data[key] = active_flat_messages[key]

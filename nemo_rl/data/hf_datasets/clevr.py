@@ -41,9 +41,8 @@ def pil_to_base64(image: Image.Image, format: str = "PNG") -> str:
 
 def format_answer_fromtags(answer: str) -> str:
     """
-    Format the answer from tags.
+    Extract content between <answer> tags and strip whitespace
     """
-    # Extract content between <answer> tags and strip whitespace
     import re
     pattern = r"<answer>(.*?)</answer>"
     match = re.search(pattern, answer)
@@ -52,9 +51,8 @@ def format_answer_fromtags(answer: str) -> str:
 
 def format_clevr_cogent_dataset(example: dict[str, Any]) -> dict[str, Any]:
     """
-    Format the CLEVR-CoGenT dataset.
+    Format the CLEVR-CoGenT dataset into an OpenAI-API-like message log.
     """
-    # Ensure consistent data types
     user_content = [
         {
             "type": "image",

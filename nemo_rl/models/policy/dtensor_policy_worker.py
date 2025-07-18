@@ -66,7 +66,7 @@ from nemo_rl.utils.native_checkpoint import (
     save_checkpoint,
 )
 from nemo_rl.models.policy.utils import load_hf_model
-
+from nemo_rl.distributed.batched_data_dict import get_vlm_keys_from_flattened_batch
 
 @contextmanager
 def unshard_fsdp2_model(model: nn.Module) -> Generator[None, None, None]:
@@ -81,26 +81,6 @@ def unshard_fsdp2_model(model: nn.Module) -> Generator[None, None, None]:
             if isinstance(module, FSDPModule):
                 module.reshard()
 
-def get_vlm_keys_from_clippedpgloss_batch(batch: BatchedDataDict[Any]) -> list[str]:
-    """
-    Get VLM keys from a batch of data in the ClippedPGLossDataDict format.
-
-    Note that in this case, the `vlm_keys` key is added to the batch dict before `get_logprobs` or `get_reference_policy_logprobs` functions are called.
-
-    This function is fundamentally different from the `get_vlm_keys_from_datumspec_batch` function, which is used for the `DatumSpec` format, and is 
-    only supposed to be used inside the `get_logprobs` function. Try not to use it elsewhere.
-    """
-    vlm_keys = batch.get("vlm_keys", [])
-    if len(vlm_keys) > 0:
-        if isinstance(vlm_keys[0], dict):
-            vlm_keys = [key for subdict in vlm_keys for key in subdict.keys()]
-            vlm_keys = list(set(vlm_keys))
-        elif isinstance(vlm_keys[0], str):
-            vlm_keys = list(set(vlm_keys))
-        elif isinstance(vlm_keys[0], list):
-            vlm_keys = [key for sublist in vlm_keys for key in sublist]
-            vlm_keys = list(set(vlm_keys))
-    return vlm_keys
 
 @torch.no_grad()
 def get_cpu_state_dict(
@@ -406,7 +386,7 @@ class DTensorPolicyWorker:
         """Return information about the GPU being used by this worker."""
         return get_gpu_info(self.model)
 
-    def _extract_vlm_kwargs(self, mb: BatchedDataDict[Any]) -> dict[str, Any]:
+    def _extract_vlm_kwargs(self, mb: BatchedDataDict[Any], vlm_keys: list[str]) -> dict[str, Any]:
         """Extract VLM (Vision Language Model) specific kwargs from a message batch.
         
         This function extracts VLM-specific keys from the message batch while filtering out
@@ -419,13 +399,10 @@ class DTensorPolicyWorker:
             Dictionary of VLM kwargs to pass to the model, empty if not a VLM or no VLM keys
         """
         vlm_kwargs = {}
-        if self.is_vlm:
-            # Handle vlm_keys from flattened message data
-            vlm_keys_lists = mb.get("vlm_keys", [[]])[0]
-            if vlm_keys_lists:
-                for key in vlm_keys_lists:
-                    if key in mb:
-                        vlm_kwargs[key] = mb[key]
+        # Handle vlm_keys from flattened message data
+        for key in vlm_keys:
+            if key in mb:
+                vlm_kwargs[key] = mb[key]
         return vlm_kwargs
 
     def train(
@@ -459,7 +436,7 @@ class DTensorPolicyWorker:
         seq_dim_size = data.get("input_ids").shape[sequence_dim]
 
         # get vlm keys from data
-        vlm_keys = get_vlm_keys_from_clippedpgloss_batch(data)
+        vlm_keys = get_vlm_keys_from_flattened_batch(data)
 
         for k, v in data.items():
             if k in vlm_keys:
@@ -551,7 +528,7 @@ class DTensorPolicyWorker:
                         ).repeat(batch_size, 1)
 
                         # add vlm kwargs to model call
-                        vlm_kwargs = self._extract_vlm_kwargs(mb)
+                        vlm_kwargs = self._extract_vlm_kwargs(mb, vlm_keys)
 
                     context_parallel_ctx = None
                     if self.cp_size > 1:
@@ -747,7 +724,7 @@ class DTensorPolicyWorker:
         seq_dim_size = data.get("input_ids").shape[sequence_dim]
 
         # get vlm keys from data
-        vlm_keys = get_vlm_keys_from_clippedpgloss_batch(data)
+        vlm_keys = get_vlm_keys_from_flattened_batch(data)
 
         for k, v in data.items():
             if k in vlm_keys:
@@ -796,7 +773,7 @@ class DTensorPolicyWorker:
                         (batch_size, seq_len), dtype=torch.long, device=input_ids.device
                     )
 
-                    vlm_kwargs = self._extract_vlm_kwargs(lp_batch)
+                    vlm_kwargs = self._extract_vlm_kwargs(lp_batch, vlm_keys)
 
                     outputs = self.model(
                         input_ids=input_ids,
@@ -939,7 +916,9 @@ class DTensorPolicyWorker:
         # Get state_dict
         self.model = self.move_to_cuda(self.model)
 
-        self._held_sharded_state_dict_reference = self.model.state_dict()
+        self._held_sharded_state_dict_reference: dict[str, torch.Tensor] = (
+            self.model.state_dict()
+        )
 
         # Collect info for streaming multiple tensors
         state_dict_info = []
