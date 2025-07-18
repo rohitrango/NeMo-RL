@@ -2406,7 +2406,7 @@ requires-dist = [
     { name = "accelerate", specifier = ">=0.26" },
     { name = "blobfile" },
     { name = "colored", specifier = "==2.2.3" },
-    { name = "datasets", specifier = ">=3.6.0" },
+    { name = "datasets", specifier = ">=4.0.0" },
     { name = "debugpy" },
     { name = "flash-attn", marker = "extra == 'automodel'", specifier = "==2.7.4.post1" },
     { name = "flash-attn", marker = "extra == 'mcore'", specifier = "==2.7.4.post1" },

@@ -6,7 +6,7 @@ grpo:
   num_generations_per_prompt: 32
 
 policy:
-  model_name: "meta-llama/Llama-3.3-70B-Instruct"
+  model_name: "Qwen/Qwen3-30B-A3B"
   tokenizer:
     name: ${policy.model_name} ## specify if you'd like to use a tokenizer different from the model's default
   train_global_batch_size: 512
@@ -29,9 +29,12 @@ policy:
     enabled: true
     empty_unused_memory_level: 1
     converter_type: "LlamaForCausalLM"
-    tensor_model_parallel_size: 4
-    pipeline_model_parallel_size: 4
+    tensor_model_parallel_size: 2
+    pipeline_model_parallel_size: 1
     context_parallel_size: 1
+    expert_tensor_parallel_size: 1
+    expert_model_parallel_size: 8
+    sequence_parallel: True
     pipeline_dtype: ${policy.precision}
 
     optimizer:
@@ -51,6 +54,9 @@ policy:
       lr_decay_iters: null
       lr_warmup_iters: 13
       lr_warmup_init: 3.0e-8
+    
+    env_vars:
+      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:False"
 
   generation:
     backend: "vllm"
@@ -62,7 +68,8 @@ policy:
     stop_strings: null
     vllm_cfg:
       tensor_parallel_size: 4
-      gpu_memory_utilization: 0.6
+      gpu_memory_utilization: 0.7
+      enforce_eager: false
       max_model_len: ${policy.max_total_sequence_length}
 
 cluster:

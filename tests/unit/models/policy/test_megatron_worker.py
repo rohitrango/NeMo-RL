@@ -60,6 +60,13 @@ def create_megatron_test_config(
             "top_k": None,
             "stop_token_ids": None,
             "stop_strings": None,
+            "colocated": {
+                "enabled": True,
+                "resources": {
+                    "gpus_per_node": None,
+                    "num_nodes": None,
+                },
+            },
         },
         "dtensor_cfg": {
             "enabled": False,  # Disabled for Megatron tests
@@ -777,8 +784,8 @@ def test_megatron_reference_policy_functionality():
     )
 
     config = create_megatron_test_config()
-    config["megatron_cfg"]["optimizer"]["lr"] = 1e-3  # Increase from 5e-6 to 1e-3
-    config["megatron_cfg"]["optimizer"]["min_lr"] = 1e-4  # Increase min_lr as well
+    config["megatron_cfg"]["optimizer"]["lr"] = 1e-2  # Increase from 5e-6 to 1e-2
+    config["megatron_cfg"]["optimizer"]["min_lr"] = 1e-3  # Increase min_lr as well
 
     tokenizer = get_tokenizer(config["tokenizer"])
     config["generation"] = configure_generation_config(config["generation"], tokenizer)

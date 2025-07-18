@@ -34,7 +34,8 @@ policy:
     empty_unused_memory_level: 0
     converter_type: "LlamaForCausalLM"
     tensor_model_parallel_size: 1
-    pipeline_model_parallel_size: 1
+    # On H100, can run with pp=1 for better performance with expandable segments (which is enabled by default)
+    pipeline_model_parallel_size: 2
     context_parallel_size: 1
     pipeline_dtype: ${policy.precision}
 
@@ -53,7 +54,7 @@ policy:
       weight_decay_incr_style: "constant"
       lr_decay_style: "constant"
       lr_decay_iters: null
-      lr_warmup_iters: 50
+      lr_warmup_iters: 13
       lr_warmup_init: 3.0e-8
 
   generation:
@@ -66,7 +67,7 @@ policy:
     stop_strings: null
     vllm_cfg:
       tensor_parallel_size: 1
-      gpu_memory_utilization: 0.95
+      gpu_memory_utilization: 0.6
       max_model_len: ${policy.max_total_sequence_length}
 
 cluster:
