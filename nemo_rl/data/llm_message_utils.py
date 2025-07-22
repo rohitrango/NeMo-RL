@@ -388,7 +388,7 @@ def get_images_from_message(message: dict[str, Any]) -> list[Any]:
     images = []
     for item in message["content"]:
         if item["type"] == "image":
-            images.append(item["image"])
+            images.extend(list(item["image"])) if isinstance(item["image"], (list, tuple)) else images.append(item["image"])
     return images
     
 
@@ -481,12 +481,12 @@ def get_formatted_message_log(
         # extend this if statement to check for all(len(modality)) == 0 when adding other modalities
         if len(images_cur_message) == 0:
             new_message["token_ids"] = tokenizer(
-                message_chunk, return_tensors="pt", add_special_tokens=False
+                text=message_chunk, return_tensors="pt", add_special_tokens=False
             )["input_ids"][0]
         else:
             # extend the else statement to add other modalities (in this case, tokenizer will be a processor)
             processed_chunk = tokenizer(
-                text=message_chunk, images=images_cur_message, return_tensors="pt", add_special_tokens=True
+                text=[message_chunk], images=images_cur_message, return_tensors="pt", add_special_tokens=True
             )
             new_message["token_ids"] = processed_chunk["input_ids"][0]
             new_message["vlm_keys"] = []
@@ -494,6 +494,8 @@ def get_formatted_message_log(
             for key in processed_chunk.keys():
                 if key in ["input_ids", "attention_mask"]:
                     continue
+                if key in ['image_grid_thw']:
+                    processed_chunk[key] = processed_chunk[key].squeeze(0)
                 new_message["vlm_keys"].append(key)
                 new_message[key] = processed_chunk[key]
 

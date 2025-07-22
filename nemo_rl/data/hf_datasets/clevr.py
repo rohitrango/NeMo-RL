@@ -49,14 +49,14 @@ def format_answer_fromtags(answer: str) -> str:
     ret = match.group(1).strip() if match else answer.strip()
     return ret
 
-def format_clevr_cogent_dataset(example: dict[str, Any]) -> dict[str, Any]:
+def format_clevr_cogent_dataset(example: dict[str, Any], return_pil: bool = False) -> dict[str, Any]:
     """
     Format the CLEVR-CoGenT dataset into an OpenAI-API-like message log.
     """
     user_content = [
         {
             "type": "image",
-            "image": pil_to_base64(example['image']),
+            "image": pil_to_base64(example['image']) if not return_pil else example['image'],
         },
         {
             "type": "text", 

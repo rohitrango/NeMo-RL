@@ -273,7 +273,8 @@ def validate(
 
             for key in vlm_keys:
                 val_data[key] = cat_and_padded[key]
-            val_data["vlm_keys"] = vlm_keys
+            # repeated to match the batch size when `data.shard_by_batch_size` is called
+            val_data["vlm_keys"] = [vlm_keys for _ in range(cat_and_padded["token_ids"].shape[0])]
 
             ## just run model fwd
             val_results = policy.train(
@@ -425,7 +426,8 @@ def sft_train(
                     # add vlm keys
                     for key in vlm_keys:
                         train_data[key] = cat_and_padded[key]
-                    train_data["vlm_keys"] = vlm_keys
+                    # repeated to match the batch size when `data.shard_by_batch_size` is called
+                    train_data["vlm_keys"] = [vlm_keys for _ in range(cat_and_padded["token_ids"].shape[0])]
 
                 print("▶ Taking a training step...")
                 train_results = policy.train(train_data, loss_fn)
