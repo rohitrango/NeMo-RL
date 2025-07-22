@@ -19,7 +19,7 @@ from functools import partial
 from typing import Any
 
 from omegaconf import OmegaConf
-from transformers import AutoTokenizer, AutoProcessor
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.sft import MasterConfig, setup, sft_train
 from nemo_rl.algorithms.utils import get_tokenizer
@@ -196,12 +196,12 @@ def main():
 
     # setup tokenizer (or processor)
     tokenizer = get_tokenizer(config["policy"]["tokenizer"])
-    if isinstance(tokenizer, AutoProcessor):
+    if not isinstance(tokenizer, PreTrainedTokenizerBase):
         # inherit pad and eos tokens from the tokenizer
         tokenizer.pad_token = tokenizer.tokenizer.pad_token
         tokenizer.eos_token = tokenizer.tokenizer.eos_token
         tokenizer.bos_token = tokenizer.tokenizer.bos_token
-
+    
     # setup data
     (
         dataset,

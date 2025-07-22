@@ -19,7 +19,7 @@ from typing import Optional, TypedDict
 import numpy as np
 import torch
 from torchdata.stateful_dataloader import StatefulDataLoader
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.loss_functions import (
     NLLLoss,
@@ -172,10 +172,17 @@ def setup(
     #   Training
     # ==========================
     print("\n▶ Setting up model...")
+    # check if tokenizer is a processor (e.g. for VLMs)
+    processor = None
+    if not isinstance(tokenizer, PreTrainedTokenizerBase):
+        processor = tokenizer
+        tokenizer = processor.tokenizer
+
     policy = Policy(
         cluster=cluster,
         config=policy_config,
         tokenizer=tokenizer,
+        processor=processor,
         weights_path=Path(last_checkpoint_path) / "policy" / "weights"
         if last_checkpoint_path
         else None,
