@@ -244,13 +244,15 @@ def validate(
                 roles_to_train_on=["assistant"],
             )
 
+            vlm_keys = get_vlm_keys_from_datumspec_batch(val_batch)
+
             cat_and_padded, input_lengths = batched_message_log_to_flat_message(
                 val_batch["message_log"],
                 pad_value_dict={"token_ids": tokenizer.pad_token_id},
                 make_sequence_length_divisible_by=master_config["policy"][
                     "make_sequence_length_divisible_by"
                 ],
-                skip_padding_keys=get_vlm_keys_from_datumspec_batch(val_batch)
+                skip_padding_keys=vlm_keys
             )
 
             val_data: BatchedDataDict = BatchedDataDict(
@@ -261,6 +263,10 @@ def validate(
                     "sample_mask": val_batch["loss_multiplier"],
                 }
             )
+
+            for key in vlm_keys:
+                val_data[key] = cat_and_padded[key]
+            val_data["vlm_keys"] = vlm_keys
 
             ## just run model fwd
             val_results = policy.train(
@@ -389,12 +395,15 @@ def sft_train(
                         roles_to_train_on=["assistant"],
                     )
 
+                    vlm_keys = get_vlm_keys_from_datumspec_batch(batch)
+
                     cat_and_padded, input_lengths = batched_message_log_to_flat_message(
                         batch["message_log"],
                         pad_value_dict={"token_ids": tokenizer.pad_token_id},
                         make_sequence_length_divisible_by=master_config["policy"][
                             "make_sequence_length_divisible_by"
                         ],
+                        skip_padding_keys=vlm_keys,
                     )
 
                     train_data: BatchedDataDict = BatchedDataDict(
@@ -405,6 +414,11 @@ def sft_train(
                             "sample_mask": batch["loss_multiplier"],
                         }
                     )
+
+                    # add vlm keys
+                    for key in vlm_keys:
+                        train_data[key] = cat_and_padded[key]
+                    train_data["vlm_keys"] = vlm_keys
 
                 print("▶ Taking a training step...")
                 train_results = policy.train(train_data, loss_fn)

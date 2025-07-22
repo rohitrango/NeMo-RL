@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import warnings
-from typing import Any, Optional, cast
+from typing import Any, Optional, cast, Union
 from nemo_rl.data.interfaces import DatumSpec
 
 import torch
@@ -380,6 +380,17 @@ def get_first_index_that_differs(str1: str, str2: str) -> int:
             return i
     return min(len(str1), len(str2))
 
+def get_images_from_message(message: dict[str, Any]) -> list[Any]:
+    """Get all images from a message log item."""
+    if isinstance(message["content"], str):
+        return []
+    # iterate over the content list
+    images = []
+    for item in message["content"]:
+        if item["type"] == "image":
+            images.append(item["image"])
+    return images
+    
 
 def get_formatted_message_log(
     message_log: LLMMessageLogType,
@@ -408,14 +419,23 @@ def get_formatted_message_log(
         list[dict[str, str]], message_log
     )  # we just use the str:str parts here
 
+    def _format_content_helper(content: Union[str, list[dict[str, Any]]]) -> Union[str, list[dict[str, Any]]]:
+        if isinstance(content, str):
+            return task_data_spec.prompt.format(content)
+        # this is a list of dicts, format only the text ones
+        for item in content:
+            if item["type"] == "text":
+                item["text"] = task_data_spec.prompt.format(item["text"])
+        return content
+
     if task_data_spec.prompt:
         message_log_strs = [
             {
                 "role": "user",
-                "content": task_data_spec.prompt.format(message_log_strs[0]["content"]),
+                "content": _format_content_helper(message_log_strs[0]["content"]),
             }
         ] + message_log_strs[1:]
-
+    
     for i, message in enumerate(message_log_strs):
         # If enabled, add_generation_prompt is only used on user messages to include
         # the assistant's generation prompt as part of the user message.
@@ -453,20 +473,52 @@ def get_formatted_message_log(
                     )
                 elif not message_chunk.endswith(tokenizer.eos_token):
                     message_chunk += tokenizer.eos_token
+        
+        # get images too (extend this for other modalities)
+        images_cur_message = get_images_from_message(message)
 
         new_message = message.copy()
-        new_message["token_ids"] = tokenizer(
-            message_chunk, return_tensors="pt", add_special_tokens=False
-        )["input_ids"][0]
+        # extend this if statement to check for all(len(modality)) == 0 when adding other modalities
+        if len(images_cur_message) == 0:
+            new_message["token_ids"] = tokenizer(
+                message_chunk, return_tensors="pt", add_special_tokens=False
+            )["input_ids"][0]
+        else:
+            # extend the else statement to add other modalities (in this case, tokenizer will be a processor)
+            processed_chunk = tokenizer(
+                text=message_chunk, images=images_cur_message, return_tensors="pt", add_special_tokens=True
+            )
+            new_message["token_ids"] = processed_chunk["input_ids"][0]
+            new_message["vlm_keys"] = []
+            # add all other keys to the vlm_keys set
+            for key in processed_chunk.keys():
+                if key in ["input_ids", "attention_mask"]:
+                    continue
+                new_message["vlm_keys"].append(key)
+                new_message[key] = processed_chunk[key]
+
         if len(new_message["token_ids"]) == 0:
             # if there is an empty message, the empty `token_ids` tensor ends up being in fp32,
             # which causes `_validate_tensor_consistency` to fail. To fix this, we convert the
             # empty tensor to int64.
             new_message["token_ids"] = new_message["token_ids"].to(torch.int64)  # type: ignore
 
-        new_message["content"] = message_chunk
-        new_message_log.append(new_message)
+        # format content correctly
+        if isinstance(message['content'], str):
+            new_message["content"] = message_chunk
+        else:
+            # format the content list of new message the same way as the original message but replace the text with the new message chunk
+            new_message["content"] = []
+            for item in message['content']:
+                if item['type'] == 'text':
+                    new_message["content"].append({
+                        "type": "text",
+                        "text": message_chunk
+                    })
+                else:
+                    new_message["content"].append(item)
 
+        new_message_log.append(new_message)
         prev_formatted_message = formatted_message
 
     return new_message_log

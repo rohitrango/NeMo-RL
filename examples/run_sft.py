@@ -19,7 +19,7 @@ from functools import partial
 from typing import Any
 
 from omegaconf import OmegaConf
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoProcessor
 
 from nemo_rl.algorithms.sft import MasterConfig, setup, sft_train
 from nemo_rl.algorithms.utils import get_tokenizer
@@ -117,6 +117,13 @@ def setup_data(tokenizer: AutoTokenizer, data_config: DataConfig):
             data_config["system_key"],
             data_config["system_prompt"],
         )
+    elif data_cls == "clevr_cogent":
+        data = hf_datasets.CLEVRCoGenTDataset(
+            split=data_config["split"],
+            seed=data_config["seed"],
+            prompt_file=data_config["prompt_file"],
+            task_name=data_config["task_name"],
+        )
     else:
         raise ValueError(f"Unknown dataset class: {data_cls}")
     print(
@@ -187,8 +194,13 @@ def main():
 
     init_ray()
 
-    # setup tokenizer
+    # setup tokenizer (or processor)
     tokenizer = get_tokenizer(config["policy"]["tokenizer"])
+    if isinstance(tokenizer, AutoProcessor):
+        # inherit pad and eos tokens from the tokenizer
+        tokenizer.pad_token = tokenizer.tokenizer.pad_token
+        tokenizer.eos_token = tokenizer.tokenizer.eos_token
+        tokenizer.bos_token = tokenizer.tokenizer.bos_token
 
     # setup data
     (
@@ -208,6 +220,7 @@ def main():
         sft_save_state,
         master_config,
     ) = setup(config, tokenizer, dataset, val_dataset)
+
     sft_train(
         policy,
         train_dataloader,
