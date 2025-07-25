@@ -455,20 +455,20 @@ class VllmGenerationWorker:
 
         # Check if this is VLM generation by looking for message_log with images
         # Support for videos/audio/etc. can be added here
-        if 'message_log' in data and any('images' in msg for msg in data['message_log']):
+        # if 'message_log' in data and any('images' in msg for msg in data['message_log']):
+        if 'vllm_content' in data:
             # VLM generation using content and multi_modal_data
             for i in range(start_idx, end_idx):
-                msg = data['message_log'][i]
+                msg = data['vllm_content'][i]
+                # add additional data if present
+                images = data.get('vllm_images', None)
                 prompt_dict = {
-                    'prompt': msg['content'][0]
+                    'prompt': msg['content']
                 }
-                
-                # Add multi-modal data if images are present
-                if 'images' in msg and msg['images']:
+                if images is not None:
                     prompt_dict['multi_modal_data'] = {
-                        'image': msg['images'][0]     
+                        'image': images[i]
                     }
-                
                 prompts.append(prompt_dict)
         else:
             # Regular LLM generation using token_ids

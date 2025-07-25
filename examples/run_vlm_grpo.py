@@ -46,6 +46,7 @@ from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.utils.config import load_config, parse_hydra_overrides
 from nemo_rl.utils.logger import get_next_experiment_dir
+from nemo_rl.data.multimodal_utils import PackedMultimodalDataItem, get_multimodal_keys_from_processor
 
 OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
 
@@ -89,7 +90,6 @@ def resolve_to_image(image_path_or_image: str | Image.Image) -> Image.Image:
     else:
         # Handle local file path
         return Image.open(image_path_or_image)
-
 
 def hf_data_processor(
     datum_dict: dict[str, Any],
@@ -161,20 +161,10 @@ def hf_data_processor(
     # add this for backward compatibility
     user_message['token_ids'] = message['input_ids'][0]
     # add all keys and values to the user message, and the list of keys
-    user_message['vlm_keys'] = []
-    # other keys in the message dict are going to be extra vllm tokens, remove batch index for 'image_grid_thw' (and future keys that will have an implicit batch index) 
-    for key, value in message.items():
-        # ignore keys (already specified in token_ids)
-        if key in ['input_ids', 'attention_mask']:
-            continue
-        # ignore the batch index if provided
-        user_message[key] = value[0] if key in ['image_grid_thw'] else value
-        user_message['vlm_keys'].append(key)
-    
-    # get the prompt content! (use this for vllm-backend that needs formatted dialog and list of images)
-    # add images for vllm serving
-    user_message["content"] = string_formatted_dialog
-    user_message["images"] = images
+    multimodal_keys = get_multimodal_keys_from_processor(processor)
+    for key in multimodal_keys:
+        if key in message:
+            user_message[key] = PackedMultimodalDataItem(message[key], dim_to_pack=0)
 
     ### append to user message
     message_log.append(user_message)
@@ -196,6 +186,10 @@ def hf_data_processor(
         "loss_multiplier": loss_multiplier,
         "idx": idx,
         "task_name": task_data_spec.task_name,
+        # get the prompt content! (use this for vllm-backend that needs formatted dialog and list of images) for the entire conversation
+        # add images for vllm serving
+        'vllm_content': string_formatted_dialog,
+        'vllm_images': images,
     }
     return output
 

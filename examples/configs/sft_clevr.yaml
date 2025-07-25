@@ -13,6 +13,14 @@ policy:
   fsdp_offload_enabled: false
   activation_checkpointing_enabled: false
 
+checkpointing:
+  enabled: true
+  checkpoint_dir: "results/sft"
+  metric_name: "val_loss" ## set to null to save most recent k checkpoints
+  higher_is_better: false
+  keep_top_k: 1
+  save_period: 10
+
 data:
   max_input_seq_length: ${policy.max_total_sequence_length}
   dataset_name: "clevr_cogent"

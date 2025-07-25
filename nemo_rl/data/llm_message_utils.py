@@ -25,6 +25,7 @@ from nemo_rl.data.interfaces import (
     TaskDataSpec,
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.data.multimodal_utils import PackedMultimodalDataItem, concat_packed_multimodal_items, get_multimodal_keys_from_processor
 
 Tensor = torch.Tensor
 TokenizerType = PreTrainedTokenizerBase
@@ -95,6 +96,13 @@ def message_log_to_flat_messages(
                         f"tensors for {key=} must have same number of dimensions: {[t.shape for t in result[key]]}"
                     ) from e
                 raise
+        elif result[key] and isinstance(result[key][0], PackedMultimodalDataItem):
+            try:
+                # returning as item because we are probably not going to shard this batch into individual items
+                concat[key] = concat_packed_multimodal_items(result[key], return_as_item=True)  
+            except Exception as e:
+                raise RuntimeError(f"Error concatenating packed multimodal data for {key=}") from e
+
     output: FlatMessagesType = {**result, **concat}
     return output
 
@@ -210,7 +218,6 @@ def batched_message_log_to_flat_message(
     message_log_batch: list[LLMMessageLogType],
     pad_value_dict: Optional[dict[str, int]] = None,
     make_sequence_length_divisible_by: int = 1,
-    skip_padding_keys: Optional[list[str]] = [],
 ) -> tuple[BatchedDataDict[FlatMessagesType], Tensor]:
     """Process and pad a batch of message logs for model input.
 
@@ -278,6 +285,7 @@ def batched_message_log_to_flat_message(
     # Find max length and identify tensor keys
     max_len = 0
     tensor_keys = []
+    multimodal_keys = []
     for seq in sequenced_lists:
         for key, value in seq.items():
             if isinstance(value, Tensor):
@@ -315,6 +323,11 @@ def batched_message_log_to_flat_message(
     result = BatchedDataDict()
     for key in all_keys:
         values = [seq.get(key) for seq in sequenced_lists]
+
+        # if the values are packed multimodal data, then concatenate them
+        if values and isinstance(values[0], PackedMultimodalDataItem):
+            result[key] = concat_packed_multimodal_items(values, return_as_item=False)
+            continue
         # if not a tensor or DNE, then return the list of values
         if not values or not isinstance(values[0], Tensor):
             result[key] = values
@@ -338,11 +351,7 @@ def batched_message_log_to_flat_message(
         # Pad and stack tensors (always right padding)
         pad_value = pad_value_dict.get(key, 0) if pad_value_dict else 0
 
-        # do not pad the vlm_kwargs
-        if key in skip_padding_keys:
-            padded = filled_values
-        else:
-            padded = [_pad_tensor(t, max_len, "right", pad_value) for t in filled_values]
+        padded = [_pad_tensor(t, max_len, "right", pad_value) for t in filled_values]
 
         result[key] = torch.stack(padded)
 
@@ -419,6 +428,8 @@ def get_formatted_message_log(
         list[dict[str, str]], message_log
     )  # we just use the str:str parts here
 
+    multimodal_keys = get_multimodal_keys_from_processor(tokenizer)
+
     def _format_content_helper(content: Union[str, list[dict[str, Any]]]) -> Union[str, list[dict[str, Any]]]:
         if isinstance(content, str):
             return task_data_spec.prompt.format(content)
@@ -489,15 +500,11 @@ def get_formatted_message_log(
                 text=[message_chunk], images=images_cur_message, return_tensors="pt", add_special_tokens=True
             )
             new_message["token_ids"] = processed_chunk["input_ids"][0]
-            new_message["vlm_keys"] = []
-            # add all other keys to the vlm_keys set
-            for key in processed_chunk.keys():
-                if key in ["input_ids", "attention_mask"]:
-                    continue
-                if key in ['image_grid_thw']:
-                    processed_chunk[key] = processed_chunk[key].squeeze(0)
-                new_message["vlm_keys"].append(key)
-                new_message[key] = processed_chunk[key]
+
+            # add all vlm keys to the message
+            for key in multimodal_keys:
+                if key in processed_chunk:
+                    new_message[key] = PackedMultimodalDataItem(processed_chunk[key], dim_to_pack=0)
 
         if len(new_message["token_ids"]) == 0:
             # if there is an empty message, the empty `token_ids` tensor ends up being in fp32,
@@ -549,29 +556,3 @@ def remap_dataset_keys(
         remove_columns=list(mapping_dict.keys()),
     )
 
-
-def get_vlm_keys_from_datumspec_batch(batch: BatchedDataDict[DatumSpec]) -> list[str]:
-    """Extract VLM keys from a batch of data.
-    
-    Args:
-        batch: A BatchedDataDict containing message logs
-        
-    Returns:
-        list[str]: List of unique VLM keys found across all messages in the batch
-    """
-    if not batch["message_log"]:
-        return []
-        
-    # Create a set to store unique VLM keys
-    vlm_keys = set()
-    
-    # Iterate through all conversations in the batch
-    for conversation in batch["message_log"]:
-        # Iterate through all messages in each conversation
-        for message in conversation:
-            # Get VLM keys from the message if they exist
-            if 'vlm_keys' in message:
-                vlm_keys.update(message['vlm_keys'])
-    
-    # Convert set to list and return
-    return list(vlm_keys)

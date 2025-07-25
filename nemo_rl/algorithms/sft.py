@@ -31,7 +31,6 @@ from nemo_rl.data.interfaces import TaskDataSpec
 from nemo_rl.data.llm_message_utils import (
     add_loss_mask_to_message_log,
     batched_message_log_to_flat_message,
-    get_vlm_keys_from_datumspec_batch,
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.virtual_cluster import ClusterConfig, RayVirtualCluster
@@ -251,15 +250,12 @@ def validate(
                 roles_to_train_on=["assistant"],
             )
 
-            vlm_keys = get_vlm_keys_from_datumspec_batch(val_batch)
-
             cat_and_padded, input_lengths = batched_message_log_to_flat_message(
                 val_batch["message_log"],
                 pad_value_dict={"token_ids": tokenizer.pad_token_id},
                 make_sequence_length_divisible_by=master_config["policy"][
                     "make_sequence_length_divisible_by"
                 ],
-                skip_padding_keys=vlm_keys
             )
 
             val_data: BatchedDataDict = BatchedDataDict(
@@ -271,10 +267,8 @@ def validate(
                 }
             )
 
-            for key in vlm_keys:
-                val_data[key] = cat_and_padded[key]
-            # repeated to match the batch size when `data.shard_by_batch_size` is called
-            val_data["vlm_keys"] = [vlm_keys for _ in range(cat_and_padded["token_ids"].shape[0])]
+            # update multimodal data
+            val_data.update(cat_and_padded.get_multimodal_dict(as_tensors=False))
 
             ## just run model fwd
             val_results = policy.train(
@@ -403,15 +397,12 @@ def sft_train(
                         roles_to_train_on=["assistant"],
                     )
 
-                    vlm_keys = get_vlm_keys_from_datumspec_batch(batch)
-
                     cat_and_padded, input_lengths = batched_message_log_to_flat_message(
                         batch["message_log"],
                         pad_value_dict={"token_ids": tokenizer.pad_token_id},
                         make_sequence_length_divisible_by=master_config["policy"][
                             "make_sequence_length_divisible_by"
                         ],
-                        skip_padding_keys=vlm_keys,
                     )
 
                     train_data: BatchedDataDict = BatchedDataDict(
@@ -422,12 +413,7 @@ def sft_train(
                             "sample_mask": batch["loss_multiplier"],
                         }
                     )
-
-                    # add vlm keys
-                    for key in vlm_keys:
-                        train_data[key] = cat_and_padded[key]
-                    # repeated to match the batch size when `data.shard_by_batch_size` is called
-                    train_data["vlm_keys"] = [vlm_keys for _ in range(cat_and_padded["token_ids"].shape[0])]
+                    train_data.update(cat_and_padded.get_multimodal_dict(as_tensors=False))
 
                 print("▶ Taking a training step...")
                 train_results = policy.train(train_data, loss_fn)

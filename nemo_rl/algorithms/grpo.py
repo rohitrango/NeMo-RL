@@ -53,7 +53,6 @@ from nemo_rl.experience.rollouts import (
 from nemo_rl.models.generation.interfaces import (
     GenerationInterface,
 )
-from nemo_rl.data.llm_message_utils import get_vlm_keys_from_datumspec_batch
 from nemo_rl.models.generation.vllm import VllmConfig, VllmGeneration
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.interfaces import ColocatablePolicyInterface
@@ -526,9 +525,6 @@ def grpo_train(
             maybe_gpu_profile_step(policy_generation, step + 1)
         val_metrics, validation_timings = None, None
 
-        # get vlm keys from batch
-        skip_padding_keys = get_vlm_keys_from_datumspec_batch(batch)
-
         with timer.time("total_step_time"):
             # Prepare batch
             print("▶ Preparing batch...")
@@ -543,7 +539,6 @@ def grpo_train(
                     pad_value_dict={
                         "token_ids": tokenizer.pad_token_id
                     },
-                    skip_padding_keys=skip_padding_keys
                 )
                 input_ids = batched_flat["token_ids"]
 
@@ -640,7 +635,6 @@ def grpo_train(
                     make_sequence_length_divisible_by=master_config["policy"][
                         "make_sequence_length_divisible_by"
                     ],
-                    skip_padding_keys=skip_padding_keys
                 )
 
                 # Create training data from flattened messages
@@ -654,22 +648,8 @@ def grpo_train(
                         "sample_mask": repeated_batch["loss_multiplier"],
                     }
                 )
-                # add vlm kwargs
-                vlm_kwargs = {}
-                if is_vlm:
-                    for key in skip_padding_keys:
-                        if key in flat_messages:
-                            vlm_kwargs[key] = flat_messages[key]
-                    
-                    # Add vlm_kwargs to train_data if any exist
-                    if len(vlm_kwargs) > 0:
-                        print(f"  ✓ Adding {len(vlm_kwargs)} VLM keys to train_data")
-                        print(f"  ✓ VLM keys: {vlm_kwargs.keys()}")
-                        train_data['vlm_keys'] = [list(vlm_kwargs.keys()) for _ in range(len(train_data['input_ids']))]  # list of lists of str
-                        for key in vlm_kwargs:
-                            print(f"  ✓ {key}: {vlm_kwargs[key].shape}")
-                            train_data[key] = vlm_kwargs[key]
-
+                # this will be mini-batched inside the policy, so maintain the packed multimodal structure
+                train_data.update(flat_messages.get_multimodal_dict(as_tensors=False))
                 train_data.to("cpu")
 
             print("▶ Preparing for logprob inference...")

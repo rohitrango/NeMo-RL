@@ -33,6 +33,11 @@ from nemo_rl.distributed.collectives import (
     rebalance_nd_tensor,
 )
 
+from nemo_rl.data.multimodal_utils import (
+    PackedMultimodalDataBatch,
+    concat_packed_multimodal_batches,
+)
+
 DictT = TypeVar("DictT", bound=Mapping[str, Any])
 
 
@@ -58,6 +63,20 @@ class BatchedDataDict(UserDict, Generic[DictT]):
 
         self.micro_batch_indices = None
         self.micro_batch_lengths = None
+    
+    def get_multimodal_dict(self, as_tensors: bool = False) -> dict[str, Any]:
+        '''
+        Return a regular dict of tensors or packed multimodal data items
+        '''
+        multimodal_dict = {}
+        for k, v in self.data.items():
+            if isinstance(v, PackedMultimodalDataBatch):
+                multimodal_dict[k] = v.as_tensor(as_tensors)
+        if as_tensors:
+            print("\t returning multimodal dict as tensors")
+            for k, v in multimodal_dict.items():
+                print(f"\t\t{k}: {v.shape}")
+        return multimodal_dict
 
     @classmethod
     def from_batches(
@@ -165,6 +184,8 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         for k in self.data:
             if torch.is_tensor(self.data[k]):
                 chunked_batch[k] = self.data[k][indices].clone()
+            elif isinstance(self.data[k], PackedMultimodalDataBatch):
+                chunked_batch[k] = self.data[k].slice(indices)
             else:
                 chunked_batch[k] = [self.data[k][i] for i in indices]
 
@@ -194,6 +215,8 @@ class BatchedDataDict(UserDict, Generic[DictT]):
                 sorted_v = v.index_select(
                     dim=0, index=torch.IntTensor(reordered_indices)
                 )
+            elif isinstance(v, PackedMultimodalDataBatch):
+                sorted_v = v.slice(reordered_indices)
             else:
                 sorted_v = [v[i] for i in reordered_indices]
             self.data[k] = sorted_v
@@ -327,11 +350,13 @@ class BatchedDataDict(UserDict, Generic[DictT]):
 
             # finally reorder the data along the sorted sequence len indices
             for k, v in self.data.items():
-                sorted_v: torch.Tensor | list[Any]
+                sorted_v: torch.Tensor | list[Any] | PackedMultimodalDataBatch
                 if torch.is_tensor(v):
                     sorted_v = v.index_select(
                         dim=0, index=torch.IntTensor(batch_sorted_indices)
                     )
+                elif isinstance(v, PackedMultimodalDataBatch):
+                    sorted_v = v.slice(batch_sorted_indices)
                 else:
                     sorted_v = [v[i] for i in batch_sorted_indices]
                 data[k] = sorted_v
@@ -359,6 +384,8 @@ class BatchedDataDict(UserDict, Generic[DictT]):
                         # First time seeing this key for this shard, initialize it
                         if torch.is_tensor(data[k]):
                             aggregated_shards[shard_idx][k] = data[k][indices].clone()
+                        elif isinstance(data[k], PackedMultimodalDataBatch):
+                            aggregated_shards[shard_idx][k] = data[k].slice(indices.tolist())
                         else:
                             aggregated_shards[shard_idx][k] = [
                                 data[k][i] for i in indices
@@ -370,6 +397,13 @@ class BatchedDataDict(UserDict, Generic[DictT]):
                                 [
                                     aggregated_shards[shard_idx][k],
                                     data[k][indices].clone(),
+                                ]
+                            )
+                        elif isinstance(data[k], PackedMultimodalDataBatch):
+                            aggregated_shards[shard_idx][k] = concat_packed_multimodal_batches(
+                                [
+                                    aggregated_shards[shard_idx][k],
+                                    data[k].slice(indices.tolist()),
                                 ]
                             )
                         else:
@@ -487,7 +521,10 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         """
         sliced_batch = SlicedDataDict()
         for k in self.data:
-            sliced_batch[k] = self.data[k][start:end]
+            if isinstance(self.data[k], PackedMultimodalDataBatch):
+                sliced_batch[k] = self.data[k].slice(list(range(start, end)))
+            else:
+                sliced_batch[k] = self.data[k][start:end]
         return sliced_batch
 
     def repeat_interleave(self, num_repeats: int) -> Self:
@@ -502,6 +539,8 @@ class BatchedDataDict(UserDict, Generic[DictT]):
             if torch.is_tensor(v):
                 # For tensors, use repeat_interleave to repeat each element
                 repeated_batch[k] = v.repeat_interleave(num_repeats, dim=0)
+            elif isinstance(v, PackedMultimodalDataBatch):
+                repeated_batch[k] = v.repeat_interleave(num_repeats)
             else:
                 # For lists or other sequences, use a list comprehension to repeat each element
                 repeated_batch[k] = [
@@ -511,15 +550,10 @@ class BatchedDataDict(UserDict, Generic[DictT]):
 
     def truncate_tensors(self, dim: int, truncated_len: int):
         """Truncates tensors in this dict of a given dim to a given length."""
-        vlm_keys = get_vlm_keys_from_flattened_batch(self)
-
         for k, v in self.items():
-            # skip truncation for VLM keys
-            if k in vlm_keys:
-                continue
-
             if torch.is_tensor(v) and len(v.shape) >= dim + 1:
                 self.data[k] = torch.narrow(v, dim=dim, start=0, length=truncated_len)
+            # assumed this is safe to do (no image / multimodal tokens are truncated)
 
     def make_microbatch_iterator_with_dynamic_shapes(
         self,
@@ -578,6 +612,8 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         for k, v in self.data.items():
             if torch.is_tensor(v):
                 self.data[k] = v.to(device)
+            elif isinstance(v, PackedMultimodalDataBatch):
+                self.data[k] = v.to(device)
         return self
 
     def select_indices(self, indices: Union[list[int], torch.Tensor]) -> Self:
@@ -593,6 +629,8 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         for k, v in self.data.items():
             if torch.is_tensor(v):
                 selected_batch[k] = v[indices]
+            elif isinstance(v, PackedMultimodalDataBatch):
+                selected_batch[k] = v.slice(indices)
             elif isinstance(v, list):
                 selected_batch[k] = [v[i] for i in indices]
             else:
@@ -615,24 +653,3 @@ class SlicedDataDict(BatchedDataDict):
     """
 
     pass
-
-def get_vlm_keys_from_flattened_batch(batch: BatchedDataDict[Any]) -> list[str]:
-    """
-    Get VLM keys from a batch of data in a flattened format.
-
-    Note that in this case, the `vlm_keys` key is added to the batch dict before `get_logprobs` or `get_reference_policy_logprobs` functions are called.
-
-    This function is fundamentally different from the `get_vlm_keys_from_datumspec_batch` function, which is used for the `DatumSpec` format, and is 
-    only supposed to be used inside the `get_logprobs` function. Try not to use it elsewhere.
-    """
-    vlm_keys = batch.get("vlm_keys", [])
-    if len(vlm_keys) > 0:
-        if isinstance(vlm_keys[0], dict):
-            vlm_keys = [key for subdict in vlm_keys for key in subdict.keys()]
-            vlm_keys = list(set(vlm_keys))
-        elif isinstance(vlm_keys[0], str):
-            vlm_keys = list(set(vlm_keys))
-        elif isinstance(vlm_keys[0], list):
-            vlm_keys = [key for sublist in vlm_keys for key in sublist]
-            vlm_keys = list(set(vlm_keys))
-    return vlm_keys

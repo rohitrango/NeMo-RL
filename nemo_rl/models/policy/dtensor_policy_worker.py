@@ -67,7 +67,6 @@ from nemo_rl.utils.native_checkpoint import (
     save_checkpoint,
 )
 from nemo_rl.models.policy.utils import load_hf_model
-from nemo_rl.distributed.batched_data_dict import get_vlm_keys_from_flattened_batch
 
 @contextmanager
 def unshard_fsdp2_model(model: nn.Module) -> Generator[None, None, None]:
@@ -408,25 +407,6 @@ class DTensorPolicyWorker:
         """Return information about the GPU being used by this worker."""
         return get_gpu_info(self.model)
 
-    def _extract_vlm_kwargs(self, mb: BatchedDataDict[Any], vlm_keys: list[str]) -> dict[str, Any]:
-        """Extract VLM (Vision Language Model) specific kwargs from a message batch.
-        
-        This function extracts VLM-specific keys from the message batch while filtering out
-        keys that are already handled by the model input (input_ids, attention_mask).
-        
-        Args:
-            mb: Message batch containing potentially VLM-specific keys
-            
-        Returns:
-            Dictionary of VLM kwargs to pass to the model, empty if not a VLM or no VLM keys
-        """
-        vlm_kwargs = {}
-        # Handle vlm_keys from flattened message data
-        for key in vlm_keys:
-            if key in mb:
-                vlm_kwargs[key] = mb[key]
-        return vlm_kwargs
-
     def train(
         self,
         data: BatchedDataDict[Any],
@@ -457,13 +437,7 @@ class DTensorPolicyWorker:
         sequence_dim = 1
         seq_dim_size = data.get("input_ids").shape[sequence_dim]
 
-        # get vlm keys from data
-        vlm_keys = get_vlm_keys_from_flattened_batch(data)
-
         for k, v in data.items():
-            if k in vlm_keys:
-                continue
-
             if torch.is_tensor(v) and len(v.shape) > 1:
                 assert v.shape[sequence_dim] == seq_dim_size, (
                     f"Dim 1 must be the sequence dim, expected dim 1={seq_dim_size} but got shape {v.shape}"
@@ -550,7 +524,8 @@ class DTensorPolicyWorker:
                         ).repeat(batch_size, 1)
 
                         # add vlm kwargs to model call
-                        vlm_kwargs = self._extract_vlm_kwargs(mb, vlm_keys)
+                        vlm_kwargs = mb.get_multimodal_dict(as_tensors=True)
+                        
 
                     context_parallel_ctx = None
                     if self.cp_size > 1:
@@ -750,13 +725,7 @@ class DTensorPolicyWorker:
         sequence_dim = 1
         seq_dim_size = data.get("input_ids").shape[sequence_dim]
 
-        # get vlm keys from data
-        vlm_keys = get_vlm_keys_from_flattened_batch(data)
-
         for k, v in data.items():
-            if k in vlm_keys:
-                continue
-
             if torch.is_tensor(v) and len(v.shape) > 1:
                 assert v.shape[sequence_dim] == seq_dim_size, (
                     f"Dim 1 must be the sequence dim, expected dim 1={seq_dim_size} but got shape {v.shape}"
@@ -800,7 +769,7 @@ class DTensorPolicyWorker:
                         (batch_size, seq_len), dtype=torch.long, device=input_ids.device
                     )
 
-                    vlm_kwargs = self._extract_vlm_kwargs(lp_batch, vlm_keys)
+                    vlm_kwargs = lp_batch.get_multimodal_dict(as_tensors=True)
 
                     outputs = self.model(
                         input_ids=input_ids,
