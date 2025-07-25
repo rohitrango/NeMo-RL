@@ -452,7 +452,15 @@ class VllmGenerationWorker:
         else:
             start_idx = sample_idx
             end_idx = sample_idx + 1
-
+        
+        def _get_regular_prompt(index: int):
+            valid_length = input_lengths[index].item()
+            valid_ids = (
+                input_ids[index, :valid_length] if valid_length > 0 else input_ids[index, :0]
+            )
+            token_ids = valid_ids.tolist()
+            return {"prompt_token_ids": token_ids}
+        
         # Check if this is VLM generation by looking for message_log with images
         # Support for videos/audio/etc. can be added here
         # if 'message_log' in data and any('images' in msg for msg in data['message_log']):
@@ -460,6 +468,10 @@ class VllmGenerationWorker:
             # VLM generation using content and multi_modal_data
             for i in range(start_idx, end_idx):
                 msg = data['vllm_content'][i]
+                # if msg is None, this conversation had no multimodal content, fallback to regular prompt
+                if msg is None:
+                    prompts.append(_get_regular_prompt(i))
+                    continue
                 # add additional data if present
                 images = data.get('vllm_images', None)
                 prompt_dict = {
@@ -467,19 +479,14 @@ class VllmGenerationWorker:
                 }
                 if images is not None:
                     prompt_dict['multi_modal_data'] = {
-                        'image': images[i]
+                        'image': images[i][0] if len(images[i]) == 1 else images[i]
                     }
                 prompts.append(prompt_dict)
         else:
             # Regular LLM generation using token_ids
             for i in range(start_idx, end_idx):
                 # Use input_lengths to get only valid tokens (not padding)
-                valid_length = input_lengths[i].item()
-                valid_ids = (
-                    input_ids[i, :valid_length] if valid_length > 0 else input_ids[i, :0]
-                )
-                token_ids = valid_ids.tolist()
-                prompts.append({"prompt_token_ids": token_ids})
+                prompts.append(_get_regular_prompt(i))
 
         return prompts if return_all else prompts[0]
 
@@ -525,6 +532,8 @@ class VllmGenerationWorker:
         verify_right_padding(data, pad_value=self.cfg["pad_token_id"])
         # Original input length with padding
         padded_input_length = input_ids.size(1)
+
+        breakpoint()
 
         # Convert inputs to vLLM format
         prompts = self._format_prompt_for_vllm_generation(data)
