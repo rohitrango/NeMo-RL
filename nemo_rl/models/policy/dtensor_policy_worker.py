@@ -524,7 +524,7 @@ class DTensorPolicyWorker:
                         ).repeat(batch_size, 1)
 
                         # add vlm kwargs to model call
-                        vlm_kwargs = mb.get_multimodal_dict(as_tensors=True)
+                        vlm_kwargs = mb.get_multimodal_dict(as_tensors=True, device=input_ids.device)
                         
 
                     context_parallel_ctx = None
@@ -769,7 +769,7 @@ class DTensorPolicyWorker:
                         (batch_size, seq_len), dtype=torch.long, device=input_ids.device
                     )
 
-                    vlm_kwargs = lp_batch.get_multimodal_dict(as_tensors=True)
+                    vlm_kwargs = lp_batch.get_multimodal_dict(as_tensors=True, device=input_ids.device)
 
                     outputs = self.model(
                         input_ids=input_ids,

@@ -472,11 +472,12 @@ class VllmGenerationWorker:
                 if msg is None:
                     prompts.append(_get_regular_prompt(i))
                     continue
+                # init prompt dict
+                prompt_dict = {
+                    'prompt': msg
+                }
                 # add additional data if present
                 images = data.get('vllm_images', None)
-                prompt_dict = {
-                    'prompt': msg['content']
-                }
                 if images is not None:
                     prompt_dict['multi_modal_data'] = {
                         'image': images[i][0] if len(images[i]) == 1 else images[i]
@@ -532,8 +533,6 @@ class VllmGenerationWorker:
         verify_right_padding(data, pad_value=self.cfg["pad_token_id"])
         # Original input length with padding
         padded_input_length = input_ids.size(1)
-
-        breakpoint()
 
         # Convert inputs to vLLM format
         prompts = self._format_prompt_for_vllm_generation(data)

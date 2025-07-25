@@ -1,5 +1,5 @@
 from transformers import PreTrainedTokenizerBase
-from typing import Union
+from typing import Union, Optional
 import torch
 import numpy as np
 
@@ -32,8 +32,8 @@ class PackedMultimodalDataBatch:
         else:
             raise ValueError("tensor must be a torch.Tensor or a list of PackedMultimodalDataItem objects")
     
-    def as_tensor(self, as_tensors: bool = True) -> torch.Tensor:
-        return self.tensor if as_tensors else self
+    def as_tensor(self, as_tensors: bool = True, device: Optional[torch.device] = None) -> torch.Tensor:
+        return (self.tensor.to(device) if device is not None else self.tensor) if as_tensors else self
     
     def __len__(self) -> int:
         # this is the number of items in the batch
@@ -41,17 +41,21 @@ class PackedMultimodalDataBatch:
     
     def to(self, device: str | torch.device) -> "PackedMultimodalDataBatch":
         self.tensor = self.tensor.to(device)
+        return self
 
     def slice(self, indices: Union[list[int], torch.Tensor]) -> "PackedMultimodalDataBatch":
         idx = indices.tolist() if isinstance(indices, torch.Tensor) else indices
         # cumulative sum of the number of elements per item
         cu_sum = np.cumsum([0] + self.num_elements_per_item)
-        start_idx = cu_sum[:-1]
-        end_idx = cu_sum[1:]
+        start_idx_all = cu_sum[:-1]
+        end_idx_all = cu_sum[1:]
+        # select the indices
+        start_idx = [start_idx_all[i] for i in idx]
+        end_idx = [end_idx_all[i] for i in idx]
         # if contiguous list of indices, we can use index_select from start of first to end of last
         selected_indices = _create_indices_from_list(start_idx, end_idx)
-        tensor = self.tensor.index_select(self.dim_to_pack, torch.IntTensor(selected_indices))
-        sliced_num_elements_per_item = [end_idx[i] - start_idx[i] for i in idx]
+        tensor = self.tensor.index_select(self.dim_to_pack, torch.tensor(selected_indices, device=self.tensor.device).to(torch.int32))
+        sliced_num_elements_per_item = [end_idx[i] - start_idx[i] for i in range(len(idx))]
         return PackedMultimodalDataBatch(tensor, self.dim_to_pack, sliced_num_elements_per_item)
 
     
@@ -62,7 +66,8 @@ class PackedMultimodalDataBatch:
     
     def repeat_interleave(self, num_repeats: int) -> "PackedMultimodalDataBatch":
         """Repeats the batch num_repeats times."""
-        raise NotImplementedError("Not implemented")
+        raise NotImplementedError("Why are you interleaving batches? Interleaving is supposed to happen at the message log level. \
+                                  If you are adding new functionality, implement this function.")
 
 
 def get_multimodal_keys_from_processor(processor) -> list[str]:

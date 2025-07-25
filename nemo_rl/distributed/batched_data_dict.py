@@ -64,14 +64,14 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         self.micro_batch_indices = None
         self.micro_batch_lengths = None
     
-    def get_multimodal_dict(self, as_tensors: bool = False) -> dict[str, Any]:
+    def get_multimodal_dict(self, as_tensors: bool = False, device: Optional[torch.device] = None) -> dict[str, Any]:
         '''
         Return a regular dict of tensors or packed multimodal data items
         '''
         multimodal_dict = {}
         for k, v in self.data.items():
             if isinstance(v, PackedMultimodalDataBatch):
-                multimodal_dict[k] = v.as_tensor(as_tensors)
+                multimodal_dict[k] = v.as_tensor(as_tensors, device=device)
         if as_tensors:
             print("\t returning multimodal dict as tensors")
             for k, v in multimodal_dict.items():
