@@ -2,6 +2,8 @@ from transformers import PreTrainedTokenizerBase
 from typing import Union, Optional
 import torch
 import numpy as np
+from collections import defaultdict
+import re
 
 def _create_indices_from_list(start_idx: list[int], end_idx: list[int]) -> torch.Tensor:
     '''
@@ -122,5 +124,26 @@ def concat_packed_multimodal_batches(packed_batches: list[PackedMultimodalDataBa
     return PackedMultimodalDataBatch(tensor, dim_to_pack, num_items)
 
 
+def reroute_processor_model_name_patch(model_name: str) -> str:
+    '''
+    for certain models, the processor is configured incorrectly, so we use another processor that is safer
 
-    
+    First, we try to match the model name to an exact match in the registry.
+    If not found, we try to match the model name to a regex in the registry.
+    '''
+    PROCESSOR_REROUTE_REGEX_REGISTRY = {}
+    PROCESSOR_REROUTE_EXACT_REGISTRY = {}
+    regex_registry = PROCESSOR_REROUTE_REGEX_REGISTRY
+
+    # Qwen2-VL models have a processor that produces empty strings in `apply_chat_template` function
+    regex_registry.update({'qwen/qwen2-vl-*': 'Qwen/Qwen2.5-VL-3B-Instruct'})
+
+    if model_name.lower() in PROCESSOR_REROUTE_EXACT_REGISTRY:
+        print(f"Rerouting processor for {model_name} to {PROCESSOR_REROUTE_EXACT_REGISTRY[model_name.lower()]}")
+        return PROCESSOR_REROUTE_EXACT_REGISTRY[model_name.lower()]
+
+    for regex, replacement in regex_registry.items():
+        if re.match(regex, model_name.lower()):
+            print(f"Rerouting processor for {model_name} to {replacement}")
+            return replacement
+    return model_name

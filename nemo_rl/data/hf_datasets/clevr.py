@@ -63,6 +63,12 @@ def format_clevr_cogent_dataset(example: dict[str, Any], return_pil: bool = Fals
             "text": str(example["problem"]),
         }
     ]
+
+    # just add a duplicate image for the user
+    import random
+    from copy import deepcopy
+    if random.random() < 0.5:
+        user_content.insert(0, deepcopy(user_content[0]))
     
     assistant_content = format_answer_fromtags(str(example["solution"]))
     

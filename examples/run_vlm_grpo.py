@@ -46,7 +46,7 @@ from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.utils.config import load_config, parse_hydra_overrides
 from nemo_rl.utils.logger import get_next_experiment_dir
-from nemo_rl.data.multimodal_utils import PackedMultimodalDataItem, get_multimodal_keys_from_processor
+from nemo_rl.data.multimodal_utils import PackedMultimodalDataItem, get_multimodal_keys_from_processor,  reroute_processor_model_name_patch
 
 OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
 
@@ -155,7 +155,7 @@ def hf_data_processor(
         tokenize=False,
         add_generation_prompt=True,
     )
-    if isinstance(string_formatted_dialog, list):
+    if isinstance(string_formatted_dialog, (list, tuple)):
         string_formatted_dialog = string_formatted_dialog[0]
 
     # add this for backward compatibility
@@ -178,6 +178,14 @@ def hf_data_processor(
                 : min(4, max_seq_length // len(message_log))
             ]
         loss_multiplier = 0.0
+
+    print(f"Sampled output has {len(images)} images...")
+
+    print("-"*100)
+    print(f"vllm_content:")
+    print(f"String formatted dialog: {string_formatted_dialog}")
+    print(f"images log: {images}")
+    input("")
 
     output: DatumSpec = {
         "message_log": message_log,
@@ -303,7 +311,7 @@ def main() -> None:
     init_ray()
 
     # setup tokenizer
-    processor = AutoProcessor.from_pretrained(config["policy"]["model_name"])
+    processor = AutoProcessor.from_pretrained(reroute_processor_model_name_patch(config["policy"]["model_name"]))
     tokenizer = processor.tokenizer
     assert config["policy"]["generation"] is not None, (
         "A generation config is required for GRPO"

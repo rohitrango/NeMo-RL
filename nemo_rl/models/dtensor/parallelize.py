@@ -509,10 +509,18 @@ def _parallelize_model(
     
     # Handle different model structures
     if model_cls == Gemma3ForConditionalGeneration:
-        layers: torch.nn.ModuleList = model.language_model.layers  # type: ignore
+        # layers: torch.nn.ModuleList = model.language_model.layers  # type: ignore
+        layers: list = []
+        for layer in model.language_model.layers:
+            layers.append(layer)
+        # siglip encoder also has the same structure as clip encoder (being the same model after all)
+        for layer in model.vision_tower.vision_model.encoder.layers:
+            layers.append(layer)
+
         num_attention_heads = model.config.text_config.num_attention_heads
         num_key_value_heads = model.config.text_config.num_key_value_heads
-    elif model_cls.__name__ in ["Qwen2_5_VLForConditionalGeneration"]:
+
+    if model_cls.__name__ in ["Qwen2_5_VLForConditionalGeneration", "Qwen2VLForConditionalGeneration"]:
         # VL models have the language model at model.language_model
         layers: list = []
         # append language model layers
@@ -521,8 +529,45 @@ def _parallelize_model(
         # append visual model layers
         for layer in model.visual.blocks:
             layers.append(layer)
+
         num_attention_heads = model.language_model.config.num_attention_heads
         num_key_value_heads = model.language_model.config.num_key_value_heads
+
+    elif model_cls.__name__ in ["InternVLForConditionalGeneration"]:
+        layers: list = []
+        for layer in model.language_model.layers:
+            layers.append(layer)
+        for layer in model.vision_tower.encoder.layer:
+            layers.append(layer)
+        num_attention_heads = model.language_model.config.num_attention_heads
+        num_key_value_heads = model.language_model.config.num_key_value_heads
+
+    elif model_cls.__name__ in ["LlavaForConditionalGeneration", "LlavaNextForConditionalGeneration", "LlavaNextVideoForConditionalGeneration"]:
+        layers: list = []
+        for layer in model.model.language_model.layers:
+            layers.append(layer)
+        for layer in model.vision_tower.vision_model.encoder.layers:
+            layers.append(layer)
+        num_attention_heads = model.language_model.config.num_attention_heads
+        num_key_value_heads = model.language_model.config.num_key_value_heads
+    
+    elif model_cls.__name__ in ["Qwen2_5OmniForConditionalGeneration"]:
+
+        layers: list = []
+        for layer in model.thinker.model.layers:
+            layers.append(layer)
+        for layer in model.thinker.visual.blocks:
+            layers.append(layer)
+        ### audio tower blocks do not have a .mlp attribute
+        # for layer in model.thinker.audio_tower.layers:
+        #     layers.append(layer)
+
+        # the model may have a talker
+        if hasattr(model, "talker"):
+            print("talker module found in Qwen2.5-Omni model")
+            for layer in model.talker.model.layers:
+                layers.append(layer)
+
     else:
         layers: torch.nn.ModuleList = model.model.layers  # type: ignore
         num_attention_heads = model.config.num_attention_heads

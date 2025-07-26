@@ -17,12 +17,27 @@ import os
 import re
 from typing import Any, Optional
 from accelerate import init_empty_weights
+from collections import defaultdict
 
 import torch
 from torch import nn
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForVision2Seq
-
 from nemo_rl.distributed.worker_group_utils import get_nsight_config_if_pattern_matches
+
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForTextToWaveform
+
+# an automodel factory for loading the huggingface models from correct class
+AUTOMODEL_FACTORY = defaultdict(lambda: AutoModelForCausalLM)
+AUTOMODEL_FACTORY["qwen2.5-vl"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["qwen2-vl"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["qwen2.5-omni"] = AutoModelForTextToWaveform
+AUTOMODEL_FACTORY["llava"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["internvl3"] = AutoModelForImageTextToText
+
+def resolve_model_class(model_name: str) -> nn.Module:
+    for model_substr in AUTOMODEL_FACTORY.keys():
+        if model_substr in model_name.lower():
+            return AUTOMODEL_FACTORY[model_substr]
+    return AutoModelForCausalLM
 
 
 def import_class_from_path(name: str) -> Any:
@@ -161,11 +176,8 @@ def freeze_hf_model_by_regex(model: nn.Module, regex: Optional[str] = None):
 def load_hf_model(model_name: str, policy_worker) -> nn.Module:
     """Load a Hugging Face model with optional sliding window support."""
 
-    # determine model class based on model name
-    AutoModelClass = AutoModelForCausalLM
-    vlm_model_names = ["qwen2.5-vl"]   # add more models where AutoModelForCausalLM is not supported
-    if any([x in model_name.lower() for x in vlm_model_names]):
-        AutoModelClass = AutoModelForVision2Seq
+    AutoModelClass = resolve_model_class(model_name)
+    print(f"Loading model {model_name} with class {AutoModelClass.__name__}")
 
     model_config = AutoConfig.from_pretrained(
         model_name,
@@ -194,6 +206,7 @@ def load_hf_model(model_name: str, policy_worker) -> nn.Module:
     # All ranks initialize model on meta device, so FSDP can shard it.
     # The actual weights will be broadcast from rank 0.
 
+    # not all models support `from_config`, so use AutoModel instead
     with init_empty_weights():
         model = AutoModelClass.from_config(
             model_config,

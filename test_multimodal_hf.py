@@ -71,6 +71,9 @@ def summarize_conversation_process(processor, conversation, images_conversation,
         return_tensors=False,
     )
 
+    if isinstance(prompt_text, list):
+        prompt_text = prompt_text[0]
+
     # for msg in conversation:
     #     prompt_text = processor.apply_chat_template(
     #         [msg],
@@ -172,9 +175,11 @@ vlms = [
         # "llava-hf/llava-v1.6-34b-hf", 
         # "Qwen/Qwen2.5-VL-3B-Instruct", 
         # "google/gemma-3-12b-it",
+        # "Qwen/Qwen2-VL-2B",
         # "Qwen/Qwen2.5-Omni-7B",
-        # "OpenGVLab/InternVL-Chat-V1-2"
-        "meta-llama/Llama-3.2-11B-Vision-Instruct", 
+        # "OpenGVLab/InternVL-Chat-V1-2",
+        # "OpenGVLab/InternVL2_5-2B",       # processor does not work 
+        "OpenGVLab/InternVL3-1B-hf",
         # "llava-hf/llava-interleave-qwen-0.5b-hf",
         # "meta-llama/Llama-4-Scout-17B-16E-Instruct"
         # "openai/whisper-large-v3"
