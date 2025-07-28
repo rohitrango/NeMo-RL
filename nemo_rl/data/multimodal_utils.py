@@ -191,6 +191,7 @@ def augment_processor_with_chat_template(processor, model_name: str):
             return new_conversation
         print(f"Augmenting processor for {model_name} with phi-4 chat template conversation_preprocessor")
         processor.conversation_preprocessor = conversation_preprocessor_phi4
+
     return processor
         
 def get_dim_to_pack_along(processor, key: str) -> int:

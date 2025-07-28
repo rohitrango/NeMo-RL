@@ -34,6 +34,7 @@ AUTOMODEL_FACTORY["llava"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["internvl3"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["gemma-3"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["smolvlm2"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["mistral3"] = AutoModelForImageTextToText
 
 def resolve_model_class(model_name: str) -> nn.Module:
     for model_substr in AUTOMODEL_FACTORY.keys():

@@ -551,7 +551,7 @@ def _parallelize_model(
         num_attention_heads = model.language_model.config.num_attention_heads
         num_key_value_heads = model.language_model.config.num_key_value_heads
 
-    elif model_cls.__name__ in ["LlavaForConditionalGeneration", "LlavaNextForConditionalGeneration", "LlavaNextVideoForConditionalGeneration"]:
+    elif model_cls.__name__ in ["LlavaForConditionalGeneration", "LlavaNextForConditionalGeneration", "LlavaNextVideoForConditionalGeneration", "LlavaOnevisionForConditionalGeneration"]:
         layers: list = []
         for layer in model.model.language_model.layers:
             layers.append(layer)
@@ -559,6 +559,15 @@ def _parallelize_model(
             layers.append(layer)
         num_attention_heads = model.language_model.config.num_attention_heads
         num_key_value_heads = model.language_model.config.num_key_value_heads
+    
+    elif model_cls.__name__ in ["Mistral3ForConditionalGeneration"]:
+        layers: list = []
+        for layer in model.model.language_model.layers:
+            layers.append(layer)
+        for layer in model.model.vision_tower.transformer.layers:
+            layers.append(layer)
+        num_attention_heads = model.model.language_model.config.num_attention_heads
+        num_key_value_heads = model.model.language_model.config.num_key_value_heads
     
     elif model_cls.__name__ in ["Qwen2_5OmniForConditionalGeneration"]:
 
@@ -576,6 +585,15 @@ def _parallelize_model(
             print("talker module found in Qwen2.5-Omni model")
             for layer in model.talker.model.layers:
                 layers.append(layer)
+    
+    elif model_cls.__name__ in ["Llama4ForConditionalGeneration"]:
+        layers: list = []
+        for layer in model.language_model.model.layers:
+            layers.append(layer)
+        for layer in model.vision_model.model.layers:
+            layers.append(layer)
+        num_attention_heads = model.language_model.model.config.num_attention_heads
+        num_key_value_heads = model.language_model.model.config.num_key_value_heads
 
     else:
         layers: torch.nn.ModuleList = model.model.layers  # type: ignore

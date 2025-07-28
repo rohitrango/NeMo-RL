@@ -217,12 +217,16 @@ vlms = [
         # "Qwen/Qwen2.5-VL-3B-Instruct", 
         # "google/gemma-3-4b-it",
         # "Qwen/Qwen2-VL-2B",
-        "Qwen/Qwen2.5-Omni-7B",
+        # "Qwen/Qwen2.5-Omni-7B",
         # "OpenGVLab/InternVL-Chat-V1-2",
         # "OpenGVLab/InternVL2_5-2B",       # processor does not work 
         # "OpenGVLab/InternVL3-1B-hf",
+        # "allenai/Molmo-7B-D-0924",  # no chat template
+        #"meta-llama/Llama-4-Scout-17B-16E-Instruct",  # model runs oom
         # "microsoft/Phi-4-multimodal-instruct",
-        # "deepseek-ai/deepseek-vl2-tiny",
+        # "deepseek-ai/deepseek-vl2-tiny",   # no chat template
+        # "llava-hf/llava-onevision-qwen2-7b-ov-hf"  # vision
+        "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
         # "HuggingFaceTB/SmolVLM2-2.2B-Instruct",
         # "llava-hf/llava-interleave-qwen-0.5b-hf",
         # "meta-llama/Llama-4-Scout-17B-16E-Instruct"
@@ -261,7 +265,6 @@ for vlm in vlms:
     processor = processor.from_pretrained(vlm, trust_remote_code=True)
 
     print(f"Processor: {processor}")
-    breakpoint()
 
     #summarize_conversation_process(processor, no_image_conversation, [], "Single Turn No Image")
     summarize_conversation_process(processor, conversation, images_conversation, "Single Turn Single Image")
