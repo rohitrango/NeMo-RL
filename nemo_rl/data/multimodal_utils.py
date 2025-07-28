@@ -199,7 +199,7 @@ def get_dim_to_pack_along(processor, key: str) -> int:
 
     In most cases, the packed items are along dim 0
     '''
-    if processor.__class_.__name__ == "SmolVLMProcessor":
+    if processor.__class__.__name__ == "SmolVLMProcessor":
         return 1
     # return zero by default
     return 0

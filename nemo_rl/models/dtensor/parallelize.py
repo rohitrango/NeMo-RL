@@ -532,6 +532,15 @@ def _parallelize_model(
 
         num_attention_heads = model.language_model.config.num_attention_heads
         num_key_value_heads = model.language_model.config.num_key_value_heads
+    
+    elif model_cls.__name__ in ["SmolVLMForConditionalGeneration"]:
+        layers: list = []
+        for layer in model.model.text_model.layers:
+            layers.append(layer)
+        for layer in model.model.vision_model.encoder.layers:
+            layers.append(layer)
+        num_attention_heads = model.model.text_model.config.num_attention_heads
+        num_key_value_heads = model.model.text_model.config.num_key_value_heads
 
     elif model_cls.__name__ in ["InternVLForConditionalGeneration"]:
         layers: list = []

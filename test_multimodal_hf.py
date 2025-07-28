@@ -217,13 +217,13 @@ vlms = [
         # "Qwen/Qwen2.5-VL-3B-Instruct", 
         # "google/gemma-3-4b-it",
         # "Qwen/Qwen2-VL-2B",
-        # "Qwen/Qwen2.5-Omni-7B",
+        "Qwen/Qwen2.5-Omni-7B",
         # "OpenGVLab/InternVL-Chat-V1-2",
         # "OpenGVLab/InternVL2_5-2B",       # processor does not work 
         # "OpenGVLab/InternVL3-1B-hf",
         # "microsoft/Phi-4-multimodal-instruct",
         # "deepseek-ai/deepseek-vl2-tiny",
-        "HuggingFaceTB/SmolVLM2-2.2B-Instruct",
+        # "HuggingFaceTB/SmolVLM2-2.2B-Instruct",
         # "llava-hf/llava-interleave-qwen-0.5b-hf",
         # "meta-llama/Llama-4-Scout-17B-16E-Instruct"
         # "openai/whisper-large-v3"
