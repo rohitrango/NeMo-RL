@@ -32,6 +32,7 @@ AUTOMODEL_FACTORY["qwen2-vl"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["qwen2.5-omni"] = AutoModelForTextToWaveform
 AUTOMODEL_FACTORY["llava"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["internvl3"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["gemma-3"] = AutoModelForImageTextToText
 
 def resolve_model_class(model_name: str) -> nn.Module:
     for model_substr in AUTOMODEL_FACTORY.keys():

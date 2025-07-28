@@ -88,10 +88,9 @@ def get_multimodal_keys_from_processor(processor) -> list[str]:
         all_keys.update(processor.video_processor.model_input_names)
     if hasattr(processor, "feature_extractor"):
         all_keys.update(processor.feature_extractor.model_input_names)
-    all_keys.update(processor.model_input_names)
+    # all_keys.update(processor.model_input_names)
     all_keys.difference_update(set(processor.tokenizer.model_input_names))
     return list(all_keys)
-
 
 def concat_packed_multimodal_items(packed_multimodal_data: list[PackedMultimodalDataItem], return_as_item: bool = False) -> Union[PackedMultimodalDataBatch, PackedMultimodalDataItem]:
     """Concatenate a list of PackedMultimodalDataItem objects into a single PackedMultimodalDataBatch.
@@ -99,7 +98,11 @@ def concat_packed_multimodal_items(packed_multimodal_data: list[PackedMultimodal
     dim = [item.dim_to_pack for item in packed_multimodal_data]
     assert len(set(dim)) == 1, "All packed multimodal data must have the same dim_to_pack"
     dim = dim[0]
-    tensor = torch.cat([item.tensor for item in packed_multimodal_data], dim=dim)
+    try:
+        tensor = torch.cat([item.tensor for item in packed_multimodal_data], dim=dim)
+    except:
+        breakpoint()
+
     num_items = [item.tensor.shape[dim] for item in packed_multimodal_data]
     # packed batch
     batch = PackedMultimodalDataBatch(tensor, dim, num_items)
@@ -147,3 +150,56 @@ def reroute_processor_model_name_patch(model_name: str) -> str:
             print(f"Rerouting processor for {model_name} to {replacement}")
             return replacement
     return model_name
+
+def augment_processor_with_chat_template(processor, model_name: str):
+    ''' given a processor, augment it with a chat template
+
+    there have to be two implementations - 
+    1) one with tokenize=True, 
+    2) one with tokenize=False
+    '''
+    # return processor
+    if 'phi-4' in model_name.lower():
+        def conversation_preprocessor_phi4(self, conversation):
+            # get new conversation with tokenizer
+            new_conversation = []
+            image_id = 1
+            audio_id = 1
+            for turn in conversation:
+                new_turn = {}
+                new_turn['role'] = turn['role']
+                new_turn['content'] = ""
+                # if just text, copy it, else create a text string with placeholders
+                if isinstance(turn['content'], str):
+                    new_turn['content'] = turn['content']
+                elif isinstance(turn['content'], list):
+                    for item in turn['content']:
+                        if item['type'] == 'text':
+                            new_turn['content'] += item['text']
+                        elif item['type'] == 'image':
+                            new_turn['content'] += f"<|image_{image_id}|>"
+                            image_id += 1
+                        elif item['type'] == 'audio':
+                            new_turn['content'] += f"<|audio_{audio_id}|>"
+                            audio_id += 1
+                        else:
+                            raise ValueError(f"Unexpected content type: {item['type']}")
+                # else:
+                    # raise ValueError(f"Unexpected content type: {type(turn['content'])}")
+                new_conversation.append(new_turn)
+            # call the original apply_chat_template
+            return new_conversation
+        print(f"Augmenting processor for {model_name} with phi-4 chat template conversation_preprocessor")
+        processor.conversation_preprocessor = conversation_preprocessor_phi4
+    return processor
+        
+def get_dim_to_pack_along(processor, key: str) -> int:
+    '''
+    Special considerations for packing certain keys from certain processors
+
+    In most cases, the packed items are along dim 0
+    '''
+    if processor.__class_.__name__ == "SmolVLMProcessor":
+        return 1
+    # return zero by default
+    return 0

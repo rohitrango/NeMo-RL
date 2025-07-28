@@ -2,6 +2,7 @@
 
 from transformers import AutoTokenizer, AutoProcessor, LlavaNextProcessor, LlavaNextVideoProcessor
 from PIL import Image
+import torch
 import requests
 import base64
 from io import BytesIO
@@ -58,6 +59,35 @@ def downscale_image(image: Image.Image, max_size: int = 800) -> Image.Image:
             new_width = int(width * (max_size / height))
             return image.resize((new_width, new_height))
 
+def preprocess_conversation_phi4(conversation):
+    # get new conversation with tokenizer
+    new_conversation = []
+    image_id = 1
+    audio_id = 1
+    for turn in conversation:
+        new_turn = {}
+        new_turn['role'] = turn['role']
+        new_turn['content'] = ""
+        # if just text, copy it, else create a text string with placeholders
+        if isinstance(turn['content'], str):
+            new_turn['content'] = turn['content']
+        elif isinstance(turn['content'], list):
+            for item in turn['content']:
+                if item['type'] == 'text':
+                    new_turn['content'] += item['text']
+                elif item['type'] == 'image':
+                    new_turn['content'] += f"<|image_{image_id}|>"
+                    image_id += 1
+                elif item['type'] == 'audio':
+                    new_turn['content'] += f"<|audio_{audio_id}|>"
+                    audio_id += 1
+                else:
+                    raise ValueError(f"Unexpected content type: {item['type']}")
+        # else:
+            # raise ValueError(f"Unexpected content type: {type(turn['content'])}")
+        new_conversation.append(new_turn)
+    return new_conversation
+
 def summarize_conversation_process(processor, conversation, images_conversation, conversation_name):
     '''
     Summarize the conversation process.
@@ -65,11 +95,13 @@ def summarize_conversation_process(processor, conversation, images_conversation,
     print('-'*100)
     print(f"Conversation Name: {conversation_name}")
     prompt_text = processor.apply_chat_template(
+        # preprocess_conversation_phi4(conversation),
         conversation,
         tokenize=False,
         add_generation_prompt=True,
         return_tensors=False,
     )
+
 
     if isinstance(prompt_text, list):
         prompt_text = prompt_text[0]
@@ -95,10 +127,10 @@ def summarize_conversation_process(processor, conversation, images_conversation,
     
     # now apply the processor to the prompt text
     print(f"Images: {images_conversation}")
-    tensordict = processor(text=prompt_text, images=images_conversation, return_tensors="pt", add_special_tokens=True)
+    tensordict = processor(text=prompt_text, images=images_conversation, return_tensors="pt") #, add_special_tokens=True) -- doesnt work for phi-4
 
     for key, value in tensordict.items():
-        print(f"{key}: {value.shape}")
+        print(f"{key}: {value.shape if isinstance(value, torch.Tensor) else value}")
 
     if 'token_type_ids' in tensordict:
         print(f"Token Type IDs: {tensordict['token_type_ids']}")
@@ -117,6 +149,15 @@ conversation = [
       "role": "user",
       "content": [
           image_content,
+          text_content,
+        ],
+    },
+]
+
+no_image_conversation = [
+    {
+      "role": "user",
+      "content": [
           text_content,
         ],
     },
@@ -174,12 +215,15 @@ vlms = [
         # "llava-hf/llava-v1.6-mistral-7b-hf",
         # "llava-hf/llava-v1.6-34b-hf", 
         # "Qwen/Qwen2.5-VL-3B-Instruct", 
-        # "google/gemma-3-12b-it",
+        # "google/gemma-3-4b-it",
         # "Qwen/Qwen2-VL-2B",
         # "Qwen/Qwen2.5-Omni-7B",
         # "OpenGVLab/InternVL-Chat-V1-2",
         # "OpenGVLab/InternVL2_5-2B",       # processor does not work 
-        "OpenGVLab/InternVL3-1B-hf",
+        # "OpenGVLab/InternVL3-1B-hf",
+        # "microsoft/Phi-4-multimodal-instruct",
+        # "deepseek-ai/deepseek-vl2-tiny",
+        "HuggingFaceTB/SmolVLM2-2.2B-Instruct",
         # "llava-hf/llava-interleave-qwen-0.5b-hf",
         # "meta-llama/Llama-4-Scout-17B-16E-Instruct"
         # "openai/whisper-large-v3"
@@ -216,6 +260,10 @@ for vlm in vlms:
     print(f"Using {processor.__name__} for {vlm}")
     processor = processor.from_pretrained(vlm, trust_remote_code=True)
 
+    print(f"Processor: {processor}")
+    breakpoint()
+
+    #summarize_conversation_process(processor, no_image_conversation, [], "Single Turn No Image")
     summarize_conversation_process(processor, conversation, images_conversation, "Single Turn Single Image")
     summarize_conversation_process(processor, mi_conversation, images_mi_conversation, "Single Turn Multi Image")
     try:

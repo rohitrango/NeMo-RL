@@ -46,7 +46,11 @@ from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.utils.config import load_config, parse_hydra_overrides
 from nemo_rl.utils.logger import get_next_experiment_dir
-from nemo_rl.data.multimodal_utils import PackedMultimodalDataItem, get_multimodal_keys_from_processor,  reroute_processor_model_name_patch
+from nemo_rl.data.multimodal_utils import PackedMultimodalDataItem, \
+    get_multimodal_keys_from_processor,  \
+    reroute_processor_model_name_patch, \
+    augment_processor_with_chat_template, \
+    get_dim_to_pack_along
 
 OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
 
@@ -141,30 +145,47 @@ def hf_data_processor(
     
     images = [resolve_to_image(image) for image in images]
 
-    # this is the id-tokenized and image processed conversation template for the policy
-    message: dict = processor.apply_chat_template(
-        [user_message],
-        tokenize=True,
-        add_generation_prompt=True,
-        return_tensors="pt",
-        return_dict=True,
-    )
+    # get formatted user message
+    if hasattr(processor, 'conversation_preprocessor'):
+        user_message_for_chat_template = processor.conversation_preprocessor(user_message)
+    else:
+        user_message_for_chat_template = user_message
+
     # this is the string-tokenized conversation template for the generation policy (for vllm)
     string_formatted_dialog = processor.apply_chat_template(
-        [user_message],
+        [user_message_for_chat_template],
         tokenize=False,
         add_generation_prompt=True,
     )
     if isinstance(string_formatted_dialog, (list, tuple)):
         string_formatted_dialog = string_formatted_dialog[0]
+    
+    try:
+        # this is the id-tokenized and image processed conversation template for the policy
+        message: dict = processor.apply_chat_template(
+            [user_message],
+            tokenize=True,
+            add_generation_prompt=True,
+            return_tensors="pt",
+            return_dict=True,
+        )
+    except Exception as e:
+        # some processors (Phi-4) do not support apply_chat_template with tokenize=True, in these cases we have to use the 
+        # __call__ function directly
+        # on need to add generation prompt here, string formatted dialog is already the prompt
+        message: dict = processor(text=string_formatted_dialog, images=images, return_tensors="pt")
 
     # add this for backward compatibility
     user_message['token_ids'] = message['input_ids'][0]
+    # gemma
+    if 'token_type_ids' in message:
+        user_message['token_type_ids'] = message['token_type_ids'][0]
+
     # add all keys and values to the user message, and the list of keys
     multimodal_keys = get_multimodal_keys_from_processor(processor)
     for key in multimodal_keys:
         if key in message:
-            user_message[key] = PackedMultimodalDataItem(message[key], dim_to_pack=0)
+            user_message[key] = PackedMultimodalDataItem(message[key], dim_to_pack=get_dim_to_pack_along(processor, key))
 
     ### append to user message
     message_log.append(user_message)
@@ -179,13 +200,12 @@ def hf_data_processor(
             ]
         loss_multiplier = 0.0
 
-    print(f"Sampled output has {len(images)} images...")
+    # print(f"Sampled output has {len(images)} images...")
 
-    print("-"*100)
-    print(f"vllm_content:")
-    print(f"String formatted dialog: {string_formatted_dialog}")
-    print(f"images log: {images}")
-    input("")
+    # print("-"*100)
+    # print(f"vllm_content:")
+    # print(f"String formatted dialog: {string_formatted_dialog}")
+    # print(f"images log: {images}")
 
     output: DatumSpec = {
         "message_log": message_log,
@@ -311,7 +331,9 @@ def main() -> None:
     init_ray()
 
     # setup tokenizer
-    processor = AutoProcessor.from_pretrained(reroute_processor_model_name_patch(config["policy"]["model_name"]))
+    processor = AutoProcessor.from_pretrained(reroute_processor_model_name_patch(config["policy"]["model_name"]), trust_remote_code=True)
+    processor = augment_processor_with_chat_template(processor, config['policy']['model_name'])
+
     tokenizer = processor.tokenizer
     assert config["policy"]["generation"] is not None, (
         "A generation config is required for GRPO"

@@ -58,6 +58,12 @@ class DynamicBatchingArgs(TypedDict):
 
 
 class BatchedDataDict(UserDict, Generic[DictT]):
+
+    # keys that are model specific, but not part of the PackedMultimodalDataBatch 
+    ADDITIONAL_OPTIONAL_KEY_TENSORS = [
+        'token_type_ids',   # specific to gemma3 that tells where the image tokens are in the sequence, not required for llm-only inference/training
+    ]
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -72,10 +78,14 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         for k, v in self.data.items():
             if isinstance(v, PackedMultimodalDataBatch):
                 multimodal_dict[k] = v.as_tensor(as_tensors, device=device)
+            elif k in self.ADDITIONAL_OPTIONAL_KEY_TENSORS:
+                multimodal_dict[k] = v
+        
         if as_tensors:
             print("\t returning multimodal dict as tensors")
             for k, v in multimodal_dict.items():
                 print(f"\t\t{k}: {v.shape}")
+
         return multimodal_dict
 
     @classmethod

@@ -506,7 +506,7 @@ def _parallelize_model(
         ValueError: If the model type is not supported for parallelization.
     """
     model_cls = type(model)
-    
+
     # Handle different model structures
     if model_cls == Gemma3ForConditionalGeneration:
         # layers: torch.nn.ModuleList = model.language_model.layers  # type: ignore
@@ -520,7 +520,7 @@ def _parallelize_model(
         num_attention_heads = model.config.text_config.num_attention_heads
         num_key_value_heads = model.config.text_config.num_key_value_heads
 
-    if model_cls.__name__ in ["Qwen2_5_VLForConditionalGeneration", "Qwen2VLForConditionalGeneration"]:
+    elif model_cls.__name__ in ["Qwen2_5_VLForConditionalGeneration", "Qwen2VLForConditionalGeneration"]:
         # VL models have the language model at model.language_model
         layers: list = []
         # append language model layers
