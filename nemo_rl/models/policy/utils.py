@@ -186,48 +186,6 @@ def freeze_hf_model_by_regex(model: nn.Module, regex: Optional[str] = None):
             param.requires_grad = False
 
 
-def load_hf_model(model_name: str, policy_worker) -> nn.Module:
-    """Load a Hugging Face model with optional sliding window support."""
-
-    AutoModelClass = resolve_model_class(model_name)
-    print(f"Loading model {model_name} with class {AutoModelClass.__name__}")
-
-    model_config = AutoConfig.from_pretrained(
-        model_name,
-        # Always load the model in float32 to keep master weights in float32.
-        # Keeping the master weights in lower precision has shown to cause issues with convergence.
-        torch_dtype=torch.float32,
-        trust_remote_code=True,
-        **sliding_window_overwrite(
-            model_name
-        ),  # due to https://github.com/huggingface/transformers/issues/38002
-    )
-
-    full_state_dict = None
-    if policy_worker.rank == 0:
-        print(f"[Rank {policy_worker.rank}] Loading model {model_name} on CPU...")
-        model = AutoModelClass.from_pretrained(
-            model_name,
-            device_map="cpu",  # load weights onto CPU initially
-            trust_remote_code=True,
-            config=model_config,
-        )
-        full_state_dict = model.state_dict()
-        del model
-
-    print(f"[Rank {policy_worker.rank}] Initializing empty model for FSDP...")
-    # All ranks initialize model on meta device, so FSDP can shard it.
-    # The actual weights will be broadcast from rank 0.
-
-    # not all models support `from_config`, so use AutoModel instead
-    with init_empty_weights():
-        model = AutoModelClass.from_config(
-            model_config,
-        )
-
-    return model, full_state_dict
-
-
 def configure_expandable_segments() -> None:
     """Configure expandable_segments on Hopper and newer architectures (compute capability 9.x+).
 
