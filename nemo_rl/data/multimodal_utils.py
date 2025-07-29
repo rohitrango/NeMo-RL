@@ -98,10 +98,7 @@ def concat_packed_multimodal_items(packed_multimodal_data: list[PackedMultimodal
     dim = [item.dim_to_pack for item in packed_multimodal_data]
     assert len(set(dim)) == 1, "All packed multimodal data must have the same dim_to_pack"
     dim = dim[0]
-    try:
-        tensor = torch.cat([item.tensor for item in packed_multimodal_data], dim=dim)
-    except:
-        breakpoint()
+    tensor = torch.cat([item.tensor for item in packed_multimodal_data], dim=dim)
 
     num_items = [item.tensor.shape[dim] for item in packed_multimodal_data]
     # packed batch

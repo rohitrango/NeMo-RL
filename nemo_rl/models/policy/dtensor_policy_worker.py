@@ -153,6 +153,15 @@ class DTensorPolicyWorker:
         # Only enable expandable_segments on Hopper and newer architectures (compute capability 9.x+)
         configure_expandable_segments()
 
+        # vars used for refit
+        ## will be initialized in prepare_refit_info
+        self.refit_param_info = None
+        ## used for streaming update inference engine weights
+        self._held_sharded_state_dict_reference: Optional[dict[str, torch.Tensor]] = (
+            None
+        )
+        self._held_streamed_param_reference: Optional[dict[str, torch.Tensor]] = None
+
         self.cfg = config
         # torch distributed init. Envars for rank, world_size, and master_addr and master_port are set from the ray remote call
         torch.distributed.init_process_group(backend="nccl")
@@ -324,14 +333,6 @@ class DTensorPolicyWorker:
                 "No weights path provided. Starting from scratch (default policy init)"
             )
 
-        # vars used for refit
-        ## will be initialized in prepare_refit_info
-        self.refit_param_info = None
-        ## used for streaming update inference engine weights
-        self._held_sharded_state_dict_reference: Optional[dict[str, torch.Tensor]] = (
-            None
-        )
-        self._held_streamed_param_reference: Optional[dict[str, torch.Tensor]] = None
 
     # Refer to nemo impl. Below is original comment.
     # based on https://github.com/pytorch/torchtitan/blob/main/torchtitan/distributed/utils.py#L113

@@ -32,6 +32,16 @@ from torch.distributed.tensor.parallel import (
     SequenceParallel,
     parallelize_module,
 )
+# get transformer parallelizations for added TP support
+# from transformers.integrations.tensor_parallel import (
+#     ColwiseParallel as HFColwiseParallel,
+#     RowwiseParallel as HFRowwiseParallel,
+#     PackedRowwiseParallel, 
+#     PackedColwiseParallel,
+#     IsolatedParallel,
+#     GatherParallel
+# )
+
 from torch.distributed.tensor.placement_types import Replicate, Shard
 from transformers.models.gemma3.modeling_gemma3 import (
     Gemma3ForCausalLM,
@@ -42,16 +52,8 @@ from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
 # Add VL model imports
-try:
-    from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLForConditionalGeneration, Qwen2_5_VLModel
-except ImportError:
-    Qwen2VLForConditionalGeneration = None
-    Qwen2_5_VLModel = None
-
-try:
-    from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
-except ImportError:
-    Qwen2_5_VLForConditionalGeneration = None
+from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLForConditionalGeneration
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
 
 from nemo_rl.distributed.model_utils import from_parallel_logits_to_logprobs
 from nemo_rl.models.policy.utils import import_class_from_path
@@ -386,6 +388,18 @@ def translate_parallel_style(style: str):
         return RowwiseParallel(input_layouts=Replicate())
     elif style == "sequence_parallel":
         return SequenceParallel()
+    # elif style == "local_colwise":
+    #     return HFColwiseParallel(use_dtensor=False)
+    # elif style == "local_rowwise":
+    #     return HFRowwiseParallel(use_dtensor=False)
+    # elif style == "local_packed_rowwise":
+    #     return PackedRowwiseParallel(use_dtensor=False)
+    # elif style == "local_packed_colwise":
+    #     return PackedColwiseParallel(use_dtensor=False)
+    # elif style == "local":
+    #     return IsolatedParallel()
+    # elif style == "gather":
+    #     return GatherParallel()
     else:
         raise ValueError(f"Unknown parallel style: {style}")
 
@@ -410,16 +424,34 @@ def get_hf_tp_plan(model):
         AssertionError: If no TP plan is found
     """
     model_cls = type(model)
+    model_name = model_cls.__name__
     
     # Handle VL models structure
-    if model_cls.__name__ in ["Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration"]:
+    if model_name in ["Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration"]:
         inner_model = model.model.language_model
         model_prefix = "model.language_model"
         config = model.model.language_model.config
-    elif model_cls == Gemma3ForConditionalGeneration:
+
+    elif model_name == "Gemma3ForConditionalGeneration":
         inner_model = model.language_model
         model_prefix = "language_model"
         config = model.config.text_config
+
+    elif model_name == "Llama4ForConditionalGeneration":
+        inner_model = model.language_model.model
+        model_prefix = "language_model.model"
+        config = model.language_model.model.config
+    
+    elif model_name in ["LlavaForConditionalGeneration", "LlavaNextForConditionalGeneration", "LlavaNextVideoForConditionalGeneration", "LlavaOnevisionForConditionalGeneration"]:
+        inner_model = model.model.language_model
+        model_prefix = "model.language_model"
+        config = model.model.language_model.config
+    
+    elif model_name == "Mistral3ForConditionalGeneration":
+        inner_model = model.model.language_model
+        model_prefix = "model.language_model"
+        config = model.model.language_model.config
+
     else:
         inner_model = model.model
         model_prefix = "model"
@@ -451,6 +483,7 @@ def get_hf_tp_plan(model):
     ):
         hf_tp_plan[f"{model_prefix}.embed_tokens"] = "rowwise_rep"
 
+    k2delete = []
     for k, v in hf_tp_plan.items():
         # speed up the tp plan for lm_head
         if (
@@ -462,7 +495,14 @@ def get_hf_tp_plan(model):
                 output_layouts=Shard(-1), use_local_output=False
             )
         else:
-            hf_tp_plan[k] = translate_parallel_style(v)
+            # delete local tp plans for transformer parallel modules
+            if v not in ['local_colwise', 'local_rowwise', 'local_packed_rowwise', 'local_packed_colwise', 'local', 'gather']:
+                hf_tp_plan[k] = translate_parallel_style(v)
+            else:
+                k2delete.append(k)
+
+    for k in k2delete:
+        del hf_tp_plan[k]
 
     return hf_tp_plan
 
