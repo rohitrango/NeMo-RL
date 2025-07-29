@@ -144,6 +144,13 @@ env:
         weight: 0.2
       - name: exact_alnum
         weight: 0.8
+  geometry3k:
+    num_workers: 8
+    reward_functions:
+      - name: format
+        weight: 0.1
+      - name: math_expr
+        weight: 0.9
   refcoco:
     num_workers: 8
     reward_functions:

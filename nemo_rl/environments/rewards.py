@@ -14,6 +14,33 @@
 from typing import Callable
 import re
 import numpy as np
+from math_verify.metric import math_metric
+from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
+
+# initialize math_verify_func once
+math_verify_func = math_metric(
+    gold_extraction_target=(LatexExtractionConfig(),),
+    pred_extraction_target=(
+        ExprExtractionConfig(),
+        LatexExtractionConfig(),
+    ),
+)
+
+def math_expression_reward(ground_truth: str, response: str) -> tuple[float, bool]:
+    '''
+    Reward the agent for the following:
+    - the answer within the <answer> tags is the same expression as the ground truth 
+    '''
+    match = re.search(r"<answer>([\s\S]*)</answer>", response)
+    if match:
+        answer = match.group(1)
+        try:
+            score, _ =  math_verify_func([ground_truth], [answer])
+            return float(score), score > 0.0
+        except Exception:
+            return 0.0, False
+    return 0.0, False
+
 
 def format_reward(ground_truth: str, response: str) -> tuple[float, bool]:
     '''

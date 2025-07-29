@@ -226,7 +226,8 @@ vlms = [
         # "microsoft/Phi-4-multimodal-instruct",
         # "deepseek-ai/deepseek-vl2-tiny",   # no chat template
         # "llava-hf/llava-onevision-qwen2-7b-ov-hf"  # vision
-        "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+        # "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+        "moonshotai/Kimi-VL-A3B-Instruct"
         # "HuggingFaceTB/SmolVLM2-2.2B-Instruct",
         # "llava-hf/llava-interleave-qwen-0.5b-hf",
         # "meta-llama/Llama-4-Scout-17B-16E-Instruct"

@@ -31,6 +31,7 @@ from nemo_rl.data import DataConfig
 from nemo_rl.data.datasets import AllTaskProcessedDataset
 from nemo_rl.environments.vlm_environment import VLMEnvironment
 from nemo_rl.data.hf_datasets.clevr import CLEVRCoGenTDataset, format_clevr_cogent_dataset
+from nemo_rl.data.hf_datasets.geometry3k import Geometry3KDataset, format_geometry3k_dataset
 from nemo_rl.data.hf_datasets.refcoco import RefCOCODataset, format_refcoco_dataset
 from nemo_rl.data.interfaces import (
     DatumSpec,
@@ -102,13 +103,15 @@ def hf_data_processor(
     max_seq_length: int,
     idx: int,
 ) -> DatumSpec:
-    """Process a datum dictionary (directly loaded from data/hf_datasets/clevr.py) into a DatumSpec for the VLM Environment."""
+    """Process a datum dictionary (directly loaded from data/hf_datasets/<dataset_name>.py) into a DatumSpec for the VLM Environment."""
 
     # depending on the task, format the data differently
     if task_data_spec.task_name == "clevr-cogent":
         datum_dict = format_clevr_cogent_dataset(datum_dict)
     elif task_data_spec.task_name == "refcoco":
         datum_dict = format_refcoco_dataset(datum_dict)
+    elif task_data_spec.task_name == "geometry3k":
+        datum_dict = format_geometry3k_dataset(datum_dict)
     else:
         raise ValueError(f"No data processor for task {task_data_spec.task_name}")
 
@@ -201,7 +204,6 @@ def hf_data_processor(
         loss_multiplier = 0.0
 
     # print(f"Sampled output has {len(images)} images...")
-
     # print("-"*100)
     # print(f"vllm_content:")
     # print(f"String formatted dialog: {string_formatted_dialog}")
@@ -254,6 +256,8 @@ def setup_data(
                                        seed=data_config['seed'], task_name=data_config['task_name'])
     elif data_config['dataset_name'] == 'refcoco':
         data: Any = RefCOCODataset(split=data_config['split'], seed=data_config['seed'], task_name=data_config['task_name'], path_to_coco_images=data_config.get('path_to_coco_images', None))
+    elif data_config['dataset_name'] == 'geometry3k':
+        data: Any = Geometry3KDataset(split=data_config['split'], task_name=data_config['task_name'])
     else:
         raise ValueError(f"No processor for dataset {data_config['dataset_name']}.")
 
