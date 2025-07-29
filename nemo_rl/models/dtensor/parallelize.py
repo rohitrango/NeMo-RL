@@ -37,15 +37,6 @@ from torch.distributed.tensor.parallel import (
     SequenceParallel,
     parallelize_module,
 )
-# get transformer parallelizations for added TP support
-# from transformers.integrations.tensor_parallel import (
-#     ColwiseParallel as HFColwiseParallel,
-#     RowwiseParallel as HFRowwiseParallel,
-#     PackedRowwiseParallel, 
-#     PackedColwiseParallel,
-#     IsolatedParallel,
-#     GatherParallel
-# )
 
 from torch.distributed.tensor.placement_types import Replicate, Shard
 from transformers.modeling_utils import PreTrainedModel
@@ -56,10 +47,6 @@ from transformers.models.gemma3.modeling_gemma3 import (
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
 from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
-
-# Add VL model imports
-from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLForConditionalGeneration
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
 
 from nemo_rl.distributed.model_utils import dtensor_from_parallel_logits_to_logprobs
 from nemo_rl.models.policy.utils import import_class_from_path
@@ -269,92 +256,6 @@ def _parallelize_qwen(
     return cast(dict[str, ParallelStyle], base_model_tp_plan)
 
 
-def _parallelize_qwen_vl(
-    model: Union["Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration"],
-    sequence_parallel: bool = False,
-):
-    """Parallelizes a Qwen VL model across data and tensor parallel dimensions.
-    
-    VL models have a different structure with separate language and vision components.
-    We only parallelize the language model component.
-    
-    Structure: model.language_model.* (not model.language_model.model.*)
-    """
-    # VL models have the language model at model.language_model
-    language_model = model.model.language_model
-    
-    # Check if the language model has tied embeddings
-    assert not language_model.config.tie_word_embeddings, (
-        "Tie word embeddings not supported when TP is enabled"
-    )
-    
-    if sequence_parallel:
-        base_model_tp_plan = {
-            "lm_head": ColwiseParallel(
-                input_layouts=Shard(1),
-                output_layouts=Shard(-1),
-                use_local_output=False,
-            ),
-            "model.language_model.embed_tokens": RowwiseParallel(
-                input_layouts=Replicate(),
-                output_layouts=Shard(1),
-            ),
-            "model.language_model.rotary_emb": RotaryEmbedParallel(),
-            "model.language_model.norm": SequenceParallel(),
-            "model.language_model.layers.*.input_layernorm": SequenceParallel(),
-            "model.language_model.layers.*.self_attn.q_proj": ColwiseParallel(use_local_output=False),
-            "model.language_model.layers.*.self_attn.k_proj": ColwiseParallel(use_local_output=False),
-            "model.language_model.layers.*.self_attn.v_proj": ColwiseParallel(use_local_output=False),
-            "model.language_model.layers.*.self_attn.o_proj": RowwiseParallel(output_layouts=Shard(1)),
-            "model.language_model.layers.*.post_attention_layernorm": SequenceParallel(),
-            "model.language_model.layers.*.mlp.up_proj": ColwiseParallel(),
-            "model.language_model.layers.*.mlp.gate_proj": ColwiseParallel(),
-            "model.language_model.layers.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
-            # visual model
-            "model.visual.blocks.*.norm1": SequenceParallel(),
-            "model.visual.blocks.*.norm2": SequenceParallel(),
-            "model.visual.blocks.*.attn.qkv": ColwiseParallel(use_local_output=False),
-            "model.visual.blocks.*.attn.proj": RowwiseParallel(output_layouts=Shard(1)),
-            "model.visual.blocks.*.mlp.up_proj": ColwiseParallel(),
-            "model.visual.blocks.*.mlp.gate_proj": ColwiseParallel(),
-            "model.visual.blocks.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
-            # merger
-            "model.visual.merger.ln_q": SequenceParallel(),
-            "model.visual.merger.mlp.0": ColwiseParallel(),
-            "model.visual.merger.mlp.2": RowwiseParallel(output_layouts=Shard(1)),
-        }
-    else:
-        base_model_tp_plan = {
-            "lm_head": ColwiseParallel(
-                output_layouts=Shard(-1), use_local_output=False
-            ),
-            "model.language_model.embed_tokens": RowwiseParallel(
-                input_layouts=Replicate(),
-            ),
-            "model.language_model.layers.*.self_attn.q_proj": ColwiseParallel(),
-            "model.language_model.layers.*.self_attn.k_proj": ColwiseParallel(),
-            "model.language_model.layers.*.self_attn.v_proj": ColwiseParallel(),
-            "model.language_model.layers.*.self_attn.o_proj": RowwiseParallel(),
-            "model.language_model.layers.*.mlp.up_proj": ColwiseParallel(),
-            "model.language_model.layers.*.mlp.gate_proj": ColwiseParallel(),
-            "model.language_model.layers.*.mlp.down_proj": RowwiseParallel(),
-            # visual model
-            "model.visual.blocks.*.norm1": SequenceParallel(),
-            "model.visual.blocks.*.norm2": SequenceParallel(),
-            "model.visual.blocks.*.attn.qkv": ColwiseParallel(use_local_output=False),
-            "model.visual.blocks.*.attn.proj": RowwiseParallel(output_layouts=Shard(1)),
-            "model.visual.blocks.*.mlp.up_proj": ColwiseParallel(),
-            "model.visual.blocks.*.mlp.gate_proj": ColwiseParallel(),
-            "model.visual.blocks.*.mlp.down_proj": RowwiseParallel(output_layouts=Shard(1)),
-            # merger
-            "model.visual.merger.ln_q": SequenceParallel(),
-            "model.visual.merger.mlp.0": ColwiseParallel(),
-            "model.visual.merger.mlp.2": RowwiseParallel(output_layouts=Shard(1)),
-        }
-    
-    return base_model_tp_plan
-
-
 PARALLIZE_FUNCTIONS: dict[
     type[torch.nn.Module], Callable[..., dict[str, ParallelStyle]]
 ] = {
@@ -366,14 +267,6 @@ PARALLIZE_FUNCTIONS: dict[
     # The larger gemma models use Gemma3ForConditionalGeneration, which are for text-image input
     Gemma3ForConditionalGeneration: _parallelize_gemma3,
 }
-
-# Add VL models to the dictionary if they are available
-if Qwen2VLForConditionalGeneration is not None:
-    PARALLIZE_FUNCTIONS[Qwen2VLForConditionalGeneration] = _parallelize_qwen_vl
-
-if Qwen2_5_VLForConditionalGeneration is not None:
-    PARALLIZE_FUNCTIONS[Qwen2_5_VLForConditionalGeneration] = _parallelize_qwen_vl
-
 
 @lru_cache
 def translate_parallel_style(style: str):
@@ -493,7 +386,6 @@ def get_hf_tp_plan(model: PreTrainedModel):
     ):
         hf_tp_plan[f"{model_prefix}.embed_tokens"] = "rowwise_rep"
 
-    k2delete = []
     for k, v in hf_tp_plan.items():
         # speed up the tp plan for lm_head
         if (
@@ -505,14 +397,7 @@ def get_hf_tp_plan(model: PreTrainedModel):
                 output_layouts=Shard(-1), use_local_output=False
             )
         else:
-            # delete local tp plans for transformer parallel modules
-            if v not in ['local_colwise', 'local_rowwise', 'local_packed_rowwise', 'local_packed_colwise', 'local', 'gather']:
-                hf_tp_plan[k] = translate_parallel_style(v)
-            else:
-                k2delete.append(k)
-
-    for k in k2delete:
-        del hf_tp_plan[k]
+            hf_tp_plan[k] = translate_parallel_style(v)
 
     return hf_tp_plan
 
@@ -524,7 +409,6 @@ def _parallelize_model(
         LlamaForCausalLM,
         Gemma3ForCausalLM,
         Gemma3ForConditionalGeneration,
-        Qwen2_5_VLForConditionalGeneration,
     ],
     dp_mesh: DeviceMesh,
     tp_mesh: DeviceMesh,
@@ -556,9 +440,10 @@ def _parallelize_model(
         ValueError: If the model type is not supported for parallelization.
     """
     model_cls = type(model)
+    model_name = model_cls.__name__
 
     # Handle different model structures
-    if model_cls == Gemma3ForConditionalGeneration:
+    if model_name == "Gemma3ForConditionalGeneration":
         # layers: torch.nn.ModuleList = model.language_model.layers  # type: ignore
         layers: list = []
         for layer in model.language_model.layers:
@@ -570,7 +455,7 @@ def _parallelize_model(
         num_attention_heads = model.config.text_config.num_attention_heads
         num_key_value_heads = model.config.text_config.num_key_value_heads
 
-    elif model_cls.__name__ in ["Qwen2_5_VLForConditionalGeneration", "Qwen2VLForConditionalGeneration"]:
+    elif model_name in ["Qwen2_5_VLForConditionalGeneration", "Qwen2VLForConditionalGeneration"]:
         # VL models have the language model at model.language_model
         layers: list = []
         # append language model layers
@@ -583,7 +468,7 @@ def _parallelize_model(
         num_attention_heads = model.language_model.config.num_attention_heads
         num_key_value_heads = model.language_model.config.num_key_value_heads
     
-    elif model_cls.__name__ in ["SmolVLMForConditionalGeneration"]:
+    elif model_name in ["SmolVLMForConditionalGeneration"]:
         layers: list = []
         for layer in model.model.text_model.layers:
             layers.append(layer)
@@ -592,7 +477,7 @@ def _parallelize_model(
         num_attention_heads = model.model.text_model.config.num_attention_heads
         num_key_value_heads = model.model.text_model.config.num_key_value_heads
 
-    elif model_cls.__name__ in ["InternVLForConditionalGeneration"]:
+    elif model_name in ["InternVLForConditionalGeneration"]:
         layers: list = []
         for layer in model.language_model.layers:
             layers.append(layer)
@@ -601,7 +486,7 @@ def _parallelize_model(
         num_attention_heads = model.language_model.config.num_attention_heads
         num_key_value_heads = model.language_model.config.num_key_value_heads
 
-    elif model_cls.__name__ in ["LlavaForConditionalGeneration", "LlavaNextForConditionalGeneration", "LlavaNextVideoForConditionalGeneration", "LlavaOnevisionForConditionalGeneration"]:
+    elif model_name in ["LlavaForConditionalGeneration", "LlavaNextForConditionalGeneration", "LlavaNextVideoForConditionalGeneration", "LlavaOnevisionForConditionalGeneration"]:
         layers: list = []
         for layer in model.model.language_model.layers:
             layers.append(layer)
@@ -610,7 +495,7 @@ def _parallelize_model(
         num_attention_heads = model.language_model.config.num_attention_heads
         num_key_value_heads = model.language_model.config.num_key_value_heads
     
-    elif model_cls.__name__ in ["Mistral3ForConditionalGeneration"]:
+    elif model_name in ["Mistral3ForConditionalGeneration"]:
         layers: list = []
         for layer in model.model.language_model.layers:
             layers.append(layer)
@@ -619,24 +504,20 @@ def _parallelize_model(
         num_attention_heads = model.model.language_model.config.num_attention_heads
         num_key_value_heads = model.model.language_model.config.num_key_value_heads
     
-    elif model_cls.__name__ in ["Qwen2_5OmniForConditionalGeneration"]:
+    elif model_name in ["Qwen2_5OmniForConditionalGeneration"]:
 
         layers: list = []
         for layer in model.thinker.model.layers:
             layers.append(layer)
         for layer in model.thinker.visual.blocks:
             layers.append(layer)
-        ### audio tower blocks do not have a .mlp attribute
-        # for layer in model.thinker.audio_tower.layers:
-        #     layers.append(layer)
-
         # the model may have a talker
         if hasattr(model, "talker"):
             print("talker module found in Qwen2.5-Omni model")
             for layer in model.talker.model.layers:
                 layers.append(layer)
     
-    elif model_cls.__name__ in ["Llama4ForConditionalGeneration"]:
+    elif model_name in ["Llama4ForConditionalGeneration"]:
         layers: list = []
         for layer in model.language_model.model.layers:
             layers.append(layer)
@@ -646,9 +527,11 @@ def _parallelize_model(
         num_key_value_heads = model.language_model.model.config.num_key_value_heads
 
     else:
+        # this is the default case for all other models (assumed to be a causal LM)
         layers: torch.nn.ModuleList = model.model.layers  # type: ignore
         num_attention_heads = model.config.num_attention_heads
         num_key_value_heads = model.config.num_key_value_heads
+
 
     if tp_mesh.size() > 1:
         assert num_key_value_heads % tp_mesh.size() == 0, (
