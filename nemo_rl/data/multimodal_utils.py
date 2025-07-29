@@ -25,46 +25,44 @@ class PackedMultimodalDataItem:
 
 class PackedMultimodalDataBatch:
     """Wrapper around a torch tensor that contains multimodal data"""
-    def __init__(self, tensor: Union[torch.Tensor, list[PackedMultimodalDataItem]], dim_to_pack: int, num_elements_per_item: list[int] = None):
+    def __init__(self, tensors: Union[list[torch.Tensor], list[PackedMultimodalDataItem]], dim_to_pack: int):
         # this is a concatenated databatch of packed multimodal data
-        if isinstance(tensor, torch.Tensor):
-            self.tensor = tensor
-            self.dim_to_pack = dim_to_pack
-            self.num_elements_per_item = num_elements_per_item.tolist() if isinstance(num_elements_per_item, torch.Tensor) else num_elements_per_item
+        if isinstance(tensors[0], torch.Tensor):
+            self.tensors = tensors
+        elif isinstance(tensors[0], PackedMultimodalDataItem):
+            self.tensors = [item.tensor for item in tensors]
         else:
             raise ValueError("tensor must be a torch.Tensor or a list of PackedMultimodalDataItem objects")
+        self.dim_to_pack = dim_to_pack
     
     def as_tensor(self, as_tensors: bool = True, device: Optional[torch.device] = None) -> torch.Tensor:
-        return (self.tensor.to(device) if device is not None else self.tensor) if as_tensors else self
+        # return (self.tensor.to(device) if device is not None else self.tensor) if as_tensors else self
+        if not as_tensors:
+            if device is not None:
+                self.tensors = [item.to(device) for item in self.tensors]
+            return self
+        # as tensors
+        if device is not None:
+            self.tensors = [item.to(device) for item in self.tensors]
+        return torch.cat(self.tensors, dim=self.dim_to_pack)
     
     def __len__(self) -> int:
         # this is the number of items in the batch
-        return len(self.num_elements_per_item)
+        return len(self.tensors)
     
     def to(self, device: str | torch.device) -> "PackedMultimodalDataBatch":
-        self.tensor = self.tensor.to(device)
+        self.tensors = [item.to(device) for item in self.tensors]
         return self
 
     def slice(self, indices: Union[list[int], torch.Tensor]) -> "PackedMultimodalDataBatch":
         idx = indices.tolist() if isinstance(indices, torch.Tensor) else indices
-        # cumulative sum of the number of elements per item
-        cu_sum = np.cumsum([0] + self.num_elements_per_item)
-        start_idx_all = cu_sum[:-1]
-        end_idx_all = cu_sum[1:]
-        # select the indices
-        start_idx = [start_idx_all[i] for i in idx]
-        end_idx = [end_idx_all[i] for i in idx]
-        # if contiguous list of indices, we can use index_select from start of first to end of last
-        selected_indices = _create_indices_from_list(start_idx, end_idx)
-        tensor = self.tensor.index_select(self.dim_to_pack, torch.tensor(selected_indices, device=self.tensor.device).to(torch.int32))
-        sliced_num_elements_per_item = [end_idx[i] - start_idx[i] for i in range(len(idx))]
-        return PackedMultimodalDataBatch(tensor, self.dim_to_pack, sliced_num_elements_per_item)
-
+        tensors = [self.tensors[i] for i in idx]
+        return PackedMultimodalDataBatch(tensors, self.dim_to_pack)
     
     def as_packed_multimodal_data_item(self) -> PackedMultimodalDataItem:
         # you can collapse the batch into a single item by calling this function
         # called inside `message_log_to_flat_messages` to convert the multimodal tensors from turns into a conversation
-        return PackedMultimodalDataItem(self.tensor, self.dim_to_pack)
+        return PackedMultimodalDataItem(torch.cat(self.tensors, dim=self.dim_to_pack), self.dim_to_pack)
     
     def repeat_interleave(self, num_repeats: int) -> "PackedMultimodalDataBatch":
         """Repeats the batch num_repeats times."""
@@ -98,11 +96,10 @@ def concat_packed_multimodal_items(packed_multimodal_data: list[PackedMultimodal
     dim = [item.dim_to_pack for item in packed_multimodal_data]
     assert len(set(dim)) == 1, "All packed multimodal data must have the same dim_to_pack"
     dim = dim[0]
-    tensor = torch.cat([item.tensor for item in packed_multimodal_data], dim=dim)
+    tensors = [item.tensor for item in packed_multimodal_data]
 
-    num_items = [item.tensor.shape[dim] for item in packed_multimodal_data]
     # packed batch
-    batch = PackedMultimodalDataBatch(tensor, dim, num_items)
+    batch = PackedMultimodalDataBatch(tensors, dim)
     if return_as_item:
         return batch.as_packed_multimodal_data_item()
     return batch
@@ -115,13 +112,12 @@ def concat_packed_multimodal_batches(packed_batches: list[PackedMultimodalDataBa
     dim_to_packs = [batch.dim_to_pack for batch in packed_batches]
     assert len(set(dim_to_packs)) == 1, "All packed multimodal data must have the same dim_to_pack"
     # concatenate the tensors
-    tensors = [batch.tensor for batch in packed_batches]
-    dim_to_pack = dim_to_packs[0]
-    tensor = torch.cat(tensors, dim=dim_to_pack)
-    num_items = []
+    # tensors = [batch.tensor for batch in packed_batches]
+    tensors = []
     for batch in packed_batches:
-        num_items.extend(batch.num_elements_per_item)
-    return PackedMultimodalDataBatch(tensor, dim_to_pack, num_items)
+        tensors.extend(batch.tensors)
+    dim_to_pack = dim_to_packs[0]
+    return PackedMultimodalDataBatch(tensors, dim_to_pack)
 
 
 def reroute_processor_model_name_patch(model_name: str) -> str:
