@@ -2,7 +2,6 @@
 requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
-
 [tool.setuptools]
 packages = ["nemo_rl"]
 
@@ -48,9 +47,8 @@ dependencies = [
     "pillow>=11.2.1",
     "torchvision>=0.22.0",
     "ipython>=9.4.0",
-    "num2words>=0.5.14",
-    "scipy>=1.16.0",
-    "sentencepiece>=0.2.0",
+    "num2words>=0.5.14",   # for SmolVLM
+    "mlflow",
 ]
 
 [project.optional-dependencies]

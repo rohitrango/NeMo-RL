@@ -23,12 +23,12 @@ policy:
   train_micro_batch_size: 2
   max_total_sequence_length: 1024
   precision: bfloat16
-  fsdp_offload_enabled: false
-  activation_checkpointing_enabled: false
   dtensor_cfg:
     enabled: false
   dynamic_batching:
-    enabled: False
+    enabled: false
+  sequence_packing:
+    enabled: false
   make_sequence_length_divisible_by: ${policy.megatron_cfg.tensor_model_parallel_size}
   max_grad_norm: 1
   optimizer: null
@@ -102,6 +102,7 @@ logger:
   log_dir: logs/sft-llama3.1-8b-instruct-1n8g-fsdp1
   wandb_enabled: true
   tensorboard_enabled: true
+  mlflow_enabled: false
   monitor_gpus: true
   wandb:
     project: nemo-rl

@@ -31,9 +31,6 @@ policy:
   train_micro_batch_size: 2
   max_total_sequence_length: 1024
   precision: "bfloat16"
-  fsdp_offload_enabled: false
-  activation_checkpointing_enabled: false
-
   dtensor_cfg:
     enabled: true
     cpu_offload: False
@@ -44,7 +41,10 @@ policy:
     custom_parallel_plan: null
 
   dynamic_batching:
-    enabled: False
+    enabled: false
+
+  sequence_packing:
+    enabled: false
 
   make_sequence_length_divisible_by: ${policy.dtensor_cfg.tensor_parallel_size}
   max_grad_norm: 1.0
@@ -78,6 +78,7 @@ logger:
   log_dir: "logs"
   wandb_enabled: true
   tensorboard_enabled: true
+  mlflow_enabled: false
   monitor_gpus: true
   wandb:
     project: nemo-rl

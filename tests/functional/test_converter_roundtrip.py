@@ -69,8 +69,6 @@ def create_test_config() -> Dict[str, Any]:
             "train_micro_batch_size": 2,
             "max_total_sequence_length": 128,
             "precision": "bfloat16",
-            "fsdp_offload_enabled": False,
-            "activation_checkpointing_enabled": False,
             "dtensor_cfg": {
                 "enabled": True,
                 "cpu_offload": False,
@@ -81,6 +79,7 @@ def create_test_config() -> Dict[str, Any]:
                 "custom_parallel_plan": None,
             },
             "dynamic_batching": {"enabled": False},
+            "sequence_packing": {"enabled": False},
             "make_sequence_length_divisible_by": 1,
             "max_grad_norm": 1.0,
             "optimizer": {

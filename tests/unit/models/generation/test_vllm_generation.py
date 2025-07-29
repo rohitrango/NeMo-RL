@@ -81,8 +81,6 @@ basic_dtensor_test_config: PolicyConfig = {
     "max_new_tokens": 16,
     "do_sample": False,
     "precision": "float32",
-    "fsdp_offload_enabled": False,
-    "activation_checkpointing_enabled": False,
     "optimizer": {
         "name": "torch.optim.AdamW",
         "kwargs": {
@@ -106,6 +104,9 @@ basic_dtensor_test_config: PolicyConfig = {
         "train_mb_tokens": 40,
         "logprob_mb_tokens": 40,
         "sequence_length_round": 4,
+    },
+    "sequence_packing": {
+        "enabled": False,
     },
     "max_grad_norm": 1.0,
     "make_sequence_length_divisible_by": 1,
@@ -138,6 +139,9 @@ def get_basic_megatron_test_config(
         },
         "dynamic_batching": {
             "enabled": False,  # Start with simple batching
+        },
+        "sequence_packing": {
+            "enabled": False,
         },
         "megatron_cfg": {
             "enabled": True,
