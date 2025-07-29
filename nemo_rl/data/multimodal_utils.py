@@ -14,7 +14,8 @@ def _create_indices_from_list(start_idx: list[int], end_idx: list[int]) -> torch
         indices.extend(list(range(s, e)))
     return indices
 
-class PackedMultimodalDataItem:
+class PackedGenericDataItem:
+
     """Wrapper around a torch tensor that contains multimodal data"""
     def __init__(self, tensor: torch.Tensor, dim_to_pack: int = 0):
         self.tensor = tensor
@@ -23,16 +24,32 @@ class PackedMultimodalDataItem:
     def __call__(self):
         return self.tensor
 
-class PackedMultimodalDataBatch:
+    @classmethod
+    def concat_packed_items(cls, packed_data: list["PackedGenericDataItem"], return_as_item: bool = False) -> Union["PackedGenericDataBatch", "PackedGenericDataItem"]:
+        """Concatenate a list of PackedGenericDataItem objects into a single PackedGenericDataBatch.
+        """
+        dim = [item.dim_to_pack for item in packed_data]
+        assert len(set(dim)) == 1, "All packed multimodal data must have the same dim_to_pack"
+        dim = dim[0]
+        tensors = [item.tensor for item in packed_data]
+        # packed batch
+        batch = cls.BatchClass(tensors, dim)
+        if return_as_item:
+            return batch.as_packed_data_item()
+        return batch
+
+class PackedGenericDataBatch:
+
+    ItemClass = PackedGenericDataItem
     """Wrapper around a torch tensor that contains multimodal data"""
-    def __init__(self, tensors: Union[list[torch.Tensor], list[PackedMultimodalDataItem]], dim_to_pack: int):
+    def __init__(self, tensors: Union[list[torch.Tensor], list[PackedGenericDataItem]], dim_to_pack: int):
         # this is a concatenated databatch of packed multimodal data
         if isinstance(tensors[0], torch.Tensor):
             self.tensors = tensors
-        elif isinstance(tensors[0], PackedMultimodalDataItem):
+        elif isinstance(tensors[0], PackedGenericDataItem):
             self.tensors = [item.tensor for item in tensors]
         else:
-            raise ValueError("tensor must be a torch.Tensor or a list of PackedMultimodalDataItem objects")
+            raise ValueError("tensor must be a torch.Tensor or a list of PackedGenericDataItem objects")
         self.dim_to_pack = dim_to_pack
     
     def as_tensor(self, as_tensors: bool = True, device: Optional[torch.device] = None) -> torch.Tensor:
@@ -50,25 +67,57 @@ class PackedMultimodalDataBatch:
         # this is the number of items in the batch
         return len(self.tensors)
     
-    def to(self, device: str | torch.device) -> "PackedMultimodalDataBatch":
+    def to(self, device: str | torch.device) -> "PackedGenericDataBatch":
         self.tensors = [item.to(device) for item in self.tensors]
         return self
 
-    def slice(self, indices: Union[list[int], torch.Tensor]) -> "PackedMultimodalDataBatch":
+    def slice(self, indices: Union[list[int], torch.Tensor]) -> "PackedGenericDataBatch":
         idx = indices.tolist() if isinstance(indices, torch.Tensor) else indices
         tensors = [self.tensors[i] for i in idx]
-        return PackedMultimodalDataBatch(tensors, self.dim_to_pack)
+        return PackedGenericDataBatch(tensors, self.dim_to_pack)
     
-    def as_packed_multimodal_data_item(self) -> PackedMultimodalDataItem:
+    def as_packed_data_item(self) -> PackedGenericDataItem:
         # you can collapse the batch into a single item by calling this function
         # called inside `message_log_to_flat_messages` to convert the multimodal tensors from turns into a conversation
-        return PackedMultimodalDataItem(torch.cat(self.tensors, dim=self.dim_to_pack), self.dim_to_pack)
+        ItemClass = self.ItemClass
+        return ItemClass(torch.cat(self.tensors, dim=self.dim_to_pack), self.dim_to_pack)
     
-    def repeat_interleave(self, num_repeats: int) -> "PackedMultimodalDataBatch":
+    def repeat_interleave(self, num_repeats: int) -> "PackedGenericDataBatch":
         """Repeats the batch num_repeats times."""
         raise NotImplementedError("Why are you interleaving batches? Interleaving is supposed to happen at the message log level. \
                                   If you are adding new functionality, implement this function.")
+    
+    @classmethod
+    def concat_packed_batches(cls, packed_batches: list["PackedGenericDataBatch"]) -> "PackedGenericDataBatch":
+        """Concatenate a list of PackedGenericDataBatch objects into a single PackedGenericDataBatch.
 
+        Each batch must have the same dim_to_pack.
+        """
+        dim_to_packs = [batch.dim_to_pack for batch in packed_batches]
+        assert len(set(dim_to_packs)) == 1, "All packed multimodal data must have the same dim_to_pack"
+        # concatenate the tensors
+        # tensors = [batch.tensor for batch in packed_batches]
+        tensors = []
+        for batch in packed_batches:
+            tensors.extend(batch.tensors)
+        dim_to_pack = dim_to_packs[0]
+        return cls(tensors, dim_to_pack)
+
+# Set up circular references after both classes are defined
+PackedGenericDataItem.BatchClass = PackedGenericDataBatch
+PackedGenericDataBatch.ItemClass = PackedGenericDataItem
+
+# define a class for packed multimodal data item
+class PackedMultimodalDataItem(PackedGenericDataItem):
+    pass
+
+# define a class for packed multimodal data batch
+class PackedMultimodalDataBatch(PackedGenericDataBatch):
+    pass
+
+# Set up circular references after both classes are defined
+PackedMultimodalDataItem.BatchClass = PackedMultimodalDataBatch
+PackedMultimodalDataBatch.ItemClass = PackedMultimodalDataItem
 
 def get_multimodal_keys_from_processor(processor) -> list[str]:
     '''
@@ -89,35 +138,6 @@ def get_multimodal_keys_from_processor(processor) -> list[str]:
     # all_keys.update(processor.model_input_names)
     all_keys.difference_update(set(processor.tokenizer.model_input_names))
     return list(all_keys)
-
-def concat_packed_multimodal_items(packed_multimodal_data: list[PackedMultimodalDataItem], return_as_item: bool = False) -> Union[PackedMultimodalDataBatch, PackedMultimodalDataItem]:
-    """Concatenate a list of PackedMultimodalDataItem objects into a single PackedMultimodalDataBatch.
-    """
-    dim = [item.dim_to_pack for item in packed_multimodal_data]
-    assert len(set(dim)) == 1, "All packed multimodal data must have the same dim_to_pack"
-    dim = dim[0]
-    tensors = [item.tensor for item in packed_multimodal_data]
-
-    # packed batch
-    batch = PackedMultimodalDataBatch(tensors, dim)
-    if return_as_item:
-        return batch.as_packed_multimodal_data_item()
-    return batch
-
-def concat_packed_multimodal_batches(packed_batches: list[PackedMultimodalDataBatch]) -> PackedMultimodalDataBatch:
-    """Concatenate a list of PackedMultimodalDataBatch objects into a single PackedMultimodalDataBatch.
-
-    Each batch must have the same dim_to_pack.
-    """
-    dim_to_packs = [batch.dim_to_pack for batch in packed_batches]
-    assert len(set(dim_to_packs)) == 1, "All packed multimodal data must have the same dim_to_pack"
-    # concatenate the tensors
-    # tensors = [batch.tensor for batch in packed_batches]
-    tensors = []
-    for batch in packed_batches:
-        tensors.extend(batch.tensors)
-    dim_to_pack = dim_to_packs[0]
-    return PackedMultimodalDataBatch(tensors, dim_to_pack)
 
 
 def reroute_processor_model_name_patch(model_name: str) -> str:

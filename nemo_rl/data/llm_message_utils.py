@@ -25,7 +25,7 @@ from nemo_rl.data.interfaces import (
     TaskDataSpec,
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
-from nemo_rl.data.multimodal_utils import PackedMultimodalDataItem, concat_packed_multimodal_items, get_multimodal_keys_from_processor
+from nemo_rl.data.multimodal_utils import PackedGenericDataItem, get_multimodal_keys_from_processor
 
 Tensor = torch.Tensor
 TokenizerType = PreTrainedTokenizerBase
@@ -96,11 +96,13 @@ def message_log_to_flat_messages(
                         f"tensors for {key=} must have same number of dimensions: {[t.shape for t in result[key]]}"
                     ) from e
                 raise
-        elif result[key] and isinstance(result[key][0], PackedMultimodalDataItem):
+        elif result[key] and isinstance(result[key][0], PackedGenericDataItem):
             try:
                 # returning as item because we are probably not going to shard this batch into individual items
-                concat[key] = concat_packed_multimodal_items(result[key], return_as_item=True)  
+                concat[key] = result[key][0].__class__.concat_packed_items(result[key], return_as_item=True)  
             except Exception as e:
+                import traceback
+                traceback.print_exc()
                 raise RuntimeError(f"Error concatenating packed multimodal data for {key=}") from e
 
     output: FlatMessagesType = {**result, **concat}
@@ -325,8 +327,8 @@ def batched_message_log_to_flat_message(
         values = [seq.get(key) for seq in sequenced_lists]
 
         # if the values are packed multimodal data, then concatenate them
-        if values and isinstance(values[0], PackedMultimodalDataItem):
-            result[key] = concat_packed_multimodal_items(values, return_as_item=False)
+        if values and isinstance(values[0], PackedGenericDataItem):
+            result[key] = values[0].__class__.concat_packed_items(values, return_as_item=False)
             continue
         # if not a tensor or DNE, then return the list of values
         if not values or not isinstance(values[0], Tensor):
@@ -504,7 +506,7 @@ def get_formatted_message_log(
             # add all vlm keys to the message
             for key in multimodal_keys:
                 if key in processed_chunk:
-                    new_message[key] = PackedMultimodalDataItem(processed_chunk[key], dim_to_pack=0)
+                    new_message[key] = PackedGenericDataItem(processed_chunk[key], dim_to_pack=0)
 
         if len(new_message["token_ids"]) == 0:
             # if there is an empty message, the empty `token_ids` tensor ends up being in fp32,

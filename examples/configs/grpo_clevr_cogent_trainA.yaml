@@ -76,6 +76,9 @@ policy:
   make_sequence_length_divisible_by: ${policy.dtensor_cfg.tensor_parallel_size}
   max_grad_norm: 1.0
 
+  sequence_packing:
+    enabled: False
+
   optimizer:
     name: "torch.optim.AdamW"
     kwargs:
