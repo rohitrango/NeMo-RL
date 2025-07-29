@@ -26,6 +26,8 @@ math_verify_func = math_metric(
     ),
 )
 
+boxed = lambda x: "\\boxed{" + x + "}" if not x.startswith("\\boxed{") else x
+
 def math_expression_reward(ground_truth: str, response: str) -> tuple[float, bool]:
     '''
     Reward the agent for the following:
@@ -35,9 +37,9 @@ def math_expression_reward(ground_truth: str, response: str) -> tuple[float, boo
     if match:
         answer = match.group(1)
         try:
-            score, _ =  math_verify_func([ground_truth], [answer])
-            return float(score), score > 0.0
-        except Exception:
+            score, _ =  math_verify_func([boxed(ground_truth)], [boxed(answer)])
+            return float(score), score > 0.1
+        except Exception as e:
             return 0.0, False
     return 0.0, False
 
