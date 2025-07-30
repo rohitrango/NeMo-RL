@@ -35,7 +35,10 @@ def calculate_kl_penalty_joschu2020(
     logprobs_reference: torch.Tensor (b, s)
     """
     r = logprobs_reference - logprobs_policy
-    return torch.exp(r) - r - 1
+    ret = torch.exp(r) - r - 1
+    # clamp to avoid numerical instability (torch.exp(r) can blow up quickly)
+    ret = torch.nan_to_num(ret, nan=0.0, posinf=1e5, neginf=-1e5)
+    return ret
 
 
 def calculate_baseline_and_std_per_prompt(
