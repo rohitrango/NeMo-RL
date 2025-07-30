@@ -558,7 +558,6 @@ def grpo_train(
 
             with timer.time("generation"):
                 # Use async rollouts if vLLM async engine is enabled
-
                 if _should_use_async_rollouts(master_config):
                     (
                         repeated_batch,

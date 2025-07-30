@@ -212,7 +212,7 @@ def hf_data_processor(
     output: DatumSpec = {
         "message_log": message_log,
         "length": length,
-        "extra_env_info": extra_env_info,
+        "extra_env_info": extra_env_info,   # contains ground truth for reward calculation
         "loss_multiplier": loss_multiplier,
         "idx": idx,
         "task_name": task_data_spec.task_name,
