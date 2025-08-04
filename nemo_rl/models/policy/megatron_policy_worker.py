@@ -1015,7 +1015,10 @@ class MegatronPolicyWorker:
         ):
             nonlocal pad_full_seq_to
             data_dict = next(data_iterator).to("cuda")
+            multimodal_data = data_dict.get_multimodal_dict(as_tensors=True)
+
             if self.cfg["sequence_packing"]["enabled"]:
+                assert len(multimodal_data) == 0, "Multimodal data not supported for sequence packing"
                 original_seq_length = data_dict["input_ids"].shape[1]
                 tp_size = self.cfg["megatron_cfg"]["tensor_model_parallel_size"]
                 pp_size = self.cfg["megatron_cfg"]["pipeline_model_parallel_size"]
@@ -1052,6 +1055,7 @@ class MegatronPolicyWorker:
                 position_ids,
                 attention_mask,
                 packed_seq_params=packed_seq_params,
+                **multimodal_data,
             )
 
             def collection_fn(output_tensor):

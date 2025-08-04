@@ -296,7 +296,10 @@ def forward_step_arbitrary_loss(
         cu_seqlens = None
         cu_seqlens_padded = None
 
+        multimodal_data = data_dict.get_multimodal_dict(as_tensors=True)
+
         if pack_sequences:
+            assert len(multimodal_data) == 0, "Multimodal data not supported for packed sequences"
             # For packed sequences with padded input, we need sequence lengths
             assert seq_length_key is not None, (
                 "seq_length_key must be provided for packed sequences"
@@ -340,6 +343,7 @@ def forward_step_arbitrary_loss(
             position_ids,
             attention_mask,
             packed_seq_params=packed_seq_params,
+            **multimodal_data,
         )
 
         # Unpack the output tensor if we did packed sequences
