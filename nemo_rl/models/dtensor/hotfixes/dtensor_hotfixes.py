@@ -21,13 +21,13 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForCond
 
 ### QwenVL Hotfixes ###
 def fix_qwen2vl_patch_embed(model: Union[Qwen2VLForConditionalGeneration, Qwen2_5_VLForConditionalGeneration]):
+
     def forward_linear_hotfix(self, x: torch.Tensor):
         w_linear = self.proj.weight.flatten(1)
         return F.linear(x, w_linear)
     # replace the conv3d with linear in the PatchEmbed
     model.visual.patch_embed.forward = forward_linear_hotfix.__get__(model.visual.patch_embed, PatchEmbed)
     return model
-
 
 def apply_dtensor_policy_hotfix(model):
     ### apply hotfixes here ###

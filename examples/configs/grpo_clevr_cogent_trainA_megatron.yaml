@@ -1,5 +1,5 @@
 # GRPO Algorithm Configuration
-defaults: "grpo_clevr_cogent_trainA"
+defaults: "grpo_clevr_cogent_trainA.yaml"
 
 policy:
   megatron_cfg:
