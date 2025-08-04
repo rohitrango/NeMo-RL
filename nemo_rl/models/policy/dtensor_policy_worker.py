@@ -44,6 +44,7 @@ from nemo_rl.models.policy.utils import resolve_model_class
 from nemo_rl.algorithms.interfaces import LossFunction, LossType
 from nemo_rl.algorithms.loss_functions import SequencePackingLossWrapper
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.models.dtensor.hotfixes.dtensor_hotfixes import apply_dtensor_policy_hotfix
 from nemo_rl.models.dtensor.parallelize import (
     _parallelize_model,
     clip_grad_by_total_norm_,
@@ -234,6 +235,8 @@ class DTensorPolicyWorker:
             self.model = AutoModelClass.from_config(
                 model_config,
             )
+        # apply any optional hotfixes here
+        self.model = apply_dtensor_policy_hotfix(self.model)
 
         # freeze parameters by provided regex
         freeze_hf_model_towers(self.model, self.cfg.get("freeze_language_model", False), self.cfg.get("freeze_vision_model", False))

@@ -335,7 +335,8 @@ def main() -> None:
     init_ray()
 
     # setup tokenizer
-    processor = AutoProcessor.from_pretrained(reroute_processor_model_name_patch(config["policy"]["model_name"]), trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(reroute_processor_model_name_patch(config["policy"]["model_name"]), trust_remote_code=True, use_fast=config["policy"]["tokenizer"].get("use_fast", True))
+    print(f"Using tokenizer: {processor.tokenizer} with use_fast: {config['policy']['tokenizer'].get('use_fast', True)}")
     processor = augment_processor_with_chat_template(processor, config['policy']['model_name'])
 
     tokenizer = processor.tokenizer

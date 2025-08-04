@@ -577,8 +577,6 @@ class VllmGenerationWorker:
             )
 
             # understand how logprobs are handled here
-            breakpoint()
-
             output_ids_list.append(full_output)
             full_logprobs = torch.zeros(total_length, dtype=torch.float32)
             if hasattr(generation, "logprobs") and generation.logprobs:
