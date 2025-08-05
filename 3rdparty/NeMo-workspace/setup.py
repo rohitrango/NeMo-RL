@@ -51,5 +51,9 @@ setuptools.setup(
         "scikit-learn",
         "nemo-run",
         "hatchling",
+        "boto3",
+        "zarr>=2.18.2,<3.0.0",
+        "decord",
+        "qwen_vl_utils"   # for qwen model processing
     ],
 )

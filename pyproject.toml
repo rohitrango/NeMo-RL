@@ -49,7 +49,7 @@ dependencies = [
     "pillow>=11.2.1",
     "torchvision>=0.22.0",
     "ipython>=9.4.0",
-    "num2words>=0.5.14",   # for SmolVLM
+    "num2words>=0.5.14", # for SmolVLM
     "mlflow",
 ]
 

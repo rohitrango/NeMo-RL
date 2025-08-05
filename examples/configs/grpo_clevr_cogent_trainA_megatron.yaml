@@ -2,11 +2,12 @@
 defaults: "grpo_clevr_cogent_trainA.yaml"
 
 policy:
+  model_name: "Qwen/Qwen2-VL-7B-Instruct"
   megatron_cfg:
     enabled: true
     empty_unused_memory_level: 0
     activation_checkpointing: false
-    converter_type: "Qwen2_5_VLForConditionalGeneration"
+    converter_type: "Qwen2_VLForConditionalGeneration"
     tensor_model_parallel_size: 1
     expert_tensor_parallel_size: 1
     expert_model_parallel_size: 1
@@ -25,3 +26,6 @@ policy:
 
   dtensor_cfg:
     enabled: false
+  
+cluster:
+  gpus_per_node: 8
