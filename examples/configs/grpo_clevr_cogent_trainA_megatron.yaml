@@ -8,7 +8,7 @@ policy:
     empty_unused_memory_level: 0
     activation_checkpointing: false
     converter_type: "Qwen2_VLForConditionalGeneration"
-    tensor_model_parallel_size: 1
+    tensor_model_parallel_size: 4
     expert_tensor_parallel_size: 1
     expert_model_parallel_size: 1
     pipeline_model_parallel_size: 1

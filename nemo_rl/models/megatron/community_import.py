@@ -65,6 +65,7 @@ def import_model_from_hf_name(hf_model_name: str, output_path: str):
             f"Unknown model type: {hf_config.model_type}. Currently, DeepSeek, Qwen and Llama are supported. "
             "If you'd like to run with a different model, please raise an issue or consider adding your own converter."
         )
+
     importer.apply()
     # resetting mcore state
     import megatron.core.rerun_state_machine
