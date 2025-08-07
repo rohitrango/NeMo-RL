@@ -143,7 +143,6 @@ def save_checkpoint(
     optimizer_path: Optional[str] = None,
     tokenizer: Optional[Any] = None,
     tokenizer_path: Optional[str] = None,
-    processor: Optional[AutoProcessor] = None,
 ) -> None:
     """Save a checkpoint of the model and optionally optimizer state.
 
@@ -155,7 +154,6 @@ def save_checkpoint(
         optimizer_path: Path to save optimizer state (required if optimizer provided)
         tokenizer: Optional tokenizer to save
         tokenizer_path: Path to save tokenizer state (required if tokenizer provided)
-        processor: Optional processor to save
     """
     model_state = {"model": ModelState(model)}
     dcp.save(model_state, checkpoint_id=weights_path)
@@ -173,13 +171,8 @@ def save_checkpoint(
             raise ValueError(
                 "tokenizer_path must be provided when saving tokenizer state"
             )
-
-        if processor is not None:
-            print(f"Saving processor to {tokenizer_path}")
-            processor.save_pretrained(tokenizer_path)
-        else:
-            print(f"Saving tokenizer to {tokenizer_path}")
-            tokenizer.save_pretrained(tokenizer_path)
+        print(f"Saving tokenizer (or processor) to {tokenizer_path}")
+        tokenizer.save_pretrained(tokenizer_path)
 
 
 def load_checkpoint(

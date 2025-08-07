@@ -35,6 +35,7 @@ def mean(value):
     """Return the mean of values in a dictionary."""
     return statistics.mean(float(v) for v in value.values())
 
+
 def evaluate_check(data: dict, check: str) -> tuple[bool, str, object]:
     """Evaluate a check against the data.
 

@@ -36,7 +36,14 @@ from torch.distributed.tensor.experimental import context_parallel
 from torch.distributed.tensor.experimental._attention import (
     set_rotate_method,
 )
-from transformers import AutoTokenizer, AutoProcessor, AutoConfig
+from transformers import (
+    AutoConfig,
+    AutoTokenizer,
+    AutoProcessor,
+    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+)
 from transformers.integrations.accelerate import find_tied_parameters
 from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
 
@@ -63,14 +70,14 @@ from nemo_rl.models.policy.interfaces import (
     ReferenceLogprobOutputSpec,
 )
 from nemo_rl.models.policy.utils import (
+    configure_dynamo_cache,
     configure_expandable_segments,
     get_gpu_info,
+    get_handle_from_tensor,
     get_runtime_env_for_policy_worker,
     import_class_from_path,
     is_vllm_v1_engine_enabled,
     sliding_window_overwrite,
-    freeze_hf_model_by_regex,
-    freeze_hf_model_towers
 )
 from nemo_rl.utils.native_checkpoint import (
     load_checkpoint,
@@ -159,6 +166,10 @@ class DTensorPolicyWorker:
         if not self.is_generation_colocated:
             os.environ["NCCL_CUMEM_ENABLE"] = "1"
 
+        # Disable dynamo autotune_local_cache to avoid crash when there's already a cache
+        # with different order of node_bundles
+        configure_dynamo_cache()
+
         # Only enable expandable_segments on Hopper and newer architectures (compute capability 9.x+)
         configure_expandable_segments()
 
@@ -212,13 +223,44 @@ class DTensorPolicyWorker:
             else None,
         )
 
-        # DO NOT assume AutoModelForCausalLM, multimodal models can inherit from AutoModelForImageTextToText, AutoModelForTextToWaveform, etc.
-        AutoModelClass = resolve_model_class(model_name)
+        # reward model
+        self._is_reward_model = self.cfg.get("reward_model_cfg", {}).get(
+            "enabled", False
+        )
+        if self._is_reward_model:
+            # Ensure sequence packing is disabled.
+            if self.enable_seq_packing:
+                raise NotImplementedError(
+                    "Sequence packing is not supported for reward models"
+                )
+            # Load model as a Reward Model.
+            rm_type = self.cfg["reward_model_cfg"]["reward_model_type"]
+            if rm_type == "bradley_terry":
+                model_class = AutoModelForSequenceClassification
+                if model_config.num_labels != 1:
+                    # For Bradley-Terry reward models, the linear head has a single output.
+                    # In the transformers library, the default setting for model_config.num_labels is 2
+                    # (https://github.com/huggingface/transformers/blob/v4.52.4/src/transformers/configuration_utils.py#L259).
+                    # Since num_labels is used as the out_features for the linear head
+                    # (https://github.com/huggingface/transformers/blob/v4.52.4/src/transformers/models/llama/modeling_llama.py#L738)
+                    # if num_labels is not 1, we set it to 1. This change may trigger a warning that some weights are not initialized
+                    # from the model checkpoint and are instead initialized using model_config.initializer_range
+                    # (https://github.com/huggingface/transformers/blob/v4.52.4/src/transformers/models/llama/configuration_llama.py#L62).
+                    print(
+                        "model_config.num_labels is not 1. Setting it to 1 since this value is used as the out_features "
+                        "for the linear head of Bradley-Terry reward models."
+                    )
+                    model_config.num_labels = 1
+            else:
+                raise ValueError(f"Unknown reward model type: {rm_type}")
+        else:
+            # DO NOT assume AutoModelForCausalLM, multimodal models can inherit from AutoModelForImageTextToText, AutoModelForTextToWaveform, etc.
+            model_class = resolve_model_class(model_config.model_type)
 
         full_state_dict = None
         if self.rank == 0:
             print(f"[Rank {self.rank}] Loading model {model_name} on CPU...")
-            model = AutoModelClass.from_pretrained(
+            model = model_class.from_pretrained(
                 model_name,
                 device_map="cpu",  # load weights onto CPU initially
                 trust_remote_code=True,
@@ -230,17 +272,15 @@ class DTensorPolicyWorker:
         print(f"[Rank {self.rank}] Initializing empty model for FSDP...")
         # All ranks initialize model on meta device, so FSDP can shard it.
         # The actual weights will be broadcast from rank 0.
-
         with init_empty_weights():
-            self.model = AutoModelClass.from_config(
+            self.model = model_class.from_config(
                 model_config,
             )
         # apply any optional hotfixes here
         self.model = apply_dtensor_policy_hotfix(self.model)
 
-        # freeze parameters by provided regex
-        freeze_hf_model_towers(self.model, self.cfg.get("freeze_language_model", False), self.cfg.get("freeze_vision_model", False))
-        freeze_hf_model_by_regex(self.model, self.cfg.get("freeze_param_regex", None))
+        if self.model.config.pad_token_id is None:
+            self.model.config.pad_token_id = tokenizer.pad_token_id
 
         # caching since this property is not always preserved after FSDP
         self.num_tied_weights = len(find_tied_parameters(self.model))
@@ -329,7 +369,7 @@ class DTensorPolicyWorker:
 
         # Handle tied word embeddings after loading the state dict
         # We need to actually tie the parameters at the model level
-        is_tied_lm_head = getattr(
+        is_tied_lm_head = hasattr(self.model, "lm_head") and getattr(
             getattr(self.model, "config", {}), "tie_word_embeddings", False
         )
         if is_tied_lm_head:
@@ -652,13 +692,12 @@ class DTensorPolicyWorker:
 
                         # add vlm kwargs to model call
                         vlm_kwargs = mb.get_multimodal_dict(as_tensors=True, device=input_ids.device)
-                        flash_attn_kwargs_wrap = {}
-                        if len(vlm_kwargs) == 0:
-                            flash_attn_kwargs_wrap['flash_attn_kwargs'] = flash_attn_kwargs
+                        if len(vlm_kwargs) > 0:
+                            position_ids = None
 
                     context_parallel_ctx = None
                     if self.cp_size > 1:
-                        assert len(vlm_kwargs) == 0, "multimodal kwargs are not supported for context parallel"
+                        assert len(vlm_kwargs) == 0, f"multimodal kwargs={vlm_kwargs} are not supported for context parallel"
                         seq_index = torch.arange(
                             seq_len, device=input_ids.device
                         ).repeat(1, 1)
@@ -678,14 +717,26 @@ class DTensorPolicyWorker:
 
                     with DTensorPolicyWorker.train_context(context_parallel_ctx):
                         with torch.autocast(device_type="cuda", dtype=self.dtype):
-                            outputs = self.model(
+                            model_args = dict(
                                 input_ids=input_ids,
                                 attention_mask=attention_mask,
                                 position_ids=position_ids,
                                 use_cache=False,
-                                **flash_attn_kwargs_wrap,
+                                flash_attn_kwargs=flash_attn_kwargs,
                                 **vlm_kwargs,
                             )
+
+                            if self._is_reward_model:
+                                # `flash_attn_kwarg` is not supported for `LlamaForSequenceClassification`.
+                                # Note that it should be empty anyway since sequence packing
+                                # is not supported for reward models.
+                                assert not flash_attn_kwargs
+                                del model_args["flash_attn_kwargs"]
+                            # remove flash_attn_kwargs if there are multimodal kwargs
+                            if len(vlm_kwargs) > 0:
+                                del model_args["flash_attn_kwargs"]
+
+                            outputs = self.model(**model_args)
 
                         # Get logprobs
                         if not hasattr(outputs, "logits"):
@@ -949,13 +1000,11 @@ class DTensorPolicyWorker:
                     attention_mask_input_all_ones = torch.ones(
                         (batch_size, seq_len), dtype=torch.long, device=input_ids.device
                     )
-                
-                # wrap flash_attn_kwargs
-                flash_attn_kwargs_wrap = {
-                }
+
                 # only add flash_attn_kwargs if there are no multimodal kwargs
-                if len(vlm_kwargs) == 0:
-                    flash_attn_kwargs_wrap['flash_attn_kwargs'] = flash_attn_kwargs
+                # if there are multimodal kwargs, we don't need to add position_ids (computed internally)
+                if len(vlm_kwargs) > 0:
+                    position_ids = None
 
                 context_parallel_ctx = None
                 if self.cp_size > 1:
@@ -975,14 +1024,18 @@ class DTensorPolicyWorker:
 
                 with DTensorPolicyWorker.train_context(context_parallel_ctx):
                     with torch.autocast(device_type="cuda", dtype=self.dtype):
-                        outputs = self.model(
+                        model_args = dict(
                             input_ids=input_ids,
                             attention_mask=attention_mask_input_all_ones,
                             position_ids=position_ids,
                             use_cache=False,
-                            **flash_attn_kwargs_wrap,
+                            flash_attn_kwargs=flash_attn_kwargs,
                             **vlm_kwargs,
                         )
+                        if len(vlm_kwargs) > 0:
+                            del model_args["flash_attn_kwargs"]
+
+                        outputs = self.model(**model_args)
 
                     logits = outputs.logits
 
@@ -1226,8 +1279,6 @@ class DTensorPolicyWorker:
 
     @torch.no_grad()
     def get_weights_ipc_handles(self, keys: Iterable[str]) -> dict[str, Any]:
-        from torch.multiprocessing.reductions import reduce_tensor
-
         assert self._held_sharded_state_dict_reference is not None, (
             "prepare_weights_for_ipc must be called before get_weights_ipc_handles"
         )
@@ -1257,7 +1308,7 @@ class DTensorPolicyWorker:
         # Create handles for the tensors
         all_handles = []
         for key, p in converted_params.items():
-            handle = reduce_tensor(p.detach())
+            handle = get_handle_from_tensor(p)
             all_handles.append((key, handle))
 
         # (pack_tensor_for_ipc: bool, handles: list)
@@ -1393,7 +1444,6 @@ class DTensorPolicyWorker:
             optimizer_path=optimizer_path,
             # tokenizer and processor
             tokenizer=self.tokenizer if tokenizer_path else None,
-            processor=self.processor if tokenizer_path else None,
             tokenizer_path=tokenizer_path,
         )
 

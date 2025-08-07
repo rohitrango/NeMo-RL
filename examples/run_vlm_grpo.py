@@ -49,9 +49,8 @@ from nemo_rl.utils.config import load_config, parse_hydra_overrides
 from nemo_rl.utils.logger import get_next_experiment_dir
 from nemo_rl.data.multimodal_utils import PackedMultimodalDataItem, \
     get_multimodal_keys_from_processor,  \
-    reroute_processor_model_name_patch, \
-    augment_processor_with_chat_template, \
     get_dim_to_pack_along
+from nemo_rl.algorithms.utils import get_tokenizer
 
 OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
 
@@ -85,16 +84,16 @@ def resolve_to_image(image_path_or_image: str | Image.Image) -> Image.Image:
         # Handle URL
         response = requests.get(image_path_or_image)
         response.raise_for_status()
-        return Image.open(BytesIO(response.content))
+        return Image.open(BytesIO(response.content)).convert("RGB")
     elif image_path_or_image.startswith("data:"):
         # Handle base64 encoded image
         # Format: data:image/jpeg;base64,/9j/4AAQSkZJRg...
         header, encoded = image_path_or_image.split(",", 1)
         image_data = base64.b64decode(encoded)
-        return Image.open(BytesIO(image_data))
+        return Image.open(BytesIO(image_data)).convert("RGB")
     else:
         # Handle local file path
-        return Image.open(image_path_or_image)
+        return Image.open(image_path_or_image).convert("RGB")
 
 def hf_data_processor(
     datum_dict: dict[str, Any],
@@ -202,12 +201,8 @@ def hf_data_processor(
                 : min(4, max_seq_length // len(message_log))
             ]
         loss_multiplier = 0.0
-
-    # print(f"Sampled output has {len(images)} images...")
-    # print("-"*100)
-    # print(f"vllm_content:")
-    # print(f"String formatted dialog: {string_formatted_dialog}")
-    # print(f"images log: {images}")
+        raise NotImplementedError("Sequence length is too long, please use a shorter sequence length")
+        
 
     output: DatumSpec = {
         "message_log": message_log,
@@ -307,7 +302,7 @@ def main() -> None:
 
     if not args.config:
         args.config = os.path.join(
-            os.path.dirname(__file__), "configs", "grpo_clevr_cogent_trainA.yaml"
+            os.path.dirname(__file__), "configs", "grpo_vlm_3B.yaml"
         )
 
     config = load_config(args.config)
@@ -334,12 +329,10 @@ def main() -> None:
 
     init_ray()
 
-    # setup tokenizer
-    processor = AutoProcessor.from_pretrained(reroute_processor_model_name_patch(config["policy"]["model_name"]), trust_remote_code=True, use_fast=config["policy"]["tokenizer"].get("use_fast", True))
-    print(f"Using tokenizer: {processor.tokenizer} with use_fast: {config['policy']['tokenizer'].get('use_fast', True)}")
-    processor = augment_processor_with_chat_template(processor, config['policy']['model_name'])
-
+    # init processor
+    processor = get_tokenizer(config["policy"]["tokenizer"])
     tokenizer = processor.tokenizer
+
     assert config["policy"]["generation"] is not None, (
         "A generation config is required for GRPO"
     )

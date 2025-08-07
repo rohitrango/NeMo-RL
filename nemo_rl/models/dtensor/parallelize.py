@@ -51,6 +51,15 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 from nemo_rl.distributed.model_utils import dtensor_from_parallel_logits_to_logprobs
 from nemo_rl.models.policy.utils import import_class_from_path
 
+from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLForConditionalGeneration
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
+from transformers.models.llava.modeling_llava import LlavaForConditionalGeneration
+from transformers.models.llava_next.modeling_llava_next import LlavaNextForConditionalGeneration
+from transformers.models.llava_next_video.modeling_llava_next_video import LlavaNextVideoForConditionalGeneration
+from transformers.models.llava_onevision.modeling_llava_onevision import LlavaOnevisionForConditionalGeneration
+from transformers.models.mistral3.modeling_mistral3 import Mistral3ForConditionalGeneration
+from transformers.models.llama4.modeling_llama4 import Llama4ForConditionalGeneration
+from transformers.models.smolvlm.modeling_smolvlm import SmolVLMForConditionalGeneration  
 
 class RotaryEmbedParallel(SequenceParallel):
     """Custom SequenceParallel class for Qwen2 / Gemma3 rotary embeddings because the input is a tuple."""
@@ -288,18 +297,6 @@ def translate_parallel_style(style: str):
         return RowwiseParallel(input_layouts=Replicate())
     elif style == "sequence_parallel":
         return SequenceParallel()
-    # elif style == "local_colwise":
-    #     return HFColwiseParallel(use_dtensor=False)
-    # elif style == "local_rowwise":
-    #     return HFRowwiseParallel(use_dtensor=False)
-    # elif style == "local_packed_rowwise":
-    #     return PackedRowwiseParallel(use_dtensor=False)
-    # elif style == "local_packed_colwise":
-    #     return PackedColwiseParallel(use_dtensor=False)
-    # elif style == "local":
-    #     return IsolatedParallel()
-    # elif style == "gather":
-    #     return GatherParallel()
     else:
         raise ValueError(f"Unknown parallel style: {style}")
 
@@ -324,30 +321,29 @@ def get_hf_tp_plan(model: PreTrainedModel):
         AssertionError: If no TP plan is found
     """
     model_cls = type(model)
-    model_name = model_cls.__name__
     
     # Handle VL models structure
-    if model_name in ["Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration"]:
+    if model_cls in [Qwen2VLForConditionalGeneration, Qwen2_5_VLForConditionalGeneration]:
         inner_model = model.model.language_model
         model_prefix = "model.language_model"
         config = model.model.language_model.config
 
-    elif model_name == "Gemma3ForConditionalGeneration":
+    elif model_cls == Gemma3ForConditionalGeneration:
         inner_model = model.language_model
         model_prefix = "language_model"
         config = model.config.text_config
 
-    elif model_name == "Llama4ForConditionalGeneration":
+    elif model_cls == Llama4ForConditionalGeneration:
         inner_model = model.language_model.model
         model_prefix = "language_model.model"
         config = model.language_model.model.config
     
-    elif model_name in ["LlavaForConditionalGeneration", "LlavaNextForConditionalGeneration", "LlavaNextVideoForConditionalGeneration", "LlavaOnevisionForConditionalGeneration"]:
+    elif model_cls in [LlavaForConditionalGeneration, LlavaNextForConditionalGeneration, LlavaNextVideoForConditionalGeneration, LlavaOnevisionForConditionalGeneration]:
         inner_model = model.model.language_model
         model_prefix = "model.language_model"
         config = model.model.language_model.config
     
-    elif model_name == "Mistral3ForConditionalGeneration":
+    elif model_cls == Mistral3ForConditionalGeneration:
         inner_model = model.model.language_model
         model_prefix = "model.language_model"
         config = model.model.language_model.config
@@ -440,10 +436,10 @@ def _parallelize_model(
         ValueError: If the model type is not supported for parallelization.
     """
     model_cls = type(model)
-    model_name = model_cls.__name__
+    
 
     # Handle different model structures
-    if model_name == "Gemma3ForConditionalGeneration":
+    if model_cls == Gemma3ForConditionalGeneration:
         # layers: torch.nn.ModuleList = model.language_model.layers  # type: ignore
         layers: list = []
         for layer in model.language_model.layers:
@@ -455,7 +451,7 @@ def _parallelize_model(
         num_attention_heads = model.config.text_config.num_attention_heads
         num_key_value_heads = model.config.text_config.num_key_value_heads
 
-    elif model_name in ["Qwen2_5_VLForConditionalGeneration", "Qwen2VLForConditionalGeneration"]:
+    elif model_cls in [Qwen2_5_VLForConditionalGeneration, Qwen2VLForConditionalGeneration]:
         # VL models have the language model at model.language_model
         layers: list = []
         # append language model layers
@@ -468,7 +464,7 @@ def _parallelize_model(
         num_attention_heads = model.language_model.config.num_attention_heads
         num_key_value_heads = model.language_model.config.num_key_value_heads
     
-    elif model_name in ["SmolVLMForConditionalGeneration"]:
+    elif model_cls == SmolVLMForConditionalGeneration:
         layers: list = []
         for layer in model.model.text_model.layers:
             layers.append(layer)
@@ -477,16 +473,7 @@ def _parallelize_model(
         num_attention_heads = model.model.text_model.config.num_attention_heads
         num_key_value_heads = model.model.text_model.config.num_key_value_heads
 
-    elif model_name in ["InternVLForConditionalGeneration"]:
-        layers: list = []
-        for layer in model.language_model.layers:
-            layers.append(layer)
-        for layer in model.vision_tower.encoder.layer:
-            layers.append(layer)
-        num_attention_heads = model.language_model.config.num_attention_heads
-        num_key_value_heads = model.language_model.config.num_key_value_heads
-
-    elif model_name in ["LlavaForConditionalGeneration", "LlavaNextForConditionalGeneration", "LlavaNextVideoForConditionalGeneration", "LlavaOnevisionForConditionalGeneration"]:
+    elif model_cls in [LlavaForConditionalGeneration, LlavaNextForConditionalGeneration, LlavaNextVideoForConditionalGeneration, LlavaOnevisionForConditionalGeneration]:
         layers: list = []
         for layer in model.model.language_model.layers:
             layers.append(layer)
@@ -495,7 +482,7 @@ def _parallelize_model(
         num_attention_heads = model.language_model.config.num_attention_heads
         num_key_value_heads = model.language_model.config.num_key_value_heads
     
-    elif model_name in ["Mistral3ForConditionalGeneration"]:
+    elif model_cls == Mistral3ForConditionalGeneration:
         layers: list = []
         for layer in model.model.language_model.layers:
             layers.append(layer)
@@ -504,20 +491,7 @@ def _parallelize_model(
         num_attention_heads = model.model.language_model.config.num_attention_heads
         num_key_value_heads = model.model.language_model.config.num_key_value_heads
     
-    elif model_name in ["Qwen2_5OmniForConditionalGeneration"]:
-
-        layers: list = []
-        for layer in model.thinker.model.layers:
-            layers.append(layer)
-        for layer in model.thinker.visual.blocks:
-            layers.append(layer)
-        # the model may have a talker
-        if hasattr(model, "talker"):
-            print("talker module found in Qwen2.5-Omni model")
-            for layer in model.talker.model.layers:
-                layers.append(layer)
-    
-    elif model_name in ["Llama4ForConditionalGeneration"]:
+    elif model_cls == Llama4ForConditionalGeneration:
         layers: list = []
         for layer in model.language_model.model.layers:
             layers.append(layer)

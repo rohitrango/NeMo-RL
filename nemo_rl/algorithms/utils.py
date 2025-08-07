@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import random
+import token
 import warnings
 from functools import wraps
 from typing import Optional
@@ -19,6 +20,11 @@ from typing import Optional
 import numpy as np
 import torch
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, AutoProcessor
+
+# hotfix for PixtralImageProcessor
+from transformers import PixtralImageProcessor, PixtralImageProcessorFast
+PixtralImageProcessorFast.model_input_names.append("image_sizes")
+PixtralImageProcessor.model_input_names.append("image_sizes")
 
 from nemo_rl.data import hf_datasets
 from nemo_rl.models.policy import TokenizerConfig
@@ -204,9 +210,7 @@ def get_tokenizer(tokenizer_config: TokenizerConfig, ) -> PreTrainedTokenizerBas
     is_tokenizer_processor = tokenizer_config.get("is_tokenizer_processor", False)
 
     if is_tokenizer_processor:
-        processor = AutoProcessor.from_pretrained(
-            tokenizer_config["name"], trust_remote_code=True
-        )
+        processor = AutoProcessor.from_pretrained(tokenizer_config["name"], trust_remote_code=True, use_fast=True)
         tokenizer = processor.tokenizer
     else:
         tokenizer = AutoTokenizer.from_pretrained(
@@ -229,5 +233,16 @@ def get_tokenizer(tokenizer_config: TokenizerConfig, ) -> PreTrainedTokenizerBas
             tokenizer.chat_template = tokenizer_config["chat_template"]
     else:
         print("No chat template provided, using tokenizer's default")
+    
+    # inherit pad and eos tokens from the tokenizer
+    if processor is not None:
+        processor.pad_token = tokenizer.pad_token
+        processor.eos_token = tokenizer.eos_token
+        processor.bos_token = tokenizer.bos_token
+        processor.pad_token_id = tokenizer.pad_token_id
+        processor.eos_token_id = tokenizer.eos_token_id
+        processor.bos_token_id = tokenizer.bos_token_id
+        # copy name_or_path from tokenizer to processor for logging
+        processor.name_or_path = tokenizer.name_or_path
 
     return tokenizer if processor is None else processor

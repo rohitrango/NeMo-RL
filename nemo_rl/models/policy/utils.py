@@ -27,15 +27,15 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageText
 
 # an automodel factory for loading the huggingface models from correct class
 AUTOMODEL_FACTORY = defaultdict(lambda: AutoModelForCausalLM)
-AUTOMODEL_FACTORY["qwen2.5-vl"] = AutoModelForImageTextToText
-AUTOMODEL_FACTORY["qwen2-vl"] = AutoModelForImageTextToText
-AUTOMODEL_FACTORY["qwen2.5-omni"] = AutoModelForTextToWaveform
+AUTOMODEL_FACTORY["qwen2_5_vl"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["qwen2_vl"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["qwen2_5_omni"] = AutoModelForTextToWaveform
 AUTOMODEL_FACTORY["llava"] = AutoModelForImageTextToText
-AUTOMODEL_FACTORY["internvl3"] = AutoModelForImageTextToText
-AUTOMODEL_FACTORY["gemma-3"] = AutoModelForImageTextToText
-AUTOMODEL_FACTORY["smolvlm2"] = AutoModelForImageTextToText
-AUTOMODEL_FACTORY["mistral-small-3"] = AutoModelForImageTextToText
-AUTOMODEL_FACTORY["llama-4"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["internvl"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["gemma3"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["smolvlm"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["mistral3"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["llama4"] = AutoModelForImageTextToText
 
 def resolve_model_class(model_name: str) -> nn.Module:
     for model_substr in AUTOMODEL_FACTORY.keys():
@@ -161,29 +161,6 @@ def sliding_window_overwrite(model_name: str) -> dict[str, Any]:
 
     return overwrite_dict
 
-def freeze_hf_model_towers(model: nn.Module, freeze_language_model: bool = False, freeze_vision_model: bool = False):
-    # TODO: needs to be updated for different model architectures
-    if freeze_language_model:
-        language_tower_names = ["language_model", "lm_head"]
-        for name, param in model.named_parameters():
-            if any([name.startswith(x) or name.startswith("model." + x) for x in language_tower_names]):
-                param.requires_grad = False
-                print(f"Freezing {name} as part of language model")
-
-    if freeze_vision_model:
-        visual_tower_names = ["vision_model", "vision_tower", "visual", "projection_layer", "multi_modal_projector"]
-        for name, param in model.named_parameters():
-            if any([name.startswith(x) or name.startswith("model." + x) for x in visual_tower_names]):
-                param.requires_grad = False
-                print(f"Freezing {name} as part of vision model")
-
-
-def freeze_hf_model_by_regex(model: nn.Module, regex: Optional[str] = None):
-    if regex is None:
-        return
-    for name, param in model.named_parameters():
-        if re.match(regex, name):
-            param.requires_grad = False
 
 def configure_expandable_segments() -> None:
     """Configure expandable_segments on Hopper and newer architectures (compute capability 9.x+).
@@ -228,6 +205,16 @@ def configure_expandable_segments() -> None:
                         )
 
 
+def configure_dynamo_cache() -> None:
+    """Disable dynamo autotune_local_cache.
+
+    Dynamo may fail at cached_autotune when there's already a cache with different order of node_bundles.
+    Disable autotune_local_cache as a workaround.
+    See https://github.com/pytorch/pytorch/issues/153791 for more details.
+    """
+    torch._inductor.config.autotune_local_cache = False
+
+
 def get_runtime_env_for_policy_worker(policy_worker_name: str) -> dict[str, Any]:
     """Get runtime environment configuration for policy workers.
 
@@ -265,3 +252,11 @@ def get_megatron_checkpoint_dir() -> str:
             )
     print(f"Using default megatron checkpoint dir: {checkpoint_dir}")
     return checkpoint_dir
+
+
+def get_handle_from_tensor(tensor: torch.Tensor) -> tuple[Any]:
+    """Get IPC handle from a tensor."""
+    from torch.multiprocessing.reductions import reduce_tensor
+
+    # skip serializing the function for better refit performance
+    return reduce_tensor(tensor.detach())[1:]

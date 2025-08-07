@@ -1,19 +1,19 @@
 # GRPO Algorithm Configuration
-# inherit from grpo_clevr_cogent_trainA.yaml
+# inherit from grpo-qwen2.5-vl-3b-instruct-clevr-1n2g-dtensor2tp1.v1.yaml
 defaults:
-  - grpo_clevr_cogent_trainA.yaml
+  - grpo-qwen2.5-vl-3b-instruct-clevr-1n2g-dtensor2tp1.v1.yaml
 
 checkpointing:
   enabled: true
-  checkpoint_dir: "results/refcoco_grpo"
+  checkpoint_dir: "results/refcoco_grpo_${policy.model_name}"
   metric_name: "val_reward"
   higher_is_better: true
   keep_top_k: 3
   save_period: 10
 
+policy:
   generation:
     backend: "vllm"
-    # max_new_tokens: ${policy.max_total_sequence_length}
     max_new_tokens: 1024
     temperature: 1.0
     top_p: 1.0
@@ -29,8 +29,6 @@ checkpointing:
       max_model_len: ${policy.max_total_sequence_length}
       enforce_eager: False
     colocated:
-      # true: generation shares training GPUs
-      # false: uses dedicated generation resources
       enabled: true
       # only relevant when enabled is false
       resources:

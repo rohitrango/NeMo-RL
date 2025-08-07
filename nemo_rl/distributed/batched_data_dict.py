@@ -347,7 +347,7 @@ class BatchedDataDict(UserDict, Generic[DictT]):
                 batch_sizes.add(len(val))
 
         assert len(batch_sizes) == 1, (
-            "Batch sizes are not the same across the rollout batch, found sizes: " + "[" + ", ".join(str(size) for size in batch_sizes) + "]"
+            "Batch sizes are not the same across the rollout batch, found sizes: " + f"[{','.join(str(size) for size in batch_sizes)}]"
         )
         total_batch_size = batch_sizes.pop()
         if batch_size is None:

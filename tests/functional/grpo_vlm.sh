@@ -37,7 +37,6 @@ uv run $PROJECT_ROOT/examples/run_vlm_grpo.py \
 
 uv run tests/json_dump_tb_logs.py $LOG_DIR --output_path $JSON_METRICS
 
-# higher values for VLMs (still less than 1.15 -- not sure why though)
 uv run tests/check_metrics.py $JSON_METRICS \
-    'max(data["train/token_mult_prob_error"]) < 1.15' \
-    'mean(data["train/token_mult_prob_error"]) < 1.11'
+    'max(data["train/token_mult_prob_error"]) < 1.05' \
+    'mean(data["train/token_mult_prob_error"]) < 1.05'

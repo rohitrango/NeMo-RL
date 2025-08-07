@@ -81,8 +81,12 @@ def bbox_giou_reward(ground_truth: str, response: str, giou_penalty_thres: float
     else:
         return 0.0, False
 
-    x1g, y1g, x2g, y2g = [float(x) for x in ground_truth.replace("[", "").replace("]", "").split(",")]
-    x1r, y1r, x2r, y2r = [float(x) for x in answer.replace("[", "").replace("]", "").split(",")]
+    try:
+        x1g, y1g, x2g, y2g = [float(x) for x in ground_truth.replace("[", "").replace("]", "").split(",")]
+        x1r, y1r, x2r, y2r = [float(x) for x in answer.replace("[", "").replace("]", "").split(",")]
+    except ValueError:
+        return 0.0, False
+
     # compute iou function
     # compute the area of the ground truth and response bounding boxes
     area_g = (x2g - x1g) * (y2g - y1g)
@@ -108,7 +112,7 @@ def bbox_giou_reward(ground_truth: str, response: str, giou_penalty_thres: float
         # compute the area of the convex hull
         area_c = max(1e-3, (x2c - x1c) * (y2c - y1c))
         # compute the giou
-        giou = iou + (area_c - area_u) / area_c
+        giou = iou - (area_c - area_u) / area_c
     else:
         giou = iou
     return giou, giou > 0.5

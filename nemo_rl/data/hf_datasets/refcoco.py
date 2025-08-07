@@ -117,7 +117,8 @@ def format_refcoco_dataset(example: dict[str, Any], width: int = 448 , height: i
     # resize image for easy image processing across batches
     image = Image.open(example['image_path'])
     orig_width, orig_height = image.size
-    resized_image = image.resize((width, height))
+    # resized_image = image.resize((width, height))
+    resized_image = image
 
     # get caption from many types
     if caption_type == 'random':

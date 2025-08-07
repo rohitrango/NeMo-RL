@@ -211,6 +211,7 @@ class VLMEnvironment(EnvironmentInterface):
             next_stop_strings=next_stop_strings,
             rewards=rewards,
             terminateds=done,
+            answers=None,
         )
 
     def global_post_process_and_metrics(

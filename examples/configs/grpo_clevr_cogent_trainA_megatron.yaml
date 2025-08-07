@@ -1,14 +1,14 @@
 # GRPO Algorithm Configuration
-defaults: "grpo_clevr_cogent_trainA.yaml"
+defaults: "grpo_vlm_3B.yaml"
 
 policy:
   model_name: "Qwen/Qwen2-VL-7B-Instruct"
   megatron_cfg:
     enabled: true
-    empty_unused_memory_level: 0
+    empty_unused_memory_level: 1
     activation_checkpointing: false
     converter_type: "Qwen2_VLForConditionalGeneration"
-    tensor_model_parallel_size: 4
+    tensor_model_parallel_size: 1
     expert_tensor_parallel_size: 1
     expert_model_parallel_size: 1
     pipeline_model_parallel_size: 1
@@ -23,6 +23,46 @@ policy:
     moe_router_bias_update_rate: 0.0 # by default, disable bias updates for grpo
     #gives ~20% training perf speedup with sequence packing 
     apply_rope_fusion: True
+
+    optimizer:
+      optimizer: "adam"
+      lr: 5.0e-7
+      min_lr: 5.0e-8
+      weight_decay: 0.01
+      bf16: true
+      fp16: false
+      params_dtype: "float32"
+
+      #adam
+      adam_beta1: 0.9
+      adam_beta2: 0.999
+      adam_eps: 1e-8
+
+      #sgd
+      sgd_momentum: 0.9
+
+      #distributed optimizer
+      use_distributed_optimizer: true
+      use_precision_aware_optimizer: true
+
+      clip_grad: ${policy.max_grad_norm}
+
+    scheduler:
+      start_weight_decay: ${policy.megatron_cfg.optimizer.weight_decay}
+      end_weight_decay: ${policy.megatron_cfg.optimizer.weight_decay}
+      weight_decay_incr_style: "constant"
+      lr_decay_style: "constant"
+      lr_decay_iters: null
+      lr_warmup_iters: 13
+      lr_warmup_init: 5.0e-7
+
+    distributed_data_parallel_config:
+      grad_reduce_in_fp32: false
+      overlap_grad_reduce: true
+      overlap_param_gather: true
+      average_in_collective: true
+      use_custom_fsdp: false
+      data_parallel_sharding_strategy: "optim_grads_params"
 
   dtensor_cfg:
     enabled: false

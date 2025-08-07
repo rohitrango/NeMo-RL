@@ -91,7 +91,7 @@ def prepare_clevr_cogent_dataset(split: str = "trainA", seed: int = 42, task_nam
         tr_dataset = load_dataset("MMInstruction/Clevr_CoGenT_TrainA_70K_Complex")['train']
         val_dataset = load_dataset("MMInstruction/Clevr_CoGenT_ValA")['train']
     elif split == "trainB":
-        tr_dataset = load_dataset("MMInstruction/Clevr_CoGenT_TrainB_70K_Complex")['train']
+        tr_dataset = load_dataset("MMInstruction/Clevr_CoGenT_TrainA_70K_Complex")['train']
         val_dataset = load_dataset("MMInstruction/Clevr_CoGenT_ValB")['train']
     elif split == "valA":
         tr_dataset = load_dataset("MMInstruction/Clevr_CoGenT_ValA")['train']
