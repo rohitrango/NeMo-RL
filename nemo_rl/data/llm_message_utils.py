@@ -521,14 +521,19 @@ def get_formatted_message_log(
         else:
             # extend the else statement to add other modalities (in this case, tokenizer will be a processor)
             processed_chunk = tokenizer(
-                text=[message_chunk], images=images_cur_message, return_tensors="pt", add_special_tokens=False
+                text=message_chunk, images=images_cur_message, return_tensors="pt", add_special_tokens=False
             )
             new_message["token_ids"] = processed_chunk["input_ids"][0]
+
+            # gemma3 specific: add token_type_ids
+            if 'token_type_ids' in processed_chunk:
+                new_message['token_type_ids'] = processed_chunk['token_type_ids'][0]
 
             # add all vlm keys to the message
             for key in multimodal_keys:
                 if key in processed_chunk:
                     new_message[key] = PackedGenericDataItem(processed_chunk[key], dim_to_pack=0)
+        
 
         if len(new_message["token_ids"]) == 0:
             # if there is an empty message, the empty `token_ids` tensor ends up being in fp32,

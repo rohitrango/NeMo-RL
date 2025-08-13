@@ -52,6 +52,7 @@ def format_clevr_cogent_dataset(example: dict[str, Any], return_pil: bool = Fals
     """
     Format the CLEVR-CoGenT dataset into an OpenAI-API-like message log.
     """
+    example['image'] = example['image'].convert("RGB")
     user_content = [
         {
             "type": "image",
@@ -73,7 +74,10 @@ def format_clevr_cogent_dataset(example: dict[str, Any], return_pil: bool = Fals
             },
             {
                 "role": "assistant", 
-                "content": assistant_content,
+                "content": [{
+                    "type": "text",
+                    "text": assistant_content,
+                }],
             },
         ],
         "task_name": "clevr-cogent",
