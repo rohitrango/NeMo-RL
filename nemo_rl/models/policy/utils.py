@@ -31,6 +31,7 @@ AUTOMODEL_FACTORY["qwen2_5_vl"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["qwen2_vl"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["qwen2_5_omni"] = AutoModelForTextToWaveform
 AUTOMODEL_FACTORY["llava"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["llava_next"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["internvl"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["gemma3"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["smolvlm"] = AutoModelForImageTextToText
