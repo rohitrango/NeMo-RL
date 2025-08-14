@@ -29,7 +29,6 @@ PixtralImageProcessor.model_input_names.append("image_sizes")
 from nemo_rl.data import hf_datasets
 from nemo_rl.models.policy import TokenizerConfig
 
-
 def calculate_kl_penalty_joschu2020(
     logprobs_policy: torch.Tensor, logprobs_reference: torch.Tensor, clamp_value: Optional[float] = 20.0
 ) -> torch.Tensor:
@@ -44,7 +43,6 @@ def calculate_kl_penalty_joschu2020(
     if clamp_value is not None:
         r = r.clamp(min=-clamp_value, max=clamp_value)
     return torch.exp(r) - r - 1
-
 
 def calculate_baseline_and_std_per_prompt(
     prompts: torch.Tensor,

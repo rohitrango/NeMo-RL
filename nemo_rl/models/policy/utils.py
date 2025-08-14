@@ -23,7 +23,7 @@ import torch
 from torch import nn
 from nemo_rl.distributed.worker_group_utils import get_nsight_config_if_pattern_matches
 
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForTextToWaveform
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForTextToWaveform, AutoModel
 
 # an automodel factory for loading the huggingface models from correct class
 AUTOMODEL_FACTORY = defaultdict(lambda: AutoModelForCausalLM)
@@ -33,12 +33,13 @@ AUTOMODEL_FACTORY["qwen2_5_omni"] = AutoModelForTextToWaveform
 AUTOMODEL_FACTORY["llava"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["llava_next"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["llava_next_video"] = AutoModelForImageTextToText
-AUTOMODEL_FACTORY["internvl"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["gemma3"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["smolvlm"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["mistral3"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["llama4"] = AutoModelForImageTextToText
 AUTOMODEL_FACTORY["mllama"] = AutoModelForImageTextToText
+AUTOMODEL_FACTORY["internvl_chat"] = AutoModel
+AUTOMODEL_FACTORY["kimi_vl"] = AutoModel
 
 def resolve_model_class(model_name: str) -> nn.Module:
     if model_name.lower() in AUTOMODEL_FACTORY.keys():
