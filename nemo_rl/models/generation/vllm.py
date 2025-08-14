@@ -478,12 +478,21 @@ class VllmGenerationWorker:
                 prompt_dict = {
                     'prompt': msg
                 }
+                
                 # add additional data if present
                 images = data.get('vllm_images', None)
+                videos = data.get('vllm_videos', None)
+                if images is not None or videos is not None:
+                    prompt_dict['multi_modal_data'] = {}
+                # add images
                 if images is not None:
-                    prompt_dict['multi_modal_data'] = {
-                        'image': images[i][0] if len(images[i]) == 1 else images[i]
-                    }
+                    image_i = images[i]
+                    if image_i is not None:
+                        prompt_dict['multi_modal_data']['image'] = image_i[0] if len(image_i) == 1 else image_i
+                if videos is not None:
+                    video_i = videos[i]
+                    if video_i is not None:
+                        prompt_dict['multi_modal_data']['video'] = video_i[0] if len(video_i) == 1 else video_i
                 prompts.append(prompt_dict)
         else:
             # Regular LLM generation using token_ids

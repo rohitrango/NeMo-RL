@@ -397,6 +397,23 @@ def _should_use_async_rollouts(master_config: MasterConfig) -> bool:
     vllm_cfg = generation_config.get("vllm_cfg", {})
     return vllm_cfg.get("async_engine", False)
 
+def exclude_multimodal_data(content: list[list[dict[str, Any]]]) -> list[list[dict[str, Any]]]:
+    """Exclude multimodal data from the content."""
+    new_content = []
+    for conversation in content:
+        new_conversation = []
+        for message in conversation:
+            # this message is a conversation (either string or a list of dicts)
+            if isinstance(message, str):
+                new_conversation.append(message)
+            elif isinstance(message, list):
+                text = ", ".join([item["text"] for item in message if item["type"] == "text"])
+                new_conversation.append(text)
+            else:
+                raise ValueError(f"Unsupported message type: {type(message)}")
+        new_content.append(new_conversation)
+    return new_content
+
 
 def refit_policy_generation(
     policy: ColocatablePolicyInterface,
@@ -763,7 +780,7 @@ def grpo_train(
 
         # Logging
         # Log training data
-        log_data = {"content": flat_messages["content"]}
+        log_data = {"content": exclude_multimodal_data(flat_messages["content"])}
         log_data["rewards"] = rewards.tolist()
         log_data["generation_logprobs"] = train_data["generation_logprobs"].tolist()
         log_data["prev_logprobs"] = train_data["prev_logprobs"].tolist()

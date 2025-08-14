@@ -155,6 +155,14 @@ env:
         weight: 0.9
         kwargs: 
           giou_penalty_thres: 0  # (apply giou penalty if iou < giou_penalty_thres; anything less than 0 means use iou only (since the condition iou < 0 is not possible))
+  cosmos-r1-reason:
+    num_workers: 8
+    reward_functions:
+      - name: format
+        weight: 0.1
+      - name: exact_alnum
+        weight: 0.9
+
 
 logger:
   log_dir: "logs"  # Base directory for all logs

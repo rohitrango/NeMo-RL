@@ -1,0 +1,5 @@
+Think step-by-step about the robotic task shown in the video and the overall goal. Analyze the options carefully and select the most appropriate next subtask. Think step-by-step to solve the following problem, and answer in the following format: <think> step-by-step thought process </think> <answer> final answer </answer>
+Your final answer must be exactly one letter corresponding to the correct option.
+
+Think step-by-step:
+{}

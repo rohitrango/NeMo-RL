@@ -50,6 +50,9 @@ dependencies = [
     "torchvision>=0.22.0",
     "num2words>=0.5.14",   # for SmolVLM
     "mlflow",
+    "decord", 
+    "sentencepiece",
+    "timm",
 ]
 
 [project.optional-dependencies]

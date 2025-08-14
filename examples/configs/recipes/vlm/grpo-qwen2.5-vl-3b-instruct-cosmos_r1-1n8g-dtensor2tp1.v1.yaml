@@ -1,0 +1,45 @@
+# GRPO Algorithm Configuration
+# inherit from grpo-qwen2.5-vl-3b-instruct-clevr-1n2g-dtensor2tp1.v1.yaml
+defaults:
+  - grpo-qwen2.5-vl-3b-instruct-clevr-1n2g-dtensor2tp1.v1.yaml
+
+grpo:
+  num_prompts_per_step: 2
+  num_generations_per_prompt: 8
+
+checkpointing:
+  checkpoint_dir: "results/cosmos_r1_grpo_${policy.model_name}" 
+  keep_top_k: 3
+  save_period: 10
+
+policy:
+  train_global_batch_size: 8
+  logprob_batch_size: 1
+
+  max_total_sequence_length: 8192
+  generation:
+    backend: "vllm"
+    max_new_tokens: 512
+    temperature: 1.0
+    top_p: 1.0
+    top_k: null
+    stop_token_ids: null
+    stop_strings: null
+    vllm_cfg:
+      async_engine: false # Only for internal testing, will be enabled by https://github.com/NVIDIA/NeMo-RL/issues/447.
+      precision: ${policy.precision}
+      tensor_parallel_size: 1
+      pipeline_parallel_size: 1
+      gpu_memory_utilization: 0.6
+      max_model_len: ${policy.max_total_sequence_length}
+      enforce_eager: false
+
+data:
+  dataset_name: "cosmos-r1-reason"
+  task_name: "cosmos-r1-reason"   # must match the task_name in the dataset
+  prompt_file: "examples/prompts/cosmos_r1_reason.txt"
+  split: "default"
+  video_root_dir: "/data/cosmos_videos"
+
+cluster:
+  gpus_per_node: 8

@@ -33,6 +33,7 @@ from nemo_rl.environments.vlm_environment import VLMEnvironment
 from nemo_rl.data.hf_datasets.clevr import CLEVRCoGenTDataset, format_clevr_cogent_dataset
 from nemo_rl.data.hf_datasets.geometry3k import Geometry3KDataset, format_geometry3k_dataset
 from nemo_rl.data.hf_datasets.refcoco import RefCOCODataset, format_refcoco_dataset
+from nemo_rl.data.hf_datasets.cosmos_r1 import CosmosR1ReasonDataset, format_cosmos_r1_reason_dataset
 from nemo_rl.data.interfaces import (
     DatumSpec,
     LLMMessageLogType,
@@ -111,6 +112,8 @@ def hf_data_processor(
         datum_dict = format_refcoco_dataset(datum_dict)
     elif task_data_spec.task_name == "geometry3k":
         datum_dict = format_geometry3k_dataset(datum_dict)
+    elif task_data_spec.task_name == "cosmos-r1-reason":
+        datum_dict = format_cosmos_r1_reason_dataset(datum_dict)
     else:
         raise ValueError(f"No data processor for task {task_data_spec.task_name}")
 
@@ -126,6 +129,8 @@ def hf_data_processor(
     }
     # 
     images = []
+    videos = []
+    fps = []
     if isinstance(problem, list):
         for content in problem:
             # for image, video, just append it
@@ -134,6 +139,9 @@ def hf_data_processor(
                 user_message["content"].append(content)
                 if content["type"] == "image":
                     images.append(content["image"])
+                elif content["type"] == "video":
+                    videos.append(content["video"])
+                    fps.append(content["fps"])
                 else:
                     raise ValueError(f"Unsupported content type: {content['type']}")
             elif content["type"] == "text":
@@ -145,8 +153,11 @@ def hf_data_processor(
         # conversation consists of a text-only message
         user_message["content"] = task_data_spec.prompt.format(problem)
     
+    # resolve images
     images = [resolve_to_image(image) for image in images]
-
+    # set to none if no images or videos
+    images = None if len(images) == 0 else images
+    videos = None if len(videos) == 0 else videos
     # get formatted user message
     if hasattr(processor, 'conversation_preprocessor'):
         user_message_for_chat_template = processor.conversation_preprocessor(user_message)
@@ -175,7 +186,7 @@ def hf_data_processor(
         # some processors (Phi-4) do not support apply_chat_template with tokenize=True, in these cases we have to use the 
         # __call__ function directly
         # on need to add generation prompt here, string formatted dialog is already the prompt
-        message: dict = processor(text=string_formatted_dialog, images=images, return_tensors="pt")
+        message: dict = processor(text=string_formatted_dialog, images=images, videos=videos, return_tensors="pt")
 
     # add this for backward compatibility
     user_message['token_ids'] = message['input_ids'][0]
@@ -201,7 +212,7 @@ def hf_data_processor(
                 : min(4, max_seq_length // len(message_log))
             ]
         loss_multiplier = 0.0
-        raise NotImplementedError("Sequence length is too long, please use a shorter sequence length")
+        raise NotImplementedError(f"Sequence length is too long ({length} > {max_seq_length}), please use a shorter sequence length")
         
 
     output: DatumSpec = {
@@ -215,6 +226,7 @@ def hf_data_processor(
         # add images for vllm serving
         'vllm_content': string_formatted_dialog,
         'vllm_images': images,
+        'vllm_videos': videos,
     }
     return output
 
@@ -253,6 +265,8 @@ def setup_data(
         data: Any = RefCOCODataset(split=data_config['split'], seed=data_config['seed'], task_name=data_config['task_name'], path_to_coco_images=data_config.get('path_to_coco_images', None))
     elif data_config['dataset_name'] == 'geometry3k':
         data: Any = Geometry3KDataset(split=data_config['split'], task_name=data_config['task_name'])
+    elif data_config['dataset_name'] == 'cosmos-r1-reason':
+        data: Any = CosmosR1ReasonDataset(split=data_config['split'], prompt_file=data_config["prompt_file"], video_root_dir=data_config["video_root_dir"], task_name=data_config['task_name'])
     else:
         raise ValueError(f"No processor for dataset {data_config['dataset_name']}.")
 
