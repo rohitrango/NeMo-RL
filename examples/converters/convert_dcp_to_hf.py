@@ -36,6 +36,9 @@ def parse_args():
     parser.add_argument(
         "--hf-ckpt-path", type=str, default=None, help="Path to save HF checkpoint"
     )
+    parser.add_argument(
+        "--save-processor", action="store_true", help="Save processor"
+    )
     # Parse known args for the script
     args = parser.parse_args()
 
@@ -63,6 +66,7 @@ def main():
         hf_ckpt_path=args.hf_ckpt_path,
         model_name_or_path=model_name_or_path,
         tokenizer_name_or_path=tokenizer_name_or_path,
+        save_processor=args.save_processor,
     )
     print(f"Saved HF checkpoint to: {hf_ckpt}")
 

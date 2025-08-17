@@ -33,6 +33,7 @@ from nemo_rl.environments.rewards import (
     bbox_giou_reward,
     combine_reward_functions,
     exact_answer_alphanumeric_reward,
+    exact_answer_alphanumeric_reward_maybe,
     format_reward,
     math_expression_reward,
 )
@@ -72,6 +73,8 @@ class VLMVerifyWorker:
                 reward_func = format_reward
             elif reward_func_name == "exact_alnum":
                 reward_func = exact_answer_alphanumeric_reward
+            elif reward_func_name == "exact_alnum_maybe":
+                reward_func = exact_answer_alphanumeric_reward_maybe
             elif reward_func_name == "math_expr":
                 reward_func = math_expression_reward
             elif reward_func_name == "bbox_giou":
@@ -144,6 +147,7 @@ class VLMEnvironment(EnvironmentInterface):
         self,
         message_log_batch: list[list[dict[str, str]]],
         metadata: list[VLMEnvironmentMetadata],
+        return_extracted_answer: bool = False,
     ) -> EnvironmentReturn:
         """Runs a step in the vlm environment.
 

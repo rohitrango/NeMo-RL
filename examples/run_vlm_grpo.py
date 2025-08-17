@@ -122,7 +122,7 @@ def hf_data_processor(
         datum_dict = format_geometry3k_dataset(datum_dict)
     else:
         raise ValueError(f"No data processor for task {task_data_spec.task_name}")
-
+    
     user_message = datum_dict["messages"]
     problem = user_message[0]["content"]
     extra_env_info = {"ground_truth": user_message[1]["content"]}

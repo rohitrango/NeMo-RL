@@ -27,7 +27,7 @@ from torch.distributed.checkpoint.state_dict import (
     set_optimizer_state_dict,
 )
 from torch.distributed.checkpoint.stateful import Stateful
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer, AutoProcessor
 
 
 ## modified from pytorch tutorial https://pytorch.org/tutorials/recipes/distributed_checkpoint_recipe.html
@@ -211,6 +211,7 @@ def convert_dcp_to_hf(
     model_name_or_path: str,
     tokenizer_name_or_path: str,
     overwrite: bool = False,
+    save_processor: bool = False,
 ) -> str:
     """Convert a Torch DCP checkpoint to a Hugging Face checkpoint.
 
@@ -256,9 +257,17 @@ def convert_dcp_to_hf(
     # We can expose a arg at the top level --tokenizer_path to plumb that through.
     # This is more stable than relying on the current NeMo-RL get_tokenizer() which can
     # change release to release.
-    tokenizer = AutoTokenizer.from_pretrained(
-        tokenizer_name_or_path, trust_remote_code=True
-    )
-    tokenizer.save_pretrained(hf_ckpt_path)
+    if save_processor:
+        processor = AutoProcessor.from_pretrained(
+            tokenizer_name_or_path, trust_remote_code=True
+        )
+        processor.save_pretrained(hf_ckpt_path)
+
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_name_or_path, trust_remote_code=True
+        )
+        tokenizer.save_pretrained(hf_ckpt_path)
+
 
     return hf_ckpt_path

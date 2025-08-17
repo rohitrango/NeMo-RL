@@ -66,6 +66,7 @@ def setup(
     master_config: MasterConfig,
     tokenizer: AutoTokenizer,
     dataset: AllTaskProcessedDataset,
+    existing_vllm: VllmGeneration | None = None,
 ) -> tuple[
     VllmGeneration,
     DataLoader,
@@ -145,10 +146,13 @@ def setup(
     assert backend == "vllm", "Only vLLM backend is supported for evaluation"
 
     # initialize vllm generation
-    vllm_generation = VllmGeneration(cluster=cluster, config=generation_config)
-    print(
-        f"  ✓ Using vLLM backend for generation with {generation_config['model_name']}"
-    )
+    if existing_vllm is None:
+        vllm_generation = VllmGeneration(cluster=cluster, config=generation_config)
+        print(
+            f"  ✓ Using vLLM backend for generation with {generation_config['model_name']}"
+        )
+    else:
+        vllm_generation = existing_vllm
 
     print("\n" + "=" * 60)
     print(" " * 18 + "SETUP COMPLETE")
@@ -314,13 +318,24 @@ async def _run_env_eval_impl(
         # measure multiple samples
         if num_tests_per_prompt > 1:
             batch = batch.repeat_interleave(num_tests_per_prompt)
-
+        
         # get input prompt from message_log
         prompts = []
-        for message_log in batch["message_log"]:
-            content = [message["content"] for message in message_log]
-            content = "\n".join(content)
-            prompts.append(content)
+        if 'vllm_content' in batch:
+            print("Detected multimodal content")
+            for prompt_text, images in zip(batch['vllm_content'], batch['vllm_images']):
+                prompt = {
+                    'prompt': prompt_text,
+                    'multi_modal_data': {
+                        'image': images
+                    }
+                }
+                prompts.append(prompt)
+        else:
+            for message_log in batch["message_log"]:
+                content = [message["content"] for message in message_log]
+                content = "\n".join(content)
+                prompts.append(content)
 
         # generate by vllm
         inputs = BatchedDataDict({"prompts": prompts})
@@ -341,7 +356,7 @@ async def _run_env_eval_impl(
             for i in range(len(batch["message_log"]))
         ]
 
-        env_return = ray.get(env.step.remote(to_env, batch["extra_env_info"], True))
+        env_return = ray.get(env.step.remote(to_env, batch["extra_env_info"], False))
         rewards = env_return.rewards
 
         # Collect data for JSON file
@@ -483,6 +498,10 @@ def _print_results(
 ):
     """Print evaluation results."""
     dataset_name = os.path.basename(master_config["data"]["dataset_name"])
+    try:
+        dataset_split = master_config["data"]["split"]
+    except:
+        dataset_split = "unknown"
     model_name = os.path.basename(generation_config["model_name"])
     max_new_tokens = generation_config["vllm_cfg"]["max_model_len"]
     temperature = generation_config["temperature"]
@@ -491,7 +510,7 @@ def _print_results(
     average_score = score / dataset_size
 
     print("\n" + "=" * 60)
-    print(f"{model_name=} {dataset_name=}")
+    print(f"{model_name=} {dataset_name=} {dataset_split=}")
     print(f"{max_new_tokens=} {temperature=} {top_p=} {top_k=}\n")
     print(f"metric={metric[:-1]}{k_value} {num_tests_per_prompt=}\n")
     print(f"score={average_score:.4f} ({score}/{dataset_size})")

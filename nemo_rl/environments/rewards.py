@@ -84,6 +84,27 @@ def exact_answer_alphanumeric_reward(
             return 1.0, True
     return 0.0, False
 
+def exact_answer_alphanumeric_reward_maybe(
+    ground_truth: str, response: str, answer_tag: Optional[str] = "answer"
+) -> tuple[float, bool]:
+    """Reward the agent when the answer within the <{answer_tag}> tags is the same as the ground truth (case-insensitive).
+
+    The `answer_tag` is customizable and must be specified as part of the user COT prompt text file.
+    """
+    match = re.search(rf"<{answer_tag}>([\s\S]*)</{answer_tag}>", response)
+    # SFT
+    if not match:
+        match = re.search(r"([\s\S]*)", response)
+
+    if match:
+        answer = match.group(1)
+        # Remove all non-alphanumeric characters (including whitespace, punctuation, etc.)
+        answer_clean = "".join(c for c in answer if c.isalnum()).lower()
+        ground_truth_clean = "".join(c for c in ground_truth if c.isalnum()).lower()
+        if answer_clean == ground_truth_clean:
+            return 1.0, True
+    return 0.0, False
+
 
 def bbox_giou_reward(
     ground_truth: str,

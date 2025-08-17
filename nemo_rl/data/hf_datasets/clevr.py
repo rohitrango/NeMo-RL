@@ -52,6 +52,18 @@ def format_clevr_cogent_dataset(
     example: dict[str, Any], return_pil: bool = False
 ) -> dict[str, Any]:
     """Format the CLEVR-CoGenT dataset into an OpenAI-API-like message log."""
+    def format_question_andsee_true_or_false(question: str) -> tuple[str, bool]:
+        if "True or False." in question:
+            question = question.replace("True or False.", "")
+            return question, True
+        return question, False
+    
+    def format_answer_true_or_false(answer: str, true_or_false: bool) -> str:
+        if not true_or_false:
+            return answer
+        return "yes" if answer.lower() == "true" else "no"
+
+    problem, true_or_false = format_question_andsee_true_or_false(example["problem"])
     user_content = [
         {
             "type": "image",
@@ -61,11 +73,12 @@ def format_clevr_cogent_dataset(
         },
         {
             "type": "text",
-            "text": str(example["problem"]),
+            "text": problem,
         },
     ]
 
     assistant_content = format_answer_fromtags(str(example["solution"]))
+    assistant_content = format_answer_true_or_false(assistant_content, true_or_false)
 
     ret = {
         "messages": [
@@ -103,10 +116,27 @@ def prepare_clevr_cogent_dataset(
     elif split == "valB":
         tr_dataset = load_dataset("MMInstruction/Clevr_CoGenT_ValB")["train"]
         val_dataset = load_dataset("MMInstruction/Clevr_CoGenT_ValB")["train"]
+    elif split == 'superclevr':
+        tr_dataset = load_dataset("MMInstruction/SuperClevr_Val")['train']
+        val_dataset = load_dataset("MMInstruction/SuperClevr_Val")['train']
+    else:
+        raise ValueError(f"Invalid split: {split}.")
 
     # format - disable features to avoid schema conflicts
     tr_dataset = tr_dataset.add_column("task_name", [task_name] * len(tr_dataset))
     val_dataset = val_dataset.add_column("task_name", [task_name] * len(val_dataset))
+
+    # filter examples where assistant content is a number or yes/no
+    def is_valid_answer(answer: str) -> bool:
+        answer = format_answer_fromtags(answer)
+        trimmed_content = answer.strip().lower()
+        if trimmed_content in {"yes", "no", "true", "false"} or trimmed_content.isdigit():
+            return True
+        return False
+
+    tr_dataset = tr_dataset.filter(lambda x: is_valid_answer(x["solution"]))
+    val_dataset = val_dataset.filter(lambda x: is_valid_answer(x["solution"]))
+    print(f"Filtered {len(tr_dataset)} training examples and {len(val_dataset)} validation examples")
 
     return {
         "train": tr_dataset,
@@ -130,11 +160,6 @@ class CLEVRCoGenTDataset:
             prompt_file: The file containing the prompt for the dataset.
             task_name: The name of the task.
         """
-        if split not in ["trainA", "trainB", "valA", "valB"]:
-            raise ValueError(
-                f"Invalid split: {split}. Please use 'trainA', 'trainB', 'valA', or 'valB'."
-            )
-
         self.formatted_ds = prepare_clevr_cogent_dataset(
             split=split, seed=seed, task_name=task_name
         )
