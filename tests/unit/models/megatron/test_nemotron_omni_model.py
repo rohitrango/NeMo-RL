@@ -154,7 +154,7 @@ def _forward(model):
         seq_length_key="input_lengths",
         pad_individual_seqs_to_multiple_of=4,
         pack_sequences=True,
-        delegate_pack_to_model=True,
+        model_slices_context_parallel_inputs=True,
     )
     output = model(
         input_ids=processed.input_ids_cp_sharded,

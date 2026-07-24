@@ -617,7 +617,7 @@ def vlm_hf_data_processor(
     # Current Nemotron Omni processors emit imgs_sizes. Historical MMPR
     # checkpoints instead emit a batch of fixed-size image tiles and only
     # declare pixel_values. Treat each tile as one dynamic-resolution image so
-    # the model-owned path can patchify it and preserve the processor's exact
+    # the Nemotron Omni path can patchify it and preserve the processor's exact
     # placeholder count.
     if (
         _uses_image_placeholder

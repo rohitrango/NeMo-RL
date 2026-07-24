@@ -17,6 +17,9 @@ from dataclasses import dataclass
 from typing import Any, Iterator, Optional, Tuple
 
 import torch
+from megatron.bridge.training.utils.packed_seq_utils import (
+    get_packed_seq_cp_partition_indices,
+)
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.parallel_state import (
     get_context_parallel_rank,
@@ -59,7 +62,8 @@ class ProcessedMicrobatch:
     Attributes:
         data_dict: The original BatchedDataDict containing raw batch data
         input_ids: Processed input token IDs (may be packed for sequence packing)
-        input_ids_cp_sharded: Context-parallel sharded input token IDs
+        input_ids_cp_sharded: Model-forward token IDs. Usually CP-sharded; models
+            that insert media before CP selection receive the full packed THD row.
         attention_mask: Attention mask tensor (None for packed sequences)
         position_ids: Position IDs tensor (None for packed sequences)
         packed_seq_params: PackedSeqParams for sequence packing (None if not packing)
@@ -92,6 +96,7 @@ def make_processed_microbatch_iterator(
     pad_full_seq_to: Optional[int],
     delegate_pack_to_model: bool = False,
     delegate_mtp_loss_mask_to_model: bool = False,
+    model_slices_context_parallel_inputs: bool = False,
 ) -> Iterator[ProcessedMicrobatch]:
     """Wrap a raw microbatch iterator to yield processed microbatches.
 
@@ -126,6 +131,7 @@ def make_processed_microbatch_iterator(
             pack_sequences=pack_sequences,
             delegate_pack_to_model=delegate_pack_to_model,
             delegate_mtp_loss_mask_to_model=delegate_mtp_loss_mask_to_model,
+            model_slices_context_parallel_inputs=model_slices_context_parallel_inputs,
             straggler_timer=straggler_timer,
         )
 
@@ -151,6 +157,7 @@ def get_microbatch_iterator(
     seq_length_key: Optional[str] = None,
     delegate_pack_to_model: bool = False,
     delegate_mtp_loss_mask_to_model: bool = False,
+    model_slices_context_parallel_inputs: bool = False,
 ) -> Tuple[Iterator[ProcessedMicrobatch], int, int, int, int]:
     """Create a processed microbatch iterator from a batch of data.
 
@@ -216,6 +223,7 @@ def get_microbatch_iterator(
         straggler_timer=straggler_timer,
         delegate_pack_to_model=delegate_pack_to_model,
         delegate_mtp_loss_mask_to_model=delegate_mtp_loss_mask_to_model,
+        model_slices_context_parallel_inputs=model_slices_context_parallel_inputs,
     )
 
     # Compute padded sequence length for pipeline parallelism
@@ -251,6 +259,7 @@ def process_microbatch(
     pack_sequences: bool = False,
     delegate_pack_to_model: bool = False,
     delegate_mtp_loss_mask_to_model: bool = False,
+    model_slices_context_parallel_inputs: bool = False,
     straggler_timer: Optional[StragglerDetector] = None,
 ) -> ProcessedInputs:
     """Process a microbatch for Megatron model forward pass."""
@@ -264,6 +273,7 @@ def process_microbatch(
             data_dict["routed_experts"] if "routed_experts" in data_dict else None
         )
         token_identity_cp_sharded = None
+        cp_partition_indices = None
         if routed_experts is not None and routed_experts.dim() != 4:
             raise ValueError(
                 "routed_experts must have shape [batch, seq, num_moe_layers, topk] "
@@ -345,6 +355,14 @@ def process_microbatch(
                     )
                 position_ids = None
             else:
+                if (
+                    model_slices_context_parallel_inputs
+                    and "mtp_loss_mask" in data_dict
+                ):
+                    raise NotImplementedError(
+                        "Nemotron Omni caller-packed THD inputs do not yet support MTP. "
+                        "Disable MTP for the Nano image/text path."
+                    )
                 token_identity = None
                 if routed_experts is not None and r3_trace_verify_forward_enabled():
                     token_identity = _make_r3_trace_token_identity(
@@ -354,7 +372,7 @@ def process_microbatch(
                 # Pack sequences on main's per-sequence zigzag CP layout.
                 (
                     input_ids,
-                    input_ids_cp_sharded,
+                    local_input_ids,
                     packed_seq_params,
                     cu_seqlens,
                     cu_seqlens_padded,
@@ -367,6 +385,38 @@ def process_microbatch(
                     cp_rank=get_context_parallel_rank(),
                     cp_size=get_context_parallel_world_size(),
                 )
+                if model_slices_context_parallel_inputs:
+                    packed_seq_params = PackedSeqParams(
+                        cu_seqlens_q=cu_seqlens,
+                        cu_seqlens_kv=cu_seqlens,
+                        cu_seqlens_q_padded=cu_seqlens_padded,
+                        cu_seqlens_kv_padded=cu_seqlens_padded,
+                        max_seqlen_q=int(
+                            (cu_seqlens_padded[1:] - cu_seqlens_padded[:-1])
+                            .max()
+                            .item()
+                        ),
+                        max_seqlen_kv=int(
+                            (cu_seqlens_padded[1:] - cu_seqlens_padded[:-1])
+                            .max()
+                            .item()
+                        ),
+                        qkv_format="thd",
+                        total_tokens=input_ids.shape[1],
+                    )
+                    cp_partition_indices = get_packed_seq_cp_partition_indices(
+                        packed_seq_params,
+                        total_tokens=input_ids.shape[1],
+                        cp_size=get_context_parallel_world_size(),
+                        cp_rank=get_context_parallel_rank(),
+                        device=input_ids.device,
+                    )
+                    # This field is the model-forward input. For this capability
+                    # the model needs the full THD row so it can insert media
+                    # before selecting its CP-owned embeddings.
+                    input_ids_cp_sharded = input_ids
+                else:
+                    input_ids_cp_sharded = local_input_ids
                 # routed_experts and the R3 trace token identity ride the SAME
                 # per-seq zigzag CP sharding as input_ids, re-derived from
                 # cu_seqlens_padded.
@@ -385,6 +435,16 @@ def process_microbatch(
                         get_context_parallel_rank(),
                         get_context_parallel_world_size(),
                     )
+                    if model_slices_context_parallel_inputs:
+                        routed_experts_cp_sharded = routed_experts.index_select(
+                            1, cp_partition_indices
+                        ).contiguous()
+                        if _token_identity_packed is not None:
+                            token_identity_cp_sharded = (
+                                _token_identity_packed.index_select(
+                                    1, cp_partition_indices
+                                ).contiguous()
+                            )
                 if (
                     routed_experts_cp_sharded is not None
                     and routed_experts_cp_sharded.dim() != 4
@@ -397,14 +457,22 @@ def process_microbatch(
                 verified_token_count = _verify_r3_trace_cp_token_alignment(
                     source_input_ids=data_dict["input_ids"],
                     source_routed_experts=data_dict.get("routed_experts"),
-                    input_ids_cp_sharded=input_ids_cp_sharded,
+                    input_ids_cp_sharded=(
+                        local_input_ids
+                        if model_slices_context_parallel_inputs
+                        else input_ids_cp_sharded
+                    ),
                     routed_experts_cp_sharded=routed_experts_cp_sharded,
                     token_identity_cp_sharded=token_identity_cp_sharded,
                 )
                 trace_cp_routed_experts(
                     routed_experts_cp_sharded=routed_experts_cp_sharded,
                     token_identity_cp_sharded=token_identity_cp_sharded,
-                    input_ids_cp_sharded=input_ids_cp_sharded,
+                    input_ids_cp_sharded=(
+                        local_input_ids
+                        if model_slices_context_parallel_inputs
+                        else input_ids_cp_sharded
+                    ),
                     cp_token_identity_verified_count=verified_token_count,
                     cp_rank=get_context_parallel_rank(),
                     cp_size=get_context_parallel_world_size(),

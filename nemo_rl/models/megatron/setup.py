@@ -424,7 +424,7 @@ def _validate_nemotron_omni_megatron_lm_layout(
     Raw ``megatron_lm`` checkpoints have no Bridge ``run_config.yaml`` in which
     to persist the versioned model contract. Their tensor namespace is therefore
     the only reliable way to distinguish the old LLaVA wrapper from the canonical
-    model-owned-packing implementation.
+    expanded-sequence implementation.
     """
     architectures = set(getattr(hf_config, "architectures", None) or ())
     if not architectures.intersection(_NEMOTRON_OMNI_ARCHITECTURES):
@@ -443,7 +443,8 @@ def _validate_nemotron_omni_megatron_lm_layout(
     raise RuntimeError(
         "Cannot load this Nemotron Omni megatron_lm checkpoint as NemotronOmniModel: "
         "its tensor namespace contains the legacy 'llava_model' wrapper "
-        f"({examples}). In this branch NemotronOmniModel uses model-owned packing and a "
+        f"({examples}). In this branch NemotronOmniModel consumes caller-packed, "
+        "expanded sequences and uses a "
         "different top-level checkpoint layout. Reconvert the original HF checkpoint with "
         "this branch, or use the explicit NemotronOmniLlavaModelProvider/"
         "NemotronOmniLlavaBridge with the compatible legacy Megatron-LM pin."

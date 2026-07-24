@@ -166,6 +166,47 @@ def _model_self_packs_mtp_loss_mask(model: Any) -> bool:
     )
 
 
+def _model_slices_context_parallel_inputs(model: Any) -> bool:
+    """Whether every model chunk expects a full THD row and slices CP after embedding."""
+    from megatron.core import parallel_state
+    from megatron.core.utils import unwrap_model
+
+    unwrapped = unwrap_model(model)
+    chunks = unwrapped if isinstance(unwrapped, (list, tuple)) else [unwrapped]
+    capabilities = [
+        bool(getattr(chunk, "model_slices_context_parallel_inputs", False))
+        for chunk in chunks
+    ]
+    if any(capabilities) and not all(capabilities):
+        raise RuntimeError(
+            "All pipeline model chunks must agree on "
+            "model_slices_context_parallel_inputs."
+        )
+    local_capability = all(capabilities)
+    if (
+        torch.distributed.is_initialized()
+        and parallel_state.model_parallel_is_initialized()
+    ):
+        group = parallel_state.get_model_parallel_group()
+        capability_min = torch.tensor(
+            int(local_capability), dtype=torch.int32, device="cuda"
+        )
+        capability_max = capability_min.clone()
+        torch.distributed.all_reduce(
+            capability_min, op=torch.distributed.ReduceOp.MIN, group=group
+        )
+        torch.distributed.all_reduce(
+            capability_max, op=torch.distributed.ReduceOp.MAX, group=group
+        )
+        if capability_min.item() != capability_max.item():
+            raise RuntimeError(
+                "All model-parallel ranks must agree on "
+                "model_slices_context_parallel_inputs."
+            )
+        return bool(capability_max.item())
+    return local_capability
+
+
 def _estimate_refit_tensor_size_in_bytes(
     param: torch.Tensor,
     *,
@@ -542,6 +583,35 @@ class MegatronPolicyWorkerImpl(
         assert (
             not self.delegate_mtp_loss_mask_to_model or self.delegate_pack_to_model
         ), "A model cannot own MTP-mask packing without owning sequence packing"
+        self.model_slices_context_parallel_inputs = (
+            _model_slices_context_parallel_inputs(self.model)
+        )
+        if self.model_slices_context_parallel_inputs:
+            if self.delegate_pack_to_model:
+                raise RuntimeError(
+                    "A model cannot both own sequence packing and consume caller-packed "
+                    "full THD inputs."
+                )
+            model_config = self._get_model_config()
+            mtp_num_layers = getattr(model_config, "mtp_num_layers", None)
+            if mtp_num_layers is not None and mtp_num_layers > 0:
+                raise NotImplementedError(
+                    "Nemotron Omni caller-packed THD inputs do not yet support MTP. "
+                    "Disable MTP for the Nano image/text path."
+                )
+            if self.cfg["megatron_cfg"].get("use_fused_linear_logprobs", False):
+                raise NotImplementedError(
+                    "Nemotron Omni caller-packed THD inputs do not support "
+                    "use_fused_linear_logprobs=true."
+                )
+            virtual_pipeline_size = self.cfg["megatron_cfg"].get(
+                "virtual_pipeline_model_parallel_size"
+            )
+            if virtual_pipeline_size not in (None, 1):
+                raise NotImplementedError(
+                    "Nemotron Omni caller-packed THD inputs do not yet support "
+                    "virtual pipeline parallelism."
+                )
 
         # vars used for refit
         ## will be initialized in prepare_refit_info
@@ -745,6 +815,7 @@ class MegatronPolicyWorkerImpl(
                     straggler_timer=self.mcore_state.straggler_timer,
                     delegate_pack_to_model=self.delegate_pack_to_model,
                     delegate_mtp_loss_mask_to_model=self.delegate_mtp_loss_mask_to_model,
+                    model_slices_context_parallel_inputs=self.model_slices_context_parallel_inputs,
                 )
                 # Track total microbatches for MoE aux-loss averaging
                 total_num_microbatches += int(num_microbatches)
@@ -1565,6 +1636,7 @@ class MegatronPolicyWorkerImpl(
             straggler_timer=self.mcore_state.straggler_timer,
             delegate_pack_to_model=self.delegate_pack_to_model,
             delegate_mtp_loss_mask_to_model=self.delegate_mtp_loss_mask_to_model,
+            model_slices_context_parallel_inputs=self.model_slices_context_parallel_inputs,
         )
 
         use_fused_linear_logprobs = self.cfg["megatron_cfg"].get(
@@ -1783,6 +1855,7 @@ class MegatronPolicyWorkerImpl(
             straggler_timer=self.mcore_state.straggler_timer,
             delegate_pack_to_model=self.delegate_pack_to_model,
             delegate_mtp_loss_mask_to_model=self.delegate_mtp_loss_mask_to_model,
+            model_slices_context_parallel_inputs=self.model_slices_context_parallel_inputs,
         )
 
         list_of_outputs = megatron_forward_backward(

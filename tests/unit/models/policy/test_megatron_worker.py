@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -74,6 +75,46 @@ def test_regular_model_does_not_delegate_packing():
     )
 
     assert not _model_self_packs_for_cp(object())
+
+
+def test_model_cp_slicing_capability_is_detected():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        _model_slices_context_parallel_inputs,
+    )
+
+    class ModelSlicesContextParallelInputs:
+        model_slices_context_parallel_inputs = True
+
+    assert _model_slices_context_parallel_inputs(ModelSlicesContextParallelInputs())
+    assert not _model_slices_context_parallel_inputs(object())
+
+
+def test_model_cp_slicing_rejects_mixed_local_pipeline_chunks():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        _model_slices_context_parallel_inputs,
+    )
+
+    with pytest.raises(RuntimeError, match="All pipeline model chunks must agree"):
+        _model_slices_context_parallel_inputs(
+            [
+                SimpleNamespace(model_slices_context_parallel_inputs=True),
+                SimpleNamespace(model_slices_context_parallel_inputs=False),
+            ]
+        )
+
+
+def test_model_cp_slicing_rejects_transfer_queue_setup():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.model_slices_context_parallel_inputs = True
+
+    with pytest.raises(
+        NotImplementedError, match="TransferQueue/SingleController does not yet support"
+    ):
+        worker.setup_data_plane(MagicMock())
 
 
 def test_refit_size_estimate_preserves_integral_buffer_dtype():
