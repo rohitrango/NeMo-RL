@@ -30,10 +30,16 @@ from megatron.core import dist_checkpointing, parallel_state
 from megatron.core.distributed import DistributedDataParallelConfig
 from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
 
+from nemo_rl.data.multimodal_utils import PackedTensor
+from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.model_utils import (
     from_parallel_logits_to_logprobs_packed_sequences,
 )
-from nemo_rl.models.megatron.data import process_microbatch
+from nemo_rl.models.megatron.data import get_microbatch_iterator, process_microbatch
+from nemo_rl.models.megatron.train import (
+    LogprobsPostProcessor,
+    megatron_forward_backward,
+)
 
 pytestmark = pytest.mark.mcore
 
@@ -99,6 +105,7 @@ class _TinyOmniProvider(NemotronOmniModelProvider):
 def _build_distributed_model(
     *,
     tensor_parallel_size: int = 1,
+    pipeline_parallel_size: int = 1,
     context_parallel_size: int = 2,
     sequence_parallel: bool = False,
 ):
@@ -106,7 +113,7 @@ def _build_distributed_model(
         parallel_state.destroy_model_parallel()
     parallel_state.initialize_model_parallel(
         tensor_model_parallel_size=tensor_parallel_size,
-        pipeline_model_parallel_size=1,
+        pipeline_model_parallel_size=pipeline_parallel_size,
         context_parallel_size=context_parallel_size,
     )
     torch.manual_seed(123)
@@ -115,8 +122,10 @@ def _build_distributed_model(
     provider = _TinyOmniProvider(
         freeze_language_model=True,
         tensor_model_parallel_size=tensor_parallel_size,
+        pipeline_model_parallel_size=pipeline_parallel_size,
         context_parallel_size=context_parallel_size,
         sequence_parallel=sequence_parallel,
+        hybrid_layer_pattern="|".join("M" for _ in range(pipeline_parallel_size)),
     )
     provider.finalize()
     models = provider.provide_distributed_model(
@@ -355,3 +364,83 @@ def test_nemotron_omni_parallel_forward_and_logprob_contract(
         context_parallel_size=context_parallel_size,
     )
     distributed_test_runner(test_fn, world_size=world_size)
+
+
+def _run_pipeline_forward_contract(rank: int, world_size: int) -> None:
+    assert world_size == 2
+    model = _build_distributed_model(
+        pipeline_parallel_size=2,
+        context_parallel_size=1,
+    )
+    model.eval()
+
+    device = torch.device("cuda", torch.cuda.current_device())
+    input_ids, lengths, images, image_sizes = _expanded_fixture(device)
+    data = BatchedDataDict(
+        {
+            "input_ids": input_ids,
+            "input_lengths": lengths,
+            "pixel_values": PackedTensor(
+                [images[0:1], images[1:2]],
+                dim_to_pack=0,
+            ),
+            "imgs_sizes": PackedTensor(
+                [image_sizes[0:1], image_sizes[1:2]],
+                dim_to_pack=0,
+            ),
+        }
+    )
+    data.micro_batch_indices = [[[0, 2]]]
+    data.micro_batch_lengths = [[int(lengths.sum().item())]]
+    cfg = {
+        "dynamic_batching": {"enabled": False},
+        "sequence_packing": {"enabled": True},
+        "make_sequence_length_divisible_by": 1,
+        "megatron_cfg": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 2,
+            "context_parallel_size": 1,
+            "sequence_parallel": False,
+        },
+    }
+    (
+        data_iterator,
+        num_microbatches,
+        micro_batch_size,
+        _,
+        padded_seq_length,
+    ) = get_microbatch_iterator(
+        data,
+        cfg,
+        mbs=2,
+        straggler_timer=None,
+        model_slices_context_parallel_inputs=True,
+    )
+
+    results = megatron_forward_backward(
+        model=model,
+        data_iterator=data_iterator,
+        num_microbatches=num_microbatches,
+        seq_length=padded_seq_length,
+        mbs=micro_batch_size,
+        post_processing_fn=LogprobsPostProcessor(cfg),
+        forward_only=True,
+    )
+
+    if parallel_state.is_pipeline_last_stage():
+        assert len(results) == num_microbatches
+        for result in results:
+            assert torch.isfinite(result["logprobs"]).all()
+            assert result["logprobs"].shape == input_ids.shape
+    else:
+        assert results == []
+
+    del model
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.distributed.barrier()
+    parallel_state.destroy_model_parallel()
+
+
+def test_nemotron_omni_pp2_scheduled_forward_contract(distributed_test_runner):
+    distributed_test_runner(_run_pipeline_forward_contract, world_size=2)
