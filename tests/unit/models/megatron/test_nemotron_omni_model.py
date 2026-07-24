@@ -96,22 +96,27 @@ class _TinyOmniProvider(NemotronOmniModelProvider):
         return vision_cfg
 
 
-def _build_distributed_model():
+def _build_distributed_model(
+    *,
+    tensor_parallel_size: int = 1,
+    context_parallel_size: int = 2,
+    sequence_parallel: bool = False,
+):
     if parallel_state.model_parallel_is_initialized():
         parallel_state.destroy_model_parallel()
     parallel_state.initialize_model_parallel(
-        tensor_model_parallel_size=1,
+        tensor_model_parallel_size=tensor_parallel_size,
         pipeline_model_parallel_size=1,
-        context_parallel_size=2,
+        context_parallel_size=context_parallel_size,
     )
     torch.manual_seed(123)
     model_parallel_cuda_manual_seed(123)
 
     provider = _TinyOmniProvider(
         freeze_language_model=True,
-        tensor_model_parallel_size=1,
-        context_parallel_size=2,
-        sequence_parallel=False,
+        tensor_model_parallel_size=tensor_parallel_size,
+        context_parallel_size=context_parallel_size,
+        sequence_parallel=sequence_parallel,
     )
     provider.finalize()
     models = provider.provide_distributed_model(
@@ -168,8 +173,10 @@ def _forward(model):
         target=processed.input_ids,
         cu_seqlens_padded=processed.cu_seqlens_padded,
         unpacked_seqlen=input_ids.shape[1],
-        vocab_start_index=0,
-        vocab_end_index=output.shape[-1],
+        vocab_start_index=parallel_state.get_tensor_model_parallel_rank()
+        * output.shape[-1],
+        vocab_end_index=(parallel_state.get_tensor_model_parallel_rank() + 1)
+        * output.shape[-1],
         group=parallel_state.get_tensor_model_parallel_group(),
         inference_only=False,
         cp_group=parallel_state.get_context_parallel_group(),
@@ -178,7 +185,7 @@ def _forward(model):
         0
     ) < (lengths - 1).unsqueeze(1)
     loss = -(logprobs * prediction_mask).sum() / prediction_mask.sum()
-    return loss, output
+    return loss, output, logprobs
 
 
 def _run_training_checkpoint_roundtrip(
@@ -192,7 +199,7 @@ def _run_training_checkpoint_roundtrip(
     model.train()
     model.zero_grad_buffer()
 
-    loss, output = _forward(model)
+    loss, output, _ = _forward(model)
     loss.backward()
     model.finish_grad_sync()
 
@@ -229,7 +236,7 @@ def _run_training_checkpoint_roundtrip(
 
     model.eval()
     with torch.no_grad():
-        _, post_update_output = _forward(model)
+        _, post_update_output, _ = _forward(model)
     post_update_output = post_update_output.detach().clone()
 
     metadata = {
@@ -265,7 +272,7 @@ def _run_training_checkpoint_roundtrip(
             restored_parameters[name], original_parameters[name], rtol=0, atol=0
         )
     with torch.no_grad():
-        _, restored_output = _forward(restored_model)
+        _, restored_output, _ = _forward(restored_model)
     torch.testing.assert_close(restored_output, post_update_output, rtol=0, atol=0)
 
     if rank == 0:
@@ -293,3 +300,58 @@ def test_nemotron_omni_cp2_training_and_checkpoint_roundtrip(
         checkpoint_dir=str(tmp_path / "nemotron_omni_cp2_dcp"),
     )
     distributed_test_runner(test_fn, world_size=2)
+
+
+def _run_parallel_forward_contract(
+    rank: int,
+    world_size: int,
+    *,
+    tensor_parallel_size: int,
+    context_parallel_size: int,
+) -> None:
+    assert world_size == tensor_parallel_size * context_parallel_size
+    model = _build_distributed_model(
+        tensor_parallel_size=tensor_parallel_size,
+        context_parallel_size=context_parallel_size,
+        sequence_parallel=True,
+    )
+    model.eval()
+
+    with torch.no_grad():
+        loss, output, logprobs = _forward(model)
+
+    assert torch.isfinite(loss)
+    assert torch.isfinite(output).all()
+    assert torch.isfinite(logprobs).all()
+    assert logprobs.shape == (2, 7)
+
+    reference = logprobs.clone()
+    torch.distributed.broadcast(reference, src=0)
+    torch.testing.assert_close(logprobs, reference, rtol=0, atol=0)
+
+    del model, output, logprobs
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.distributed.barrier()
+    parallel_state.destroy_model_parallel()
+
+
+@pytest.mark.parametrize(
+    ("tensor_parallel_size", "context_parallel_size", "world_size"),
+    [
+        pytest.param(2, 1, 2, id="tp2-sp"),
+        pytest.param(2, 2, 4, id="tp2-cp2-sp"),
+    ],
+)
+def test_nemotron_omni_parallel_forward_and_logprob_contract(
+    distributed_test_runner,
+    tensor_parallel_size,
+    context_parallel_size,
+    world_size,
+):
+    test_fn = functools.partial(
+        _run_parallel_forward_contract,
+        tensor_parallel_size=tensor_parallel_size,
+        context_parallel_size=context_parallel_size,
+    )
+    distributed_test_runner(test_fn, world_size=world_size)
