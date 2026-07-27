@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib.util
+import threading
 from pathlib import Path
 
 from nemo_rl.models.generation.vllm import patches
@@ -30,7 +32,9 @@ class _Logger:
 
 
 def _stock_sampling_params_source() -> str:
-    return """import copy
+    return """from __future__ import annotations
+
+import copy
 import json as json_mod
 from dataclasses import field
 
@@ -81,7 +85,35 @@ class SamplingParams:
 """
 
 
-def test_bad_words_patch_adds_bounded_thread_safe_cache(tmp_path, monkeypatch):
+def _load_module(path: Path):
+    spec = importlib.util.spec_from_file_location("patched_sampling_params", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _CountingTokenizer:
+    max_token_id = 10000
+
+    def __init__(self):
+        self.calls = 0
+        self._lock = threading.Lock()
+
+    def encode(self, *, text, add_special_tokens):
+        assert add_special_tokens is False
+        with self._lock:
+            self.calls += 1
+        return [len(text), sum(map(ord, text)) % self.max_token_id]
+
+
+def _sampling_params(module, bad_words):
+    value = module.SamplingParams()
+    value.bad_words = bad_words
+    return value
+
+
+def test_bad_words_patch_cache_is_shared_bounded_and_thread_safe(tmp_path, monkeypatch):
     sampling_params = tmp_path / "sampling_params.py"
     sampling_params.write_text(_stock_sampling_params_source())
     monkeypatch.setattr(patches, "_get_vllm_file", lambda _: str(sampling_params))
@@ -96,6 +128,45 @@ def test_bad_words_patch_adds_bounded_thread_safe_cache(tmp_path, monkeypatch):
     assert "def _tokenize_bad_words" in patched
     assert "return bad_words_token_ids" in patched
     assert not logger.warning_messages
+
+    module = _load_module(sampling_params)
+    tokenizer = _CountingTokenizer()
+    results = []
+    errors = []
+    start = threading.Barrier(8)
+
+    def update_from_tokenizer():
+        try:
+            value = _sampling_params(module, ["<image>", "<img>"])
+            start.wait()
+            value.update_from_tokenizer(tokenizer)
+            results.append(value._bad_words_token_ids)
+        except Exception as error:
+            errors.append(error)
+
+    threads = [threading.Thread(target=update_from_tokenizer) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    assert len(results) == 8
+    assert all(result == results[0] for result in results)
+    assert tokenizer.calls == 4
+    assert len(module._BAD_WORDS_TOKEN_IDS_CACHE) == 1
+
+    module._BAD_WORDS_TOKEN_IDS_CACHE.clear()
+    for index in range(module._BAD_WORDS_TOKEN_IDS_CACHE_MAX_ENTRIES + 1):
+        value = _sampling_params(module, [f"word-{index}"])
+        value.update_from_tokenizer(tokenizer)
+    assert (
+        0
+        < len(module._BAD_WORDS_TOKEN_IDS_CACHE)
+        <= module._BAD_WORDS_TOKEN_IDS_CACHE_MAX_ENTRIES
+    )
+    assert (id(tokenizer), ("word-0",)) not in module._BAD_WORDS_TOKEN_IDS_CACHE
+    assert (id(tokenizer), ("word-1024",)) in module._BAD_WORDS_TOKEN_IDS_CACHE
 
     patches._patch_vllm_bad_words_tokenization_cache(logger)
     assert sampling_params.read_text() == patched
