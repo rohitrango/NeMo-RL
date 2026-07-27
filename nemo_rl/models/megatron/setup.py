@@ -72,6 +72,7 @@ _NEMOTRON_OMNI_ARCHITECTURES = {
     "NemotronH_Nano_Omni_Reasoning_V3",
     "NemotronH_Super_Omni_Reasoning_V3",
 }
+_NEMOTRON_OMNI_EXPANDED_SEQUENCE_CONTRACT = "expanded_sequence_v1"
 
 
 def _patch_hf_config_double_instantiation():
@@ -970,9 +971,26 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
     model_cfg.use_fused_weighted_squared_relu = config["megatron_cfg"][
         "use_fused_weighted_squared_relu"
     ]
-    # Optional explicit attention backend override for environments where
-    # TE auto backend probing is unstable.
+    # NeMo-RL can pack multiple expanded Omni examples into one THD tensor.
+    # Flash attention does not support the resulting padded multi-row layout,
+    # so the canonical expanded-sequence contract must use backend dispatch.
     attention_backend = config["megatron_cfg"].get("attention_backend")
+    if (
+        getattr(model_cfg, "nemotron_omni_contract", None)
+        == _NEMOTRON_OMNI_EXPANDED_SEQUENCE_CONTRACT
+    ):
+        if attention_backend == "flash":
+            raise ValueError(
+                "Nemotron Omni's expanded-sequence contract does not support "
+                "attention_backend='flash' in NeMo-RL because packed batches can "
+                "contain multiple padded THD rows. Use attention_backend='auto' "
+                "or omit the setting."
+            )
+        if attention_backend is None:
+            attention_backend = "auto"
+
+    # Optional explicit attention backend override for other models, and the
+    # required auto selection for canonical Nemotron Omni.
     if attention_backend is not None:
         for _nvte_var in ("NVTE_FUSED_ATTN", "NVTE_FLASH_ATTN", "NVTE_UNFUSED_ATTN"):
             os.environ.pop(_nvte_var, None)

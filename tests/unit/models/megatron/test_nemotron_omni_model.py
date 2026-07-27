@@ -29,6 +29,7 @@ from megatron.bridge.models.nemotron_omni.nemotron_omni_provider import (
 from megatron.core import dist_checkpointing, parallel_state
 from megatron.core.distributed import DistributedDataParallelConfig
 from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
+from megatron.core.transformer.enums import AttnBackend
 
 from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
@@ -108,6 +109,8 @@ def _build_distributed_model(
     pipeline_parallel_size: int = 1,
     context_parallel_size: int = 2,
     sequence_parallel: bool = False,
+    language_layer_pattern: str = "M",
+    attention_backend: AttnBackend | None = None,
 ):
     if parallel_state.model_parallel_is_initialized():
         parallel_state.destroy_model_parallel()
@@ -119,13 +122,20 @@ def _build_distributed_model(
     torch.manual_seed(123)
     model_parallel_cuda_manual_seed(123)
 
+    provider_kwargs = {
+        "freeze_language_model": True,
+        "tensor_model_parallel_size": tensor_parallel_size,
+        "pipeline_model_parallel_size": pipeline_parallel_size,
+        "context_parallel_size": context_parallel_size,
+        "sequence_parallel": sequence_parallel,
+        "hybrid_layer_pattern": "|".join(
+            language_layer_pattern for _ in range(pipeline_parallel_size)
+        ),
+    }
+    if attention_backend is not None:
+        provider_kwargs["attention_backend"] = attention_backend
     provider = _TinyOmniProvider(
-        freeze_language_model=True,
-        tensor_model_parallel_size=tensor_parallel_size,
-        pipeline_model_parallel_size=pipeline_parallel_size,
-        context_parallel_size=context_parallel_size,
-        sequence_parallel=sequence_parallel,
-        hybrid_layer_pattern="|".join("M" for _ in range(pipeline_parallel_size)),
+        **provider_kwargs,
     )
     provider.finalize()
     models = provider.provide_distributed_model(
@@ -194,7 +204,7 @@ def _forward(model):
         0
     ) < (lengths - 1).unsqueeze(1)
     loss = -(logprobs * prediction_mask).sum() / prediction_mask.sum()
-    return loss, output, logprobs
+    return loss, output, logprobs, processed
 
 
 def _run_training_checkpoint_roundtrip(
@@ -208,7 +218,7 @@ def _run_training_checkpoint_roundtrip(
     model.train()
     model.zero_grad_buffer()
 
-    loss, output, _ = _forward(model)
+    loss, output, _, _ = _forward(model)
     loss.backward()
     model.finish_grad_sync()
 
@@ -245,7 +255,7 @@ def _run_training_checkpoint_roundtrip(
 
     model.eval()
     with torch.no_grad():
-        _, post_update_output, _ = _forward(model)
+        _, post_update_output, _, _ = _forward(model)
     post_update_output = post_update_output.detach().clone()
 
     metadata = {
@@ -281,7 +291,7 @@ def _run_training_checkpoint_roundtrip(
             restored_parameters[name], original_parameters[name], rtol=0, atol=0
         )
     with torch.no_grad():
-        _, restored_output, _ = _forward(restored_model)
+        _, restored_output, _, _ = _forward(restored_model)
     torch.testing.assert_close(restored_output, post_update_output, rtol=0, atol=0)
 
     if rank == 0:
@@ -327,7 +337,7 @@ def _run_parallel_forward_contract(
     model.eval()
 
     with torch.no_grad():
-        loss, output, logprobs = _forward(model)
+        loss, output, logprobs, _ = _forward(model)
 
     assert torch.isfinite(loss)
     assert torch.isfinite(output).all()
@@ -364,6 +374,60 @@ def test_nemotron_omni_parallel_forward_and_logprob_contract(
         context_parallel_size=context_parallel_size,
     )
     distributed_test_runner(test_fn, world_size=world_size)
+
+
+def _run_padded_multirow_attention_contract(rank: int, world_size: int) -> None:
+    assert world_size == 2
+    for variable in ("NVTE_FUSED_ATTN", "NVTE_FLASH_ATTN", "NVTE_UNFUSED_ATTN"):
+        os.environ.pop(variable, None)
+    model = _build_distributed_model(
+        context_parallel_size=2,
+        language_layer_pattern="*",
+        attention_backend=AttnBackend.auto,
+    )
+    model.train()
+    model.zero_grad_buffer()
+
+    loss, output, logprobs, processed = _forward(model)
+    packed_seq_params = processed.packed_seq_params
+    assert packed_seq_params.qkv_format == "thd"
+    torch.testing.assert_close(
+        packed_seq_params.cu_seqlens_q,
+        torch.tensor([0, 7, 12], dtype=torch.int32, device=output.device),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        packed_seq_params.cu_seqlens_q_padded,
+        torch.tensor([0, 8, 16], dtype=torch.int32, device=output.device),
+        rtol=0,
+        atol=0,
+    )
+    assert torch.isfinite(loss)
+    assert torch.isfinite(output).all()
+    assert torch.isfinite(logprobs).all()
+
+    loss.backward()
+    model.finish_grad_sync()
+    trainable_gradients = [
+        parameter.main_grad
+        for parameter in model.module.parameters()
+        if parameter.requires_grad and hasattr(parameter, "main_grad")
+    ]
+    assert trainable_gradients
+    assert all(torch.isfinite(gradient).all() for gradient in trainable_gradients)
+
+    del model, output, logprobs
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.distributed.barrier()
+    parallel_state.destroy_model_parallel()
+
+
+def test_nemotron_omni_padded_multirow_attention_forward_backward(
+    distributed_test_runner,
+):
+    distributed_test_runner(_run_padded_multirow_attention_contract, world_size=2)
 
 
 def _run_pipeline_forward_contract(rank: int, world_size: int) -> None:
