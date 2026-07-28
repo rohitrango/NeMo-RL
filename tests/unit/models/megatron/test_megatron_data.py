@@ -373,12 +373,6 @@ class TestProcessMicrobatch:
             result.packed_seq_params.cu_seqlens_q_padded, cu_seqlens_padded
         )
         assert result.packed_seq_params.total_tokens == 8
-        assert torch.equal(
-            result.padding_mask,
-            torch.tensor(
-                [[False, False, False, True, False, False, True, True]]
-            ),
-        )
         mock_indices.assert_not_called()
 
     def test_process_microbatch_rejects_mtp_with_model_cp_slicing(self):
@@ -397,15 +391,12 @@ class TestProcessMicrobatch:
                 straggler_timer=MagicMock(),
             )
 
-    def test_caller_packing_matches_mbridge_thd_padding_contract(self):
+    def test_caller_packing_matches_mbridge_thd_contract(self):
         from megatron.bridge.data.packing.in_batch import (
             pack_right_padded_sequence_batch_to_mcore_thd,
         )
 
-        from nemo_rl.models.megatron.data import (
-            _build_packed_padding_mask,
-            _pack_sequences_for_megatron,
-        )
+        from nemo_rl.models.megatron.data import _pack_sequences_for_megatron
 
         input_ids = torch.tensor([[1, 2, 3, 0, 0], [4, 5, 0, 0, 0]])
         seq_lengths = torch.tensor([3, 2])
@@ -421,13 +412,6 @@ class TestProcessMicrobatch:
             pad_individual_seqs_to_multiple_of=4,
             cp_size=1,
         )
-        padding_mask = _build_packed_padding_mask(
-            cu_seqlens=cu_seqlens,
-            cu_seqlens_padded=cu_seqlens_padded,
-            total_tokens=full_tokens.shape[1],
-            device=full_tokens.device,
-        )
-
         mbridge_batch = {
             "input_ids": input_ids.clone(),
             "position_ids": torch.arange(input_ids.shape[1])
@@ -440,7 +424,6 @@ class TestProcessMicrobatch:
         pack_right_padded_sequence_batch_to_mcore_thd(
             mbridge_batch,
             pad_to_multiple_of=4,
-            emit_padding_mask=True,
         )
 
         assert torch.equal(full_tokens, mbridge_batch["input_ids"])
@@ -448,7 +431,6 @@ class TestProcessMicrobatch:
         assert torch.equal(
             cu_seqlens_padded, mbridge_batch["cu_seqlens_q_padded"]
         )
-        assert torch.equal(padding_mask, mbridge_batch["padding_mask"])
 
     @patch("nemo_rl.models.megatron.data.get_ltor_masks_and_position_ids")
     def test_process_microbatch_no_packing_mtp_loss_mask_absent(self, mock_get_masks):
