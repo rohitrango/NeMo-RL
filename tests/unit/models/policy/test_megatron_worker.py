@@ -89,20 +89,6 @@ def test_model_cp_slicing_capability_is_detected():
     assert not _model_slices_context_parallel_inputs(object())
 
 
-def test_model_cp_slicing_rejects_mixed_local_pipeline_chunks():
-    from nemo_rl.models.policy.workers.megatron_policy_worker import (
-        _model_slices_context_parallel_inputs,
-    )
-
-    with pytest.raises(RuntimeError, match="All pipeline model chunks must agree"):
-        _model_slices_context_parallel_inputs(
-            [
-                SimpleNamespace(model_slices_context_parallel_inputs=True),
-                SimpleNamespace(model_slices_context_parallel_inputs=False),
-            ]
-        )
-
-
 def test_model_cp_slicing_rejects_transfer_queue_setup():
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,

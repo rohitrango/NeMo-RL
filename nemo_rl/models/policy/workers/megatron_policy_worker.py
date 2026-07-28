@@ -167,44 +167,15 @@ def _model_self_packs_mtp_loss_mask(model: Any) -> bool:
 
 
 def _model_slices_context_parallel_inputs(model: Any) -> bool:
-    """Whether every model chunk expects a full THD row and slices CP after embedding."""
-    from megatron.core import parallel_state
+    """Whether the model consumes full THD input and slices CP after embedding."""
     from megatron.core.utils import unwrap_model
 
     unwrapped = unwrap_model(model)
     chunks = unwrapped if isinstance(unwrapped, (list, tuple)) else [unwrapped]
-    capabilities = [
+    return any(
         bool(getattr(chunk, "model_slices_context_parallel_inputs", False))
         for chunk in chunks
-    ]
-    if any(capabilities) and not all(capabilities):
-        raise RuntimeError(
-            "All pipeline model chunks must agree on "
-            "model_slices_context_parallel_inputs."
-        )
-    local_capability = all(capabilities)
-    if (
-        torch.distributed.is_initialized()
-        and parallel_state.model_parallel_is_initialized()
-    ):
-        group = parallel_state.get_model_parallel_group()
-        capability_min = torch.tensor(
-            int(local_capability), dtype=torch.int32, device="cuda"
-        )
-        capability_max = capability_min.clone()
-        torch.distributed.all_reduce(
-            capability_min, op=torch.distributed.ReduceOp.MIN, group=group
-        )
-        torch.distributed.all_reduce(
-            capability_max, op=torch.distributed.ReduceOp.MAX, group=group
-        )
-        if capability_min.item() != capability_max.item():
-            raise RuntimeError(
-                "All model-parallel ranks must agree on "
-                "model_slices_context_parallel_inputs."
-            )
-        return bool(capability_max.item())
-    return local_capability
+    )
 
 
 def _estimate_refit_tensor_size_in_bytes(

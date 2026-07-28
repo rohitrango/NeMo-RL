@@ -47,6 +47,7 @@ class ProcessedInputs:
     position_ids: Optional[torch.Tensor]
     packed_seq_params: Optional[PackedSeqParams]
     cu_seqlens_padded: Optional[torch.Tensor]
+    padding_mask: Optional[torch.Tensor] = None
     mtp_loss_mask: Optional[torch.Tensor] = None
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
@@ -68,6 +69,7 @@ class ProcessedMicrobatch:
         position_ids: Position IDs tensor (None for packed sequences)
         packed_seq_params: PackedSeqParams for sequence packing (None if not packing)
         cu_seqlens_padded: Padded cumulative sequence lengths (None if not packing)
+        padding_mask: Boolean mask marking physical THD alignment gaps
         mtp_loss_mask: Pre-computed MTP loss mask (token_mask × sample_mask).
             None when MTP is disabled or token/sample masks are absent.
         routed_experts: Optional token-aligned routed expert ids
@@ -81,6 +83,7 @@ class ProcessedMicrobatch:
     position_ids: Optional[torch.Tensor]
     packed_seq_params: Optional[PackedSeqParams]
     cu_seqlens_padded: Optional[torch.Tensor]
+    padding_mask: Optional[torch.Tensor] = None
     mtp_loss_mask: Optional[torch.Tensor] = None
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
@@ -143,6 +146,7 @@ def make_processed_microbatch_iterator(
             position_ids=processed_inputs.position_ids,
             packed_seq_params=processed_inputs.packed_seq_params,
             cu_seqlens_padded=processed_inputs.cu_seqlens_padded,
+            padding_mask=processed_inputs.padding_mask,
             mtp_loss_mask=processed_inputs.mtp_loss_mask,
             routed_experts=processed_inputs.routed_experts,
             routed_experts_cp_sharded=processed_inputs.routed_experts_cp_sharded,
@@ -273,7 +277,6 @@ def process_microbatch(
             data_dict["routed_experts"] if "routed_experts" in data_dict else None
         )
         token_identity_cp_sharded = None
-        cp_partition_indices = None
         if routed_experts is not None and routed_experts.dim() != 4:
             raise ValueError(
                 "routed_experts must have shape [batch, seq, num_moe_layers, topk] "
@@ -286,6 +289,7 @@ def process_microbatch(
         seq_lengths = None  # Will be set if using packed sequences
         cu_seqlens = None
         cu_seqlens_padded = None
+        padding_mask = None
         mtp_loss_mask = None
 
         if pack_sequences:
@@ -386,6 +390,12 @@ def process_microbatch(
                     cp_size=get_context_parallel_world_size(),
                 )
                 if model_slices_context_parallel_inputs:
+                    padding_mask = _build_packed_padding_mask(
+                        cu_seqlens=cu_seqlens,
+                        cu_seqlens_padded=cu_seqlens_padded,
+                        total_tokens=input_ids.shape[1],
+                        device=input_ids.device,
+                    )
                     packed_seq_params = PackedSeqParams(
                         cu_seqlens_q=cu_seqlens,
                         cu_seqlens_kv=cu_seqlens,
@@ -403,13 +413,6 @@ def process_microbatch(
                         ),
                         qkv_format="thd",
                         total_tokens=input_ids.shape[1],
-                    )
-                    cp_partition_indices = get_packed_seq_cp_partition_indices(
-                        packed_seq_params,
-                        total_tokens=input_ids.shape[1],
-                        cp_size=get_context_parallel_world_size(),
-                        cp_rank=get_context_parallel_rank(),
-                        device=input_ids.device,
                     )
                     # This field is the model-forward input. For this capability
                     # the model needs the full THD row so it can insert media
@@ -436,6 +439,13 @@ def process_microbatch(
                         get_context_parallel_world_size(),
                     )
                     if model_slices_context_parallel_inputs:
+                        cp_partition_indices = get_packed_seq_cp_partition_indices(
+                            packed_seq_params,
+                            total_tokens=input_ids.shape[1],
+                            cp_size=get_context_parallel_world_size(),
+                            cp_rank=get_context_parallel_rank(),
+                            device=input_ids.device,
+                        )
                         routed_experts_cp_sharded = routed_experts.index_select(
                             1, cp_partition_indices
                         ).contiguous()
@@ -552,6 +562,7 @@ def process_microbatch(
         position_ids=position_ids,
         packed_seq_params=packed_seq_params,
         cu_seqlens_padded=cu_seqlens_padded,
+        padding_mask=padding_mask,
         mtp_loss_mask=mtp_loss_mask,
         routed_experts=routed_experts,
         routed_experts_cp_sharded=routed_experts_cp_sharded,
@@ -888,6 +899,46 @@ def _prepare_vlm_batch_for_megatron(
         None,
         cu_seqlens_padded,
     )
+
+
+def _build_packed_padding_mask(
+    *,
+    cu_seqlens: torch.Tensor,
+    cu_seqlens_padded: torch.Tensor,
+    total_tokens: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Mark physical alignment gaps in a full caller-packed THD row."""
+    logical_boundaries = [int(value) for value in cu_seqlens.tolist()]
+    physical_boundaries = [int(value) for value in cu_seqlens_padded.tolist()]
+    if len(logical_boundaries) != len(physical_boundaries):
+        raise ValueError(
+            "Packed logical and physical cumulative lengths must have the same size."
+        )
+    if not physical_boundaries or physical_boundaries[0] != 0:
+        raise ValueError("Packed physical cumulative lengths must start at zero.")
+    if physical_boundaries[-1] != total_tokens:
+        raise ValueError(
+            "Packed physical cumulative lengths must end at the full THD width: "
+            f"{physical_boundaries[-1]} != {total_tokens}."
+        )
+
+    padding_mask = torch.ones((1, total_tokens), dtype=torch.bool, device=device)
+    for row_index in range(len(logical_boundaries) - 1):
+        logical_length = (
+            logical_boundaries[row_index + 1] - logical_boundaries[row_index]
+        )
+        physical_start = physical_boundaries[row_index]
+        physical_length = (
+            physical_boundaries[row_index + 1] - physical_boundaries[row_index]
+        )
+        if logical_length < 0 or logical_length > physical_length:
+            raise ValueError(
+                "Packed logical sequence length must fit inside its physical THD "
+                f"segment; got logical={logical_length}, physical={physical_length}."
+            )
+        padding_mask[:, physical_start : physical_start + logical_length] = False
+    return padding_mask
 
 
 def _pack_sequences_for_megatron(
