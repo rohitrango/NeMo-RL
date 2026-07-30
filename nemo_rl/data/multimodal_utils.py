@@ -85,6 +85,15 @@ class PackedTensor:
         *,
         pad_to_max_shape: bool = False,
     ) -> None:
+        """Wrap per-item tensors for concatenation along ``dim_to_pack``.
+
+        Args:
+            tensors: A tensor or list of per-item tensors. List entries may be
+                ``None`` for items without this modality.
+            dim_to_pack: Dimension along which ``as_tensor`` concatenates.
+            pad_to_max_shape: Pad every non-packing dimension to its batch-wide
+                maximum before concatenating. All tensors must have the same rank.
+        """
         assert tensors is not None, "Input tensors to PackedTensor cannot be None"
 
         if isinstance(tensors, torch.Tensor):
