@@ -181,6 +181,58 @@ class TestModelForward:
         # Flash attention should be removed for multimodal
         assert "flash_attn_kwargs" not in call_kwargs
 
+    def test_forward_filters_unsupported_multimodal_metadata(
+        self, processed_inputs_multimodal
+    ):
+        class ExplicitMultimodalModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.pixel_values = None
+
+            def forward(
+                self,
+                input_ids,
+                attention_mask=None,
+                position_ids=None,
+                use_cache=False,
+                pixel_values=None,
+            ):
+                self.pixel_values = pixel_values
+                return MagicMock(logits=torch.randn(2, 64, 1000))
+
+        model = ExplicitMultimodalModel()
+        processed_inputs_multimodal.vlm_kwargs.update(
+            {
+                "imgs_sizes": torch.tensor([[224, 224]]),
+                "num_frames": torch.tensor([1]),
+            }
+        )
+
+        model_forward(model, processed_inputs_multimodal)
+
+        assert model.pixel_values is processed_inputs_multimodal.vlm_kwargs[
+            "pixel_values"
+        ]
+
+    def test_forward_preserves_multimodal_metadata_for_kwargs_model(
+        self, processed_inputs_multimodal
+    ):
+        class KwargsModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.forward_kwargs = {}
+
+            def forward(self, **kwargs):
+                self.forward_kwargs = kwargs
+                return MagicMock(logits=torch.randn(2, 64, 1000))
+
+        model = KwargsModel()
+        processed_inputs_multimodal.vlm_kwargs["num_frames"] = torch.tensor([1])
+
+        model_forward(model, processed_inputs_multimodal)
+
+        assert "num_frames" in model.forward_kwargs
+
     def test_forward_reward_model_removes_flash_attn(
         self, mock_model, processed_inputs_with_flash
     ):
