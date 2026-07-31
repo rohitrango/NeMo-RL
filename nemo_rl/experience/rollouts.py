@@ -874,6 +874,7 @@ async def async_generate_response_for_sample_turn(
     tokenizer: TokenizerType,
     max_seq_len: int,
     greedy: bool = False,
+    sample_seed: Optional[int] = None,
 ) -> tuple[list[dict], torch.Tensor, torch.Tensor, dict[str, float]]:
     """Generate a response for a single sample's turn using async generation.
 
@@ -907,6 +908,13 @@ async def async_generate_response_for_sample_turn(
             "stop_strings": [sample_stop_strings],
         }
     )
+
+    # Pin the per-request vLLM sampling seed so the async scheduler's request
+    # interleaving no longer determines which slice of the engine's global RNG
+    # each rollout consumes. Same (sample_idx, turn) across runs -> same seed
+    # -> same generated tokens for identical weights + prompt.
+    if sample_seed is not None:
+        generation_input_data["sample_seeds"] = [sample_seed]
 
     # Create a dummy batch for generate_responses_async
     dummy_batch = BatchedDataDict[DatumSpec](
@@ -993,7 +1001,12 @@ async def run_sample_multi_turn_rollout(
 
         turn_count += 1
 
-        # Generate response for this sample using async generation
+        # Generate response for this sample using async generation.
+        # Derive a per-request vLLM sampling seed from (sample_idx, turn) so the
+        # async scheduler's request ordering can't leak into which slice of the
+        # engine RNG each rollout draws from. Reproducible across runs given the
+        # same input batch layout.
+        sample_seed = ((sample_idx * 1_000_003) ^ (turn * 10_007)) & 0x7FFF_FFFF
         try:
             (
                 updated_message_log,
@@ -1007,6 +1020,7 @@ async def run_sample_multi_turn_rollout(
                 tokenizer,
                 max_seq_len,
                 greedy=greedy,
+                sample_seed=sample_seed,
             )
             current_message_log = updated_message_log
 
