@@ -581,14 +581,12 @@ class BaseVllmGenerationWorker:
             enable_sleep_mode=True,
             # Set disable_log_stats=False so that self.llm.get_metrics() works.
             disable_log_stats=False,
-            # Keep the main default, while allowing an RL recipe to request
-            # raw model logprobs. This is required when policy logprobs are
-            # compared with vLLM generation under a logits processor.
-            logprobs_mode=self.cfg["vllm_cfg"].get(
-                "logprobs_mode", "processed_logprobs"
-            ),
             **vllm_kwargs,
         )
+
+        logprobs_mode = self.cfg["vllm_cfg"].get("logprobs_mode")
+        if logprobs_mode is not None:
+            llm_kwargs["logprobs_mode"] = logprobs_mode
 
         self._create_engine(llm_kwargs)
         log_gpu_memory_diagnostics(
@@ -647,7 +645,7 @@ class BaseVllmGenerationWorker:
             stop_token_ids=self.cfg["stop_token_ids"],
             stop=stop_strings,
             include_stop_str_in_output=True,
-            bad_words=self.cfg.get("bad_words") or None,
+            bad_words=self.cfg.get("bad_words"),
             ignore_eos=self.cfg.get("ignore_eos", False),
         )
 
@@ -874,7 +872,7 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
         assert self.llm is not None, (
             "Attempting to generate with either an uninitialized vLLM or non-model-owner"
         )
-        if self.cfg["vllm_cfg"].get("cap_max_tokens_to_context", False):
+        if self.cfg["vllm_cfg"].get("cap_max_tokens_to_context"):
             max_model_len = int(self.llm.llm_engine.model_config.max_model_len)
             sampling_params = [
                 self._build_sampling_params(
