@@ -1032,10 +1032,20 @@ class VllmAsyncGenerationWorkerImpl(
 
                 return (sample_idx, result_batch)
 
+            # Per-request seed threaded from the caller (rollouts.py) so that
+            # SamplingParams.seed pins each request's RNG independent of async
+            # scheduler order. Falls through to None (engine RNG) if absent.
+            sample_seeds = data.get("sample_seeds")
+            per_request_seed = (
+                sample_seeds[sample_idx]
+                if sample_seeds is not None and sample_idx < len(sample_seeds)
+                else None
+            )
             sampling_params_for_request = self._build_sampling_params(
                 greedy=greedy,
                 stop_strings=final_stop_strings_for_sample,
                 max_new_tokens=allowed_new_tokens,
+                seed=per_request_seed,
             )
 
             request_id = str(uuid.uuid4())
