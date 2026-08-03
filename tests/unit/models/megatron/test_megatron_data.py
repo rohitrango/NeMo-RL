@@ -375,6 +375,58 @@ class TestProcessMicrobatch:
         assert result.packed_seq_params.total_tokens == 8
         mock_indices.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("cu_seqlens", "cu_seqlens_padded", "expected_pad_between_seqs"),
+        [
+            ([0, 3], [0, 4], True),
+            ([0, 4], [0, 4], False),
+        ],
+        ids=["trailing-padding", "no-padding"],
+    )
+    @patch("nemo_rl.models.megatron.data.get_context_parallel_rank", return_value=0)
+    @patch(
+        "nemo_rl.models.megatron.data.get_context_parallel_world_size", return_value=2
+    )
+    @patch("nemo_rl.models.megatron.data._pack_sequences_for_megatron")
+    def test_process_microbatch_marks_single_sequence_trailing_padding(
+        self,
+        mock_pack,
+        mock_cp_world,
+        mock_cp_rank,
+        cu_seqlens,
+        cu_seqlens_padded,
+        expected_pad_between_seqs,
+    ):
+        from nemo_rl.models.megatron.data import process_microbatch
+
+        full_tokens = torch.tensor([[1, 2, 3, 0]])
+        cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int32)
+        cu_seqlens_padded = torch.tensor(cu_seqlens_padded, dtype=torch.int32)
+        mock_pack.return_value = (
+            full_tokens,
+            full_tokens,
+            MagicMock(),
+            cu_seqlens,
+            cu_seqlens_padded,
+        )
+
+        result = process_microbatch(
+            {
+                "input_ids": full_tokens,
+                "input_lengths": cu_seqlens[1:].clone(),
+            },
+            seq_length_key="input_lengths",
+            pack_sequences=True,
+            model_slices_context_parallel_inputs=True,
+            straggler_timer=MagicMock(),
+        )
+
+        assert result.packed_seq_params.pad_between_seqs is expected_pad_between_seqs
+        assert torch.equal(result.packed_seq_params.cu_seqlens_q, cu_seqlens)
+        assert torch.equal(
+            result.packed_seq_params.cu_seqlens_q_padded, cu_seqlens_padded
+        )
+
     def test_process_microbatch_rejects_mtp_with_model_cp_slicing(self):
         from nemo_rl.models.megatron.data import process_microbatch
 
