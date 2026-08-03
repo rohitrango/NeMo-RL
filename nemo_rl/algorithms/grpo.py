@@ -646,6 +646,11 @@ def setup(
         opd_cfg = opd_module._opd_cfg(master_config)
         teacher_configs = create_teacher_configs_from_opd_config(opd_cfg)
         for tcfg in teacher_configs:
+            assert tcfg.gpus_per_node <= cluster_config["gpus_per_node"], (
+                f"OPD teacher '{tcfg.alias}' requests gpus_per_node={tcfg.gpus_per_node} > "
+                f"cluster.gpus_per_node={cluster_config['gpus_per_node']}; "
+                "each teacher placement group must fit on one node."
+            )
             opd_teacher_nodes += tcfg.num_nodes
         policy_nodes -= opd_teacher_nodes
         assert policy_nodes > 0, (
@@ -902,6 +907,21 @@ def setup(
             flush=True,
         )
 
+    # Reserve topology-aware teacher placement groups before NeMo Gym starts
+    # opportunistically placing its GPU-backed services. Worker creation and
+    # model loading remain deferred until the policy is ready to avoid racing
+    # Megatron-Bridge checkpoint conversion.
+    teacher_clusters: dict[str, RayVirtualCluster] = {}
+    teacher_reservation_time = 0.0
+    if enable_opd_teachers:
+        t0 = time.perf_counter()
+        teacher_clusters = opd_module.reserve_teacher_clusters(
+            master_config,
+            segment_size=segment_size,
+            teacher_segment_topology=teacher_segment_topology,
+        )
+        teacher_reservation_time = time.perf_counter() - t0
+
     # ==========================
     #   Training and Inference
     # ==========================
@@ -917,6 +937,10 @@ def setup(
 
     # Dictionary to store worker initialization timing stats for logging
     worker_init_timing_metrics = {}
+    if teacher_reservation_time:
+        worker_init_timing_metrics["teacher_reservation_time_s"] = (
+            teacher_reservation_time
+        )
 
     weights_path, optimizer_path = checkpointer.get_resume_paths(last_checkpoint_path)
 
@@ -1424,11 +1448,18 @@ def setup(
                 master_config,
                 policy_config,
                 tokenizer,
-                segment_size=segment_size,
-                teacher_segment_topology=teacher_segment_topology,
+                teacher_clusters=teacher_clusters,
             )
         )
-        worker_init_timing_metrics["teacher_init_time_s"] = time.perf_counter() - t0
+        teacher_model_init_time = time.perf_counter() - t0
+        worker_init_timing_metrics["teacher_model_init_time_s"] = (
+            teacher_model_init_time
+        )
+        # Preserve the existing metric's end-to-end meaning while exposing the
+        # newly separated reservation and model-initialization phases.
+        worker_init_timing_metrics["teacher_init_time_s"] = (
+            teacher_reservation_time + teacher_model_init_time
+        )
 
     # Calculate total setup time
     total_setup_time = time.perf_counter() - setup_start_time
@@ -3235,6 +3266,10 @@ def grpo_train(
                     metrics.update(
                         {f"mtp/{k}": v for k, v in train_results["mtp_metrics"].items()}
                     )
+                if "draft_grad_norm" in train_results:
+                    metrics["draft_grad_norm"] = train_results[
+                        "draft_grad_norm"
+                    ].numpy()
                 if master_config.grpo["use_dynamic_sampling"]:
                     metrics["filtered_reward"] = rewards.numpy()
                     metrics["reward"] = repeated_batch["total_reward"].numpy()
@@ -4651,6 +4686,10 @@ def async_grpo_train(
                     metrics.update(
                         {f"mtp/{k}": v for k, v in train_results["mtp_metrics"].items()}
                     )
+                if "draft_grad_norm" in train_results:
+                    metrics["draft_grad_norm"] = train_results[
+                        "draft_grad_norm"
+                    ].numpy()
                 metrics.update(train_results["all_mb_metrics"])
                 metrics.update(penalty_metrics)
                 for k, v in metrics.items():

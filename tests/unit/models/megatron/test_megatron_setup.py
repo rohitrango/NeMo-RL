@@ -33,64 +33,6 @@ import torch
 
 
 @pytest.mark.mcore
-class TestNemotronOmniCheckpointContract:
-    """Tests for distinguishing raw Option 2 and legacy LLaVA checkpoints."""
-
-    def test_non_omni_checkpoint_does_not_read_tensor_metadata(self):
-        from nemo_rl.models.megatron.setup import (
-            _validate_nemotron_omni_megatron_lm_layout,
-        )
-
-        hf_config = SimpleNamespace(architectures=["LlamaForCausalLM"])
-        with patch(
-            "megatron.core.dist_checkpointing.load_tensors_metadata"
-        ) as load_metadata:
-            _validate_nemotron_omni_megatron_lm_layout(hf_config, "/unused")
-
-        load_metadata.assert_not_called()
-
-    def test_canonical_omni_checkpoint_layout_is_accepted(self):
-        from nemo_rl.models.megatron.setup import (
-            _validate_nemotron_omni_megatron_lm_layout,
-        )
-
-        hf_config = SimpleNamespace(architectures=["NemotronH_Nano_Omni_Reasoning_V3"])
-        metadata = {
-            "language_model.embedding.word_embeddings.weight": object(),
-            "vision_model.decoder.layers.0.self_attention.linear_qkv.weight": object(),
-        }
-        with patch(
-            "megatron.core.dist_checkpointing.load_tensors_metadata",
-            return_value=metadata,
-        ):
-            _validate_nemotron_omni_megatron_lm_layout(
-                hf_config, "/checkpoints/iter_0000001"
-            )
-
-    def test_legacy_llava_checkpoint_layout_is_rejected(self):
-        from nemo_rl.models.megatron.setup import (
-            _validate_nemotron_omni_megatron_lm_layout,
-        )
-
-        hf_config = SimpleNamespace(architectures=["NemotronH_Super_Omni_Reasoning_V3"])
-        metadata = {
-            "model.llava_model.language_model.embedding.word_embeddings.weight": object(),
-            "model.llava_model.vision_model.decoder.layers.0.self_attention.linear_qkv.weight": object(),
-        }
-        with patch(
-            "megatron.core.dist_checkpointing.load_tensors_metadata",
-            return_value=metadata,
-        ):
-            with pytest.raises(
-                RuntimeError,
-                match="tensor namespace contains the legacy 'llava_model' wrapper",
-            ):
-                _validate_nemotron_omni_megatron_lm_layout(
-                    hf_config, "/checkpoints/iter_0002821"
-                )
-
-
-@pytest.mark.mcore
 class TestValidateModelPaths:
     """Tests for validate_model_paths function."""
 

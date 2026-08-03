@@ -546,6 +546,33 @@ def test_initialize_folded_nemotron_radio_layerscale_while_awake():
 
 
 @pytest.mark.vllm
+def test_initialize_nemotron_radio_layerscale_requires_vision_model():
+    ext = _make_extension_with_radio("NemotronH_Nano_Omni_Reasoning_V3")
+    ext.model_runner.model = SimpleNamespace(vision_model=None)
+
+    with pytest.raises(RuntimeError, match="no vision_model"):
+        ext._initialize_nemotron_omni_radio_layerscale()
+
+
+@pytest.mark.vllm
+def test_initialize_nemotron_radio_layerscale_requires_layerscale_parameters():
+    ext = _make_extension_with_radio("NemotronH_Nano_Omni_Reasoning_V3")
+
+    class VisionModelWithoutLayerScale(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = SimpleNamespace(initializer_factor=1.0)
+            self.projection = torch.nn.Parameter(torch.ones(4))
+
+    ext.model_runner.model = SimpleNamespace(
+        vision_model=VisionModelWithoutLayerScale()
+    )
+
+    with pytest.raises(RuntimeError, match="no RADIO ls1/ls2"):
+        ext._initialize_nemotron_omni_radio_layerscale()
+
+
+@pytest.mark.vllm
 def test_prepare_refit_info_does_not_mutate_folded_layerscale():
     ext = _make_extension_with_radio("NemotronH_Nano_Omni_Reasoning_V3")
 

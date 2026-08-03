@@ -14,11 +14,14 @@
 
 """Data processing utilities for automodel training and inference."""
 
+import inspect
 import itertools
 from dataclasses import dataclass, field
+from functools import cache
 from typing import Any, Iterable, Iterator, Optional, Tuple
 
 import torch
+from torch import nn
 from transformers import AutoTokenizer
 
 from nemo_rl.algorithms.loss.interfaces import LossFunction, LossType
@@ -27,6 +30,39 @@ from nemo_rl.models.huggingface.common import (
     get_flash_attention_kwargs,
     pack_sequences,
 )
+
+
+@cache
+def _accepted_forward_kwargs(
+    model_type: type[nn.Module],
+) -> Optional[frozenset[str]]:
+    """Return explicit ``forward`` kwargs, or ``None`` when all kwargs are accepted."""
+    try:
+        parameters = inspect.signature(model_type.forward).parameters.values()
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters
+    ):
+        return None
+    return frozenset(
+        parameter.name for parameter in parameters if parameter.name != "self"
+    )
+
+
+def filter_multimodal_kwargs_for_model(
+    model: nn.Module, multimodal_kwargs: dict[str, Any]
+) -> dict[str, Any]:
+    """Drop processor metadata that is not accepted by an AutoModel forward."""
+    accepted_kwargs = _accepted_forward_kwargs(type(model))
+    if accepted_kwargs is None:
+        return multimodal_kwargs
+    return {
+        key: value
+        for key, value in multimodal_kwargs.items()
+        if key in accepted_kwargs
+    }
 
 
 @dataclass

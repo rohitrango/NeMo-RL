@@ -566,8 +566,25 @@ async def test_async_sparse_refit_post_init_records_worker_locality() -> None:
         ["node-0", "node-0"]
     )
     assert worker.llm.collective_rpc.await_args_list == [
+        call("_initialize_nemotron_omni_radio_layerscale"),
         call("bind_numa", args=()),
         call("report_node_hostname", args=()),
+    ]
+
+
+def test_sync_post_init_initializes_radio_layerscale_before_other_rpcs() -> None:
+    worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
+    worker._sparse_refit_receiver = None
+    worker._mtp_load_from_disk = False
+    worker.report_device_id = MagicMock(return_value=["0"])
+    worker.llm = MagicMock()
+
+    worker.post_init()
+
+    assert worker.vllm_device_ids == ["0"]
+    assert worker.llm.collective_rpc.call_args_list == [
+        call("_initialize_nemotron_omni_radio_layerscale"),
+        call("bind_numa", args=()),
     ]
 
 
