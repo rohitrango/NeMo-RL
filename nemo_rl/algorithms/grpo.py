@@ -4408,7 +4408,6 @@ def async_grpo_train(
                         input_lengths,
                         repeated_batch,
                         master_config.policy,
-                        master_config,
                     )
                     train_data.to("cpu")
 
