@@ -2042,6 +2042,9 @@ def _build_async_grpo_train_data(
         }
     )
     _preserve_router_replay_routed_experts(train_data, flat_messages, policy_config)
+    # update multimodal data unconditionally
+    extra_multimodal_data = flat_messages.get_multimodal_dict(as_tensors=False)
+    train_data.update(extra_multimodal_data)
     return train_data
 
 
@@ -3988,6 +3991,7 @@ def async_grpo_train(
     assert master_config.loss_fn.use_importance_sampling_correction, (
         "Importance sampling correction must be enabled for async GRPO for good convergence due to off-policy samples!"
     )
+
     if router_replay_enabled(master_config.policy) and (
         master_config.data_plane or {}
     ).get("enabled", False):
