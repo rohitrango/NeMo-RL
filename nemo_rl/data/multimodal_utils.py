@@ -438,8 +438,9 @@ def image_to_data_url(image: Image.Image | str, fmt: Optional[str] = None) -> st
     if isinstance(image, str):
         raw = Path(image).read_bytes()
         with Image.open(BytesIO(raw)) as opened:
-            if opened.format in _IMAGE_MIME_SUBTYPES:
-                subtype = _IMAGE_MIME_SUBTYPES[opened.format]
+            # `Image.format` is None for images that were not read from a file.
+            subtype = _IMAGE_MIME_SUBTYPES.get(opened.format or "")
+            if subtype is not None:
                 return f"data:image/{subtype};base64,{base64.b64encode(raw).decode()}"
             image = opened.convert("RGB")
     # Keep the source encoding when it is one we can embed, so a JPEG never
