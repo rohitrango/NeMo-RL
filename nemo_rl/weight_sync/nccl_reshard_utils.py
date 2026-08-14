@@ -193,8 +193,16 @@ def is_nccl_reshard_param(param_name: str) -> bool:
     ``load_weights`` path.
 
     Shared-expert FFN weights (``*.shared_expert.*``) are routed to misc path.
+    Bare ``mtp.``-prefixed HF names are routed to misc too, because vLLM keeps
+    the MTP drafter separate and updates it through ``load_weights``. That only
+    covers families whose HF names keep the ``mtp.`` prefix. DeepSeek exports
+    MTP under ``model.layers.N`` HF names (the ``mtp.`` appears only on the
+    Megatron side), so those return True here; the caller drops them instead,
+    using the layer set from ``_collect_mtp_hf_layer_names``.
     """
     if "shared_expert" in param_name:
+        return False
+    if param_name.startswith("mtp."):
         return False
     return param_name.endswith(FFN_PROJ_WEIGHT_SUFFIXES) or param_name.endswith(
         FFN_GROUPED_EXPERT_SUFFIXES
@@ -600,6 +608,16 @@ def check_nccl_reshard_refit_support(master_config: dict) -> None:
             "policy.generation.vllm_kwargs.enable_eplb must be False "
             "(nccl_reshard_refit fixes the expert->rank mapping at setup; "
             "dynamic expert load balancing can change ownership afterwards)."
+        )
+
+    # ModelOpt real-quant rollout holds NVFP4-packed vLLM params and refits
+    # through vLLM's layerwise-reload weight loaders; the bulk xferdtensor
+    # path writes directly into param storage, bypassing both.
+    if generation.get("real_quant"):
+        violations.append(
+            "policy.generation.real_quant must be False "
+            "(nccl_reshard_refit's bulk xferdtensor writes bypass the "
+            "layerwise-reload weight loaders that ModelOpt real quant requires)."
         )
 
     # This initial version supports only the Megatron train + vLLM gen
