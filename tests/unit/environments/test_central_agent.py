@@ -590,7 +590,8 @@ async def test_loop_runs_a_tool_turn_then_verifies_the_final_branch():
     # verify sees the final active branch as response.output, with summed usage
     verify_body = client.calls[4][2]
     assert verify_body["response"]["output"] == second_request["input"][1:] + [message]
-    assert verify_body["response"]["id"] == "resp-1"
+    # the envelope is the last turn's, as in simple_agent
+    assert verify_body["response"]["id"] == "resp-2"
     assert verify_body["response"]["usage"]["total_tokens"] == 17
     assert verify_body["agent_ref"] == ROW["agent_ref"]
 
@@ -600,6 +601,51 @@ async def test_loop_runs_a_tool_turn_then_verifies_the_final_branch():
     assert result["central_agent_turns"] == 2
     assert result["central_agent_termination_reason"] == "no_tool_calls"
     assert result["tool_calls_total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_verify_envelope_comes_from_the_last_turn_not_the_first():
+    """`status` / `incomplete_details` / `error` are inherited, and verifiers read them.
+
+    simple_agent rebinds its response variable each turn and mutates whichever
+    one it holds when the loop exits, so /verify sees the last turn's envelope.
+    Taking the first turn's would report a rollout truncated on its final turn
+    as `status="completed"`, and would hide a final-turn `error` from
+    resources_servers/structured_outputs, which rejects on `response.error`.
+    """
+    client = FakeServerClient(
+        {
+            "/seed_session": [{}],
+            "/v1/responses": [
+                {
+                    "id": "resp-1",
+                    "status": "completed",
+                    "incomplete_details": None,
+                    "error": None,
+                    "output": [function_call("call-1")],
+                },
+                {
+                    "id": "resp-2",
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "error": {"code": "server_error"},
+                    "output": [assistant_message("truncated...")],
+                },
+            ],
+            "/get_weather": ['{"temp": 20}'.encode()],
+            "/verify": [{"reward": 0.0}],
+        }
+    )
+
+    await CentralAgent(client, AGENT_ENTRY).run(ROW)
+
+    response = client.calls[-1][2]["response"]
+    assert response["id"] == "resp-2"
+    assert response["status"] == "incomplete"
+    assert response["incomplete_details"] == {"reason": "max_output_tokens"}
+    assert response["error"] == {"code": "server_error"}
+    # output still spans every turn, so the envelope swap changes metadata only
+    assert len(response["output"]) == 3
 
 
 @pytest.mark.asyncio

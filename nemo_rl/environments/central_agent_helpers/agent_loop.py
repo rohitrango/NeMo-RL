@@ -105,7 +105,7 @@ class CentralAgent:
         )
         termination = build_termination_manager(self._cfg.get("termination"))
 
-        first_response: Optional[dict[str, Any]] = None
+        last_response: Optional[dict[str, Any]] = None
         usage: Optional[dict[str, Any]] = None
 
         # core agent loop
@@ -113,8 +113,7 @@ class CentralAgent:
             model_response = await self._call_model(
                 {**create_params, "input": tree.get_active_branch()}
             )
-            if first_response is None:
-                first_response = model_response
+            last_response = model_response
             usage = _merge_usage(usage, model_response.get("usage"))
             output = model_response.get("output") or []
             tree.append(output)
@@ -152,11 +151,11 @@ class CentralAgent:
         # /verify sees the final active branch only. return_all_rollouts() is what
         # a compacting tree would fan out for training; LinearRolloutTree returns
         # this same single branch.
-        assert first_response is not None, "the turn loop always runs at least once"
+        assert last_response is not None, "the turn loop always runs at least once"
         verify_body = {
             **row,
             "response": {
-                **first_response,
+                **last_response,
                 "output": tree.get_active_outputs(),
                 "usage": usage,
             },
