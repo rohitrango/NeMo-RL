@@ -188,6 +188,8 @@ policy:
     cuda_graph_impl: "none"
     cuda_graph_modules: []
     cuda_graph_warmup_steps: 3
+    fine_grained_activation_offloading: false
+    offload_modules: null
     # recompute_granularity controls activation checkpointing depth.
     # "full": recompute all activations (default, max memory savings).
     # "selective": recompute only specific modules (see recompute_modules).
