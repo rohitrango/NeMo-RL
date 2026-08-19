@@ -195,7 +195,10 @@ def main(is_vlm: bool = False):
     tokenizer = get_tokenizer(config.policy["tokenizer"], get_processor=is_vlm)
 
     # setup data
-    dataset, val_dataset = setup_data(tokenizer, config.data)
+    if config.data.get("backend") == "energon":
+        dataset, val_dataset = None, None
+    else:
+        dataset, val_dataset = setup_data(tokenizer, config.data)
 
     (
         policy,
