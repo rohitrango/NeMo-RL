@@ -18,12 +18,10 @@ import hashlib
 import json
 from copy import deepcopy
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 from pathlib import PurePosixPath
 from typing import Any, Protocol
 
 import torch
-import torch.nn.functional as F
 from megatron.energon import (
     Cooker,
     CrudeSample,
@@ -35,15 +33,12 @@ from megatron.energon import (
     stateless,
 )
 
-from nemo_rl.data.multimodal_utils import (
-    PackedTensor,
-    extract_multimodal_model_inputs,
-    uses_image_placeholder,
-)
+from nemo_rl.data.interfaces import TaskDataSpec
+from nemo_rl.data.llm_message_utils import get_formatted_message_log
+from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 _MEDIA_TYPES = frozenset({"image", "video", "audio"})
-_ASSISTANT_MASK_KEYS = ("assistant_masks", "assistant_mask")
 
 
 @dataclass(frozen=True)
@@ -65,11 +60,11 @@ class CanonicalSFTSample(Sample):
 
 @edataclass
 class EncodedSFTSample(Sample):
-    """One processor-encoded conversation before batching."""
+    """One tokenized message log before batching."""
 
-    input_ids: torch.Tensor
-    token_mask: torch.Tensor
-    model_inputs: dict[str, PackedTensor | torch.Tensor]
+    message_log: list[dict[str, Any]]
+    length: int
+    loss_multiplier: float
     group_key: tuple[Any, ...]
     sample_key: str
 
@@ -252,100 +247,6 @@ def _normalize_messages(sample: CanonicalSFTSample) -> list[dict[str, Any]]:
     return messages
 
 
-def _as_single_row(value: Any, *, key: str) -> torch.Tensor:
-    if value is None:
-        raise ValueError(f"Processor output is missing {key!r}.")
-    tensor = value if isinstance(value, torch.Tensor) else torch.as_tensor(value)
-    if tensor.ndim == 2:
-        if tensor.shape[0] != 1:
-            raise ValueError(f"Processor field {key!r} must contain one conversation.")
-        tensor = tensor[0]
-    if tensor.ndim != 1:
-        raise ValueError(f"Processor field {key!r} must be one-dimensional.")
-    return tensor
-
-
-def _assistant_mask(processed: dict[str, Any]) -> torch.Tensor:
-    for key in _ASSISTANT_MASK_KEYS:
-        if key in processed:
-            return _as_single_row(processed[key], key=key).to(dtype=torch.long)
-    raise ValueError(
-        "The processor did not return an assistant mask. Its chat template must "
-        "mark assistant generations and use a fast tokenizer."
-    )
-
-
-def _last_assistant_only(mask: torch.Tensor) -> torch.Tensor:
-    trainable = torch.nonzero(mask, as_tuple=False).flatten()
-    if len(trainable) == 0:
-        return mask
-    gaps = torch.nonzero(trainable[1:] > trainable[:-1] + 1, as_tuple=False).flatten()
-    start = trainable[gaps[-1] + 1] if len(gaps) else trainable[0]
-    result = torch.zeros_like(mask)
-    result[start : trainable[-1] + 1] = mask[start : trainable[-1] + 1]
-    return result
-
-
-def _align_expanded_mask(
-    raw_ids: torch.Tensor,
-    raw_mask: torch.Tensor,
-    expanded_ids: torch.Tensor,
-) -> torch.Tensor:
-    if torch.equal(raw_ids, expanded_ids):
-        return raw_mask
-    aligned = torch.zeros_like(expanded_ids, dtype=torch.long)
-    matcher = SequenceMatcher(
-        a=raw_ids.tolist(), b=expanded_ids.tolist(), autojunk=False
-    )
-    for tag, raw_start, raw_end, out_start, out_end in matcher.get_opcodes():
-        if tag == "equal":
-            aligned[out_start:out_end] = raw_mask[raw_start:raw_end]
-        elif raw_end > raw_start:
-            replacement_mask = raw_mask[raw_start:raw_end]
-            if bool(torch.all(replacement_mask == replacement_mask[0])):
-                aligned[out_start:out_end] = replacement_mask[0]
-    return aligned
-
-
-def _placeholder_message(message: dict[str, Any], processor: Any) -> dict[str, Any]:
-    if hasattr(processor, "conversation_preprocessor"):
-        return processor.conversation_preprocessor(message)
-
-    tokens = {
-        "image": getattr(processor, "image_token", "<image>"),
-        "video": getattr(processor, "video_token", "<video>"),
-        "audio": getattr(processor, "audio_token", "<audio>"),
-    }
-    text_parts: list[str] = []
-    for part in message["content"]:
-        part_type = part.get("type")
-        if part_type == "text":
-            text_parts.append(str(part.get("text", "")))
-        elif part_type in tokens:
-            text_parts.append(tokens[part_type])
-    result = dict(message)
-    result["content"] = "\n".join(text_parts)
-    return result
-
-
-def _collect_media(messages: list[dict[str, Any]]) -> dict[str, list[Any]]:
-    media = {"images": [], "videos": [], "audio": []}
-    output_key = {"image": "images", "video": "videos", "audio": "audio"}
-    for message in messages:
-        for part in message["content"]:
-            part_type = part.get("type")
-            if part_type in output_key:
-                value = part.get(part_type)
-                if value is None:
-                    value = part.get("url")
-                if value is None:
-                    value = part.get("path")
-                if value is None:
-                    raise ValueError(f"{part_type!r} content is missing its value.")
-                media[output_key[part_type]].append(value)
-    return media
-
-
 class HFMultimodalSFTProcessorAdapter:
     """Temporary Hugging Face implementation of the v1 processor boundary."""
 
@@ -354,7 +255,9 @@ class HFMultimodalSFTProcessorAdapter:
         *,
         processor: Any,
         max_sequence_length: int,
-        only_unmask_final: bool,
+        add_bos: bool,
+        add_eos: bool,
+        add_generation_prompt: bool,
     ) -> None:
         if not hasattr(processor, "apply_chat_template") or not hasattr(
             processor, "tokenizer"
@@ -362,7 +265,9 @@ class HFMultimodalSFTProcessorAdapter:
             raise TypeError("Energon multimodal SFT requires a Hugging Face processor.")
         self.processor = processor
         self.max_sequence_length = max_sequence_length
-        self.only_unmask_final = only_unmask_final
+        self.add_bos = add_bos
+        self.add_eos = add_eos
+        self.add_generation_prompt = add_generation_prompt
         tokenizer = processor.tokenizer
         fingerprint_data = {
             "processor_class": type(processor).__name__,
@@ -372,7 +277,9 @@ class HFMultimodalSFTProcessorAdapter:
             "chat_template": getattr(processor, "chat_template", None)
             or getattr(tokenizer, "chat_template", None),
             "max_sequence_length": max_sequence_length,
-            "only_unmask_final": only_unmask_final,
+            "add_bos": add_bos,
+            "add_eos": add_eos,
+            "add_generation_prompt": add_generation_prompt,
         }
         encoded = json.dumps(
             fingerprint_data, sort_keys=True, default=str
@@ -383,97 +290,41 @@ class HFMultimodalSFTProcessorAdapter:
     def fingerprint(self) -> str:
         return self._fingerprint
 
-    def _apply_chat_template(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None,
-    ) -> dict[str, Any]:
-        template_kwargs: dict[str, Any] = {
-            "tokenize": True,
-            "add_generation_prompt": False,
-            "return_tensors": "pt",
-            "return_dict": True,
-            "return_assistant_tokens_mask": True,
-        }
-        if tools is not None:
-            template_kwargs["tools"] = tools
-        return dict(self.processor.apply_chat_template(messages, **template_kwargs))
-
-    def _apply_placeholder_template(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None,
-    ) -> dict[str, Any]:
-        template_messages = [
-            _placeholder_message(message, self.processor) for message in messages
-        ]
-        template_kwargs: dict[str, Any] = {
-            "tokenize": True,
-            "add_generation_prompt": False,
-            "return_tensors": "pt",
-            "return_dict": True,
-            "return_assistant_tokens_mask": True,
-        }
-        render_kwargs: dict[str, Any] = {
-            "tokenize": False,
-            "add_generation_prompt": False,
-        }
-        if tools is not None:
-            template_kwargs["tools"] = tools
-            render_kwargs["tools"] = tools
-        raw = dict(
-            self.processor.tokenizer.apply_chat_template(
-                template_messages, **template_kwargs
-            )
-        )
-        rendered = self.processor.apply_chat_template(
-            template_messages, **render_kwargs
-        )
-        media = _collect_media(messages)
-        processor_kwargs = {
-            key: value for key, value in media.items() if value
-        }
-        processed = dict(
-            self.processor(text=rendered, return_tensors="pt", **processor_kwargs)
-        )
-        raw_ids = _as_single_row(raw["input_ids"], key="input_ids")
-        raw_mask = _assistant_mask(raw)
-        expanded_ids = _as_single_row(processed["input_ids"], key="input_ids")
-        processed["assistant_masks"] = _align_expanded_mask(
-            raw_ids, raw_mask, expanded_ids
-        ).unsqueeze(0)
-        return processed
-
     def encode(self, sample: CanonicalSFTSample) -> EncodedSFTSample:
         messages = _normalize_messages(sample)
-        if uses_image_placeholder(self.processor):
-            processed = self._apply_placeholder_template(messages, sample.tools)
-        else:
-            processed = self._apply_chat_template(messages, sample.tools)
+        message_log = get_formatted_message_log(
+            messages,
+            self.processor,
+            TaskDataSpec(),
+            add_bos_token=self.add_bos,
+            add_eos_token=self.add_eos,
+            add_generation_prompt=self.add_generation_prompt,
+            tools=sample.tools,
+        )
+        length = sum(len(message["token_ids"]) for message in message_log)
+        loss_multiplier = 1.0
+        if length >= self.max_sequence_length:
+            for message in message_log:
+                message["token_ids"] = message["token_ids"][
+                    : min(4, self.max_sequence_length // len(message_log))
+                ]
+            loss_multiplier = 0.0
 
-        input_ids = _as_single_row(processed.get("input_ids"), key="input_ids")
-        token_mask = _assistant_mask(processed)
-        if len(input_ids) != len(token_mask):
-            raise ValueError(
-                f"Sample {sample.__key__!r} has {len(input_ids)} tokens but "
-                f"{len(token_mask)} assistant-mask entries."
+        model_input_keys = tuple(
+            sorted(
+                {
+                    key
+                    for message in message_log
+                    for key, value in message.items()
+                    if key != "token_ids"
+                    and isinstance(value, (PackedTensor, torch.Tensor))
+                }
             )
-        if len(input_ids) > self.max_sequence_length:
-            raise ValueError(
-                f"Sample {sample.__key__!r} has {len(input_ids)} tokens, exceeding "
-                f"the configured maximum {self.max_sequence_length}."
-            )
-        if self.only_unmask_final:
-            token_mask = _last_assistant_only(token_mask)
-        if not bool(torch.any(token_mask)):
-            raise ValueError(
-                f"Sample {sample.__key__!r} has no trainable assistant tokens."
-            )
-
-        model_inputs = extract_multimodal_model_inputs(self.processor, processed)
+        )
         media_cost = sum(
             tensor.numel()
-            for value in model_inputs.values()
+            for message in message_log
+            for value in message.values()
             if isinstance(value, PackedTensor)
             for tensor in value.tensors
             if tensor is not None
@@ -481,19 +332,12 @@ class HFMultimodalSFTProcessorAdapter:
         media_cost_bucket = (
             0 if media_cost <= 8_000_000 else 1 if media_cost <= 64_000_000 else 2
         )
-        token_sidecars = tuple(
-            sorted(
-                key
-                for key, value in model_inputs.items()
-                if isinstance(value, torch.Tensor)
-            )
-        )
         return EncodedSFTSample.derive_from(
             sample,
-            input_ids=input_ids.to(dtype=torch.long),
-            token_mask=token_mask.to(dtype=torch.long),
-            model_inputs=model_inputs,
-            group_key=(self.fingerprint, token_sidecars, media_cost_bucket),
+            message_log=message_log,
+            length=length,
+            loss_multiplier=loss_multiplier,
+            group_key=(self.fingerprint, model_input_keys, media_cost_bucket),
             sample_key=sample.__key__,
         )
 
@@ -519,15 +363,9 @@ class EnergonSFTTaskEncoder(
         self,
         *,
         adapter: SFTProcessorAdapter,
-        pad_token_id: int,
-        sequence_length_pad_multiple: int,
     ) -> None:
         super().__init__()
-        if sequence_length_pad_multiple < 1:
-            raise ValueError("sequence_length_pad_multiple must be positive.")
         self.adapter = adapter
-        self.pad_token_id = pad_token_id
-        self.sequence_length_pad_multiple = sequence_length_pad_multiple
 
     @stateless
     def encode_sample(self, sample: CanonicalSFTSample) -> EncodedSFTSample:
@@ -538,37 +376,16 @@ class EnergonSFTTaskEncoder(
     ) -> tuple[tuple[Any, ...], None]:
         return sample.group_key, None
 
-    def _sample_batch(self, sample: EncodedSFTSample) -> dict[str, Any]:
-        sequence_length = len(sample.input_ids)
-        padded_length = (
-            (sequence_length + self.sequence_length_pad_multiple - 1)
-            // self.sequence_length_pad_multiple
-            * self.sequence_length_pad_multiple
-        )
-        pad_length = padded_length - sequence_length
-        batch: dict[str, Any] = {
-            "input_ids": F.pad(
-                sample.input_ids,
-                (0, pad_length),
-                value=self.pad_token_id,
-            ).unsqueeze(0),
-            "input_lengths": torch.tensor([sequence_length], dtype=torch.long),
-            "token_mask": F.pad(sample.token_mask, (0, pad_length)).unsqueeze(0),
-            "sample_mask": torch.ones(1, dtype=torch.float32),
-        }
-        for key, value in sample.model_inputs.items():
-            if isinstance(value, PackedTensor):
-                batch[key] = value
-            else:
-                batch[key] = F.pad(value, (0, pad_length)).unsqueeze(0)
-        return batch
-
     @stateless
     def batch(self, samples: list[EncodedSFTSample]) -> BatchedDataDict[Any]:
-        return BatchedDataDict.from_batches(
-            [self._sample_batch(sample) for sample in samples],
-            pad_value_dict={"input_ids": self.pad_token_id},
-            allow_missing_packed_tensors=True,
+        return BatchedDataDict(
+            {
+                "message_log": [sample.message_log for sample in samples],
+                "loss_multiplier": torch.tensor(
+                    [sample.loss_multiplier for sample in samples],
+                    dtype=torch.float32,
+                ),
+            }
         )
 
 
@@ -577,7 +394,9 @@ def build_processor_adapter(
     processor_adapter: str,
     processor: Any,
     max_sequence_length: int,
-    only_unmask_final: bool,
+    add_bos: bool,
+    add_eos: bool,
+    add_generation_prompt: bool,
 ) -> SFTProcessorAdapter:
     """Build the temporary v1 processor adapter."""
     if processor_adapter != "hf_multimodal":
@@ -585,7 +404,9 @@ def build_processor_adapter(
     return HFMultimodalSFTProcessorAdapter(
         processor=processor,
         max_sequence_length=max_sequence_length,
-        only_unmask_final=only_unmask_final,
+        add_bos=add_bos,
+        add_eos=add_eos,
+        add_generation_prompt=add_generation_prompt,
     )
 
 

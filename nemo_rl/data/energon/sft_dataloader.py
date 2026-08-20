@@ -137,16 +137,9 @@ def _fingerprint(
 def _task_encoder(
     *,
     adapter: Any,
-    processor: Any,
-    sequence_length_pad_multiple: int,
 ) -> EnergonSFTTaskEncoder:
-    pad_token_id = processor.tokenizer.pad_token_id
-    if pad_token_id is None:
-        raise ValueError("The processor tokenizer must define pad_token_id for SFT.")
     return EnergonSFTTaskEncoder(
         adapter=adapter,
-        pad_token_id=pad_token_id,
-        sequence_length_pad_multiple=sequence_length_pad_multiple,
     )
 
 
@@ -167,8 +160,6 @@ def build_energon_sft_dataloaders(
     train_batch_size: int,
     val_batch_size: int,
     max_sequence_length: int,
-    sequence_length_pad_multiple: int,
-    only_unmask_final: bool,
 ) -> tuple[EnergonSFTDataLoader, EnergonSFTDataLoader | None]:
     """Build driver-owned train and validation loaders from prepared datasets."""
     if processor is None:
@@ -190,7 +181,9 @@ def build_energon_sft_dataloaders(
         processor_adapter=loader_config.processor_adapter,
         processor=processor,
         max_sequence_length=max_sequence_length,
-        only_unmask_final=only_unmask_final,
+        add_bos=data_config.get("add_bos", True),
+        add_eos=data_config.get("add_eos", True),
+        add_generation_prompt=data_config.get("add_generation_prompt", False),
     )
 
     train_dataset = get_train_dataset(
@@ -199,16 +192,14 @@ def build_energon_sft_dataloaders(
         worker_config=_worker_config(loader_config),
         batch_size=train_batch_size,
         batch_drop_last=True,
-        packing_buffer_size=loader_config.packing_buffer_size,
+        packing_buffer_size=None,
         shuffle_buffer_size=(
             loader_config.shuffle_buffer_size if data_config["shuffle"] else None
         ),
-        max_samples_per_sequence=loader_config.max_samples_per_sequence,
+        max_samples_per_sequence=None,
         virtual_epoch_length=train_source.virtual_epoch_length,
         task_encoder=_task_encoder(
             adapter=adapter,
-            processor=processor,
-            sequence_length_pad_multiple=sequence_length_pad_multiple,
         ),
     )
     train_loader = get_savable_loader(
@@ -243,12 +234,10 @@ def build_energon_sft_dataloaders(
         worker_config=_worker_config(loader_config),
         batch_size=val_batch_size,
         batch_drop_last=False,
-        packing_buffer_size=loader_config.packing_buffer_size,
+        packing_buffer_size=None,
         limit=val_source.limit,
         task_encoder=_task_encoder(
             adapter=adapter,
-            processor=processor,
-            sequence_length_pad_multiple=sequence_length_pad_multiple,
         ),
     )
     val_loader = get_savable_loader(

@@ -180,10 +180,6 @@ def setup(
             train_batch_size=policy_config["train_global_batch_size"],
             val_batch_size=sft_config.val_global_batch_size,
             max_sequence_length=max_sequence_length,
-            sequence_length_pad_multiple=policy_config[
-                "make_sequence_length_divisible_by"
-            ],
-            only_unmask_final=sft_config.only_unmask_final,
         )
     else:
         if train_dataset is None:
@@ -334,7 +330,7 @@ def prepare_sft_batch(
     only_unmask_final: bool,
     make_sequence_length_divisible_by: int,
 ) -> BatchedDataDict:
-    """Normalize legacy message batches and pre-encoded Energon batches."""
+    """Normalize a tokenized message-log batch or an already prepared batch."""
     if "message_log" in batch:
         add_loss_mask_to_message_log(
             batch["message_log"],

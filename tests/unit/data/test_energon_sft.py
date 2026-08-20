@@ -4,6 +4,7 @@ from copy import deepcopy
 import pytest
 import torch
 
+from nemo_rl.algorithms.sft import prepare_sft_batch
 from nemo_rl.data.energon.config import EnergonLoaderConfig, EnergonSourceConfig
 from nemo_rl.data.energon.sft import (
     CanonicalSFTSample,
@@ -12,11 +13,14 @@ from nemo_rl.data.energon.sft import (
     MediaRef,
 )
 from nemo_rl.data.energon.sft_dataloader import EnergonSFTDataLoader
+from nemo_rl.data.llm_message_utils import message_log_to_flat_messages
 from nemo_rl.data.multimodal_utils import PackedTensor
 
 
 class _FakeTokenizer:
     pad_token_id = 0
+    bos_token = None
+    eos_token = "<eos>"
     model_input_names = ["input_ids", "attention_mask"]
     name_or_path = "fake-tokenizer"
     chat_template = "fake-template"
@@ -37,40 +41,61 @@ class _FakeQwenProcessor:
         "mm_token_type_ids",
     ]
     name_or_path = "fake-qwen3-vl"
+    pad_token_id = 0
+    bos_token = None
+    eos_token = "<eos>"
 
-    def __init__(self, assistant_mask=None):
-        self.assistant_mask = assistant_mask or [0, 0, 1, 1]
+    def __init__(self):
         self.messages = None
         self.tools = None
 
     def apply_chat_template(self, messages, **kwargs):
         self.messages = deepcopy(messages)
         self.tools = kwargs.get("tools")
-        sequence_length = len(self.assistant_mask)
-        return {
-            "input_ids": torch.arange(sequence_length).unsqueeze(0),
-            "assistant_masks": torch.tensor(self.assistant_mask).unsqueeze(0),
-            "pixel_values": torch.ones(8, 4),
-            "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 2]]),
-            "mm_token_type_ids": torch.zeros(1, sequence_length, dtype=torch.long),
+        assert kwargs["tokenize"] is False
+
+        def render_content(content):
+            if isinstance(content, str):
+                return content
+            return "".join(
+                part.get("text", "")
+                if part["type"] == "text"
+                else f"<{part['type']}>"
+                for part in content
+            )
+
+        return "".join(
+            f"<{message['role']}>{render_content(message.get('content', ''))}"
+            f"</{message['role']}>"
+            for message in messages
+        )
+
+    def __call__(self, *, text, images=None, **kwargs):
+        text = text[0] if isinstance(text, list) else text
+        input_ids = torch.tensor(
+            [[ord(character) % 251 + 1 for character in text]], dtype=torch.long
+        )
+        processed = {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+            "mm_token_type_ids": torch.zeros_like(input_ids),
         }
+        if images:
+            processed["pixel_values"] = torch.ones(len(images), 4)
+            processed["image_grid_thw"] = torch.tensor(
+                [[1, 2, 2]] * len(images), dtype=torch.long
+            )
+        return processed
 
 
 class NemotronH_Nano_Omni_Reasoning_V3Processor(_FakeQwenProcessor):
     model_input_names = ["input_ids", "pixel_values", "imgs_sizes", "num_frames"]
 
-    def apply_chat_template(self, messages, **kwargs):
-        if kwargs["tokenize"]:
-            return "<image> prompt assistant"
-        return "<image> prompt assistant"
-
-    def __call__(self, **kwargs):
-        return {
-            "input_ids": torch.tensor([[10, 20, 21, 22]]),
-            "pixel_values": torch.ones(2, 3, 4, 4),
-            "imgs_sizes": torch.tensor([[4, 4], [4, 4]]),
-            "num_frames": torch.ones(2, dtype=torch.long),
-        }
+    def __call__(self, *, text, images=None, **kwargs):
+        processed = {"input_ids": torch.tensor([[10, 20, 21, 22]])}
+        if images:
+            processed["pixel_values"] = torch.ones(len(images), 3, 4, 4)
+        return processed
 
 
 def _sample(*, with_tools=False):
@@ -121,88 +146,105 @@ def _sample(*, with_tools=False):
     )
 
 
-def test_qwen_adapter_preserves_media_order_tools_and_side_tensors():
-    processor = _FakeQwenProcessor()
-    adapter = HFMultimodalSFTProcessorAdapter(
+def _adapter(processor, *, max_sequence_length=1024):
+    return HFMultimodalSFTProcessorAdapter(
         processor=processor,
-        max_sequence_length=16,
-        only_unmask_final=False,
+        max_sequence_length=max_sequence_length,
+        add_bos=False,
+        add_eos=False,
+        add_generation_prompt=False,
     )
 
-    encoded = adapter.encode(_sample(with_tools=True))
+
+def test_qwen_adapter_returns_tokenized_message_log_with_model_inputs():
+    processor = _FakeQwenProcessor()
+    encoded = _adapter(processor).encode(_sample(with_tools=True))
 
     user_content = processor.messages[0]["content"]
     assert [part["type"] for part in user_content] == ["image", "text", "image"]
     assert torch.equal(user_content[0]["image"], torch.ones(3, 4, 4))
     assert torch.equal(user_content[2]["image"], torch.zeros(3, 4, 4))
     assert processor.tools == [{"type": "function", "function": {"name": "lookup"}}]
-    assert encoded.token_mask.tolist() == [0, 0, 1, 1]
-    assert isinstance(encoded.model_inputs["pixel_values"], PackedTensor)
-    assert isinstance(encoded.model_inputs["image_grid_thw"], PackedTensor)
-    assert encoded.model_inputs["mm_token_type_ids"].shape == (4,)
+
+    flat = message_log_to_flat_messages(encoded.message_log)
+    assert [message["role"] for message in encoded.message_log] == [
+        "user",
+        "assistant",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    assert isinstance(flat["pixel_values"], PackedTensor)
+    assert isinstance(flat["image_grid_thw"], PackedTensor)
+    assert flat["mm_token_type_ids"].shape == flat["token_ids"].shape
 
 
-def test_only_unmask_final_keeps_last_assistant_span():
-    processor = _FakeQwenProcessor([0, 1, 1, 0, 1, 1])
-    adapter = HFMultimodalSFTProcessorAdapter(
-        processor=processor,
-        max_sequence_length=16,
-        only_unmask_final=True,
-    )
-
-    encoded = adapter.encode(_sample())
-
-    assert encoded.token_mask.tolist() == [0, 0, 0, 0, 1, 1]
-
-
-def test_nano_adapter_keeps_placeholder_side_tensors(monkeypatch):
-    processor = NemotronH_Nano_Omni_Reasoning_V3Processor()
-    monkeypatch.setattr(
-        processor.tokenizer,
-        "apply_chat_template",
-        lambda messages, **kwargs: {
-            "input_ids": torch.tensor([[10, 20, 21, 22]]),
-            "assistant_masks": torch.tensor([[0, 0, 1, 1]]),
-        },
-        raising=False,
-    )
-    adapter = HFMultimodalSFTProcessorAdapter(
-        processor=processor,
-        max_sequence_length=16,
-        only_unmask_final=False,
-    )
-
-    encoded = adapter.encode(_sample())
-
-    assert encoded.token_mask.tolist() == [0, 0, 1, 1]
-    assert isinstance(encoded.model_inputs["pixel_values"], PackedTensor)
-    assert isinstance(encoded.model_inputs["imgs_sizes"], PackedTensor)
-    assert isinstance(encoded.model_inputs["num_frames"], PackedTensor)
-
-
-def test_task_encoder_batches_heterogeneous_rows():
+def test_prepare_sft_batch_builds_mask_from_energon_message_log():
     processor = _FakeQwenProcessor()
-    adapter = HFMultimodalSFTProcessorAdapter(
-        processor=processor,
-        max_sequence_length=16,
+    adapter = _adapter(processor)
+    encoder = EnergonSFTTaskEncoder(adapter=adapter)
+    encoded = adapter.encode(_sample())
+
+    batch = encoder.batch([encoded])
+    prepared = prepare_sft_batch(
+        batch,
+        tokenizer=processor,
         only_unmask_final=False,
+        make_sequence_length_divisible_by=8,
     )
-    encoder = EnergonSFTTaskEncoder(
-        adapter=adapter,
-        pad_token_id=0,
-        sequence_length_pad_multiple=8,
+
+    expected_ids = torch.cat(
+        [message["token_ids"] for message in encoded.message_log]
     )
+    expected_mask = torch.cat(
+        [
+            torch.full_like(
+                message["token_ids"], int(message["role"] == "assistant")
+            )
+            for message in encoded.message_log
+        ]
+    )
+    assert torch.equal(prepared["input_ids"][0, : encoded.length], expected_ids)
+    assert torch.equal(prepared["token_mask"][0, : encoded.length], expected_mask)
+    assert prepared["input_ids"].shape[1] % 8 == 0
+
+
+def test_nano_adapter_keeps_placeholder_side_tensors():
+    encoded = _adapter(NemotronH_Nano_Omni_Reasoning_V3Processor()).encode(
+        _sample()
+    )
+
+    flat = message_log_to_flat_messages(encoded.message_log)
+    assert isinstance(flat["pixel_values"], PackedTensor)
+    assert isinstance(flat["imgs_sizes"], PackedTensor)
+    assert isinstance(flat["num_frames"], PackedTensor)
+
+
+def test_task_encoder_batches_heterogeneous_message_logs():
+    processor = _FakeQwenProcessor()
+    adapter = _adapter(processor)
+    encoder = EnergonSFTTaskEncoder(adapter=adapter)
     assert encoder.decoder.config()["image_decode"] == "pilrgb"
+
     encoded = adapter.encode(_sample())
     text_only = deepcopy(encoded)
-    text_only.model_inputs = {"mm_token_type_ids": torch.zeros(4, dtype=torch.long)}
+    for message in text_only.message_log:
+        message["content"] = "text only"
+        for key in ("pixel_values", "image_grid_thw"):
+            message.pop(key, None)
 
     batch = encoder.batch([encoded, text_only])
+    prepared = prepare_sft_batch(
+        batch,
+        tokenizer=processor,
+        only_unmask_final=False,
+        make_sequence_length_divisible_by=8,
+    )
 
-    assert batch["input_ids"].shape == (2, 8)
-    assert batch["input_lengths"].tolist() == [4, 4]
-    assert len(batch["pixel_values"]) == 2
-    assert batch["pixel_values"].tensors[1] is None
+    assert list(batch) == ["message_log", "loss_multiplier"]
+    assert prepared["input_ids"].shape[0] == 2
+    assert len(prepared["pixel_values"]) == 2
+    assert prepared["pixel_values"].tensors[1] is None
 
 
 class _FakeLoader:
@@ -245,12 +287,17 @@ def test_loader_state_is_fingerprinted_and_restored_before_iteration():
         mismatched.load_state_dict(state)
 
 
-def test_energon_config_defaults_and_validation():
-    assert EnergonLoaderConfig().packing_buffer_size is None
-    assert EnergonLoaderConfig().processor_adapter == "hf_multimodal"
+def test_energon_config_disables_sequence_packing():
+    config = EnergonLoaderConfig()
+    assert config.packing_buffer_size is None
+    assert config.max_samples_per_sequence is None
+    assert config.processor_adapter == "hf_multimodal"
+
     source = EnergonSourceConfig(
         path="/data/prepared", split="train", virtual_epoch_length=10
     )
     assert source.virtual_epoch_length == 10
     with pytest.raises(ValueError):
         EnergonLoaderConfig(packing_buffer_size=10)
+    with pytest.raises(ValueError):
+        EnergonLoaderConfig(max_samples_per_sequence=2)
