@@ -52,7 +52,6 @@ class MediaRef:
 @edataclass
 class CanonicalSFTSample(Sample):
     """Model-neutral conversation produced by the Energon cooker."""
-
     messages: list[dict[str, Any]]
     media: list[MediaRef]
     tools: list[dict[str, Any]] | None
