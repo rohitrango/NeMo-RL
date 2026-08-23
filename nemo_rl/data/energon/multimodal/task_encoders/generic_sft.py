@@ -16,158 +16,32 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
-from pathlib import PurePosixPath
 from typing import Any, Protocol
 
 import torch
-from megatron.energon import (
-    Cooker,
-    CrudeSample,
-    DefaultTaskEncoder,
-    Sample,
-    SampleDecoder,
-    basic_sample_keys,
-    edataclass,
-    stateless,
-)
+from megatron.energon import CrudeSample, SampleDecoder, stateless
 
+from nemo_rl.data.energon.multimodal.packing import EnergonPackingHooks
+from nemo_rl.data.energon.multimodal.task_encoders.base import BaseSFTTaskEncoder
+from nemo_rl.data.energon.multimodal.types import (
+    CanonicalSFTSample,
+    EncodedSFTSample,
+)
 from nemo_rl.data.interfaces import TaskDataSpec
 from nemo_rl.data.llm_message_utils import get_formatted_message_log
 from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
-_MEDIA_TYPES = frozenset({"image", "video", "audio"})
-
-
-@dataclass(frozen=True)
-class MediaRef:
-    """One ordered media occurrence in a conversation."""
-
-    modality: str
-    value: Any
-
-
-@edataclass
-class CanonicalSFTSample(Sample):
-    """Model-neutral conversation produced by the Energon cooker."""
-    messages: list[dict[str, Any]]
-    media: list[MediaRef]
-    tools: list[dict[str, Any]] | None
-
-
-@edataclass
-class EncodedSFTSample(Sample):
-    """One tokenized message log before batching."""
-
-    message_log: list[dict[str, Any]]
-    length: int
-    loss_multiplier: float
-    group_key: tuple[Any, ...]
-    sample_key: str
-
 
 class SFTProcessorAdapter(Protocol):
-    """Temporary v1 boundary between canonical and model-specific SFT data."""
+    """Boundary between canonical and model-specific SFT data."""
 
     @property
     def fingerprint(self) -> str: ...
 
     def encode(self, sample: CanonicalSFTSample) -> EncodedSFTSample: ...
-
-
-def _decode_json_payload(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, bytes):
-        value = value.decode("utf-8")
-    if isinstance(value, str):
-        decoded = json.loads(value)
-        if isinstance(decoded, dict):
-            return decoded
-    raise ValueError("The SFT payload must decode to a JSON object.")
-
-
-def _get_crude_payload(sample: CrudeSample) -> dict[str, Any]:
-    if "messages" in sample:
-        return dict(sample)
-    for key in ("json", "data", "metadata"):
-        if key in sample:
-            return _decode_json_payload(sample[key])
-    raise ValueError("Energon SFT samples must contain 'messages' or a JSON payload.")
-
-
-def _infer_modality(member: str) -> str:
-    suffix = PurePosixPath(member).suffix.lower()
-    if suffix in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
-        return "image"
-    if suffix in {".mp4", ".webm", ".mov", ".mkv"}:
-        return "video"
-    if suffix in {".wav", ".flac", ".mp3", ".ogg"}:
-        return "audio"
-    raise ValueError(f"Cannot infer media type from member {member!r}.")
-
-
-def _get_media_value(sample: CrudeSample, entry: dict[str, Any]) -> Any:
-    modality = entry.get("type")
-    for key in ("value", modality, "image", "video", "audio"):
-        if key and key in entry:
-            return entry[key]
-
-    member = entry.get("member")
-    if not isinstance(member, str) or not member:
-        raise ValueError("Each media entry needs a value or shard member name.")
-
-    sample_key = str(sample.get("__key__", ""))
-    member_path = PurePosixPath(member)
-    candidates = [
-        member,
-        member_path.name,
-        member_path.suffix.removeprefix("."),
-    ]
-    if sample_key and member.startswith(f"{sample_key}."):
-        candidates.append(member.removeprefix(f"{sample_key}."))
-    for candidate in candidates:
-        if candidate and candidate in sample:
-            return sample[candidate]
-    raise ValueError(
-        f"Media member {member!r} is absent from Energon sample {sample_key!r}."
-    )
-
-
-@stateless
-def _cook_sft_sample(sample: CrudeSample) -> CanonicalSFTSample:
-    payload = _get_crude_payload(sample)
-    messages = payload.get("messages")
-    if not isinstance(messages, list) or not messages:
-        raise ValueError("Energon SFT samples require a non-empty messages list.")
-
-    media: list[MediaRef] = []
-    raw_media = payload.get("media", [])
-    if not isinstance(raw_media, list):
-        raise ValueError("The media manifest must be a list.")
-    for raw_entry in raw_media:
-        entry = {"member": raw_entry} if isinstance(raw_entry, str) else raw_entry
-        if not isinstance(entry, dict):
-            raise ValueError("Each media manifest entry must be a string or object.")
-        member = entry.get("member")
-        modality = entry.get("type")
-        if modality is None and isinstance(member, str):
-            modality = _infer_modality(member)
-        if modality not in _MEDIA_TYPES:
-            raise ValueError(f"Unsupported media type {modality!r}.")
-        media.append(MediaRef(modality=modality, value=_get_media_value(sample, entry)))
-
-    tools = payload.get("tools")
-    if tools is not None and not isinstance(tools, list):
-        raise ValueError("The tools field must be a list when present.")
-    return CanonicalSFTSample(
-        **basic_sample_keys(sample),
-        messages=deepcopy(messages),
-        media=media,
-        tools=deepcopy(tools),
-    )
 
 
 def _normalize_messages(sample: CanonicalSFTSample) -> list[dict[str, Any]]:
@@ -177,7 +51,9 @@ def _normalize_messages(sample: CanonicalSFTSample) -> list[dict[str, Any]]:
 
     for message in messages:
         if not isinstance(message, dict):
-            raise ValueError(f"Sample {sample.__key__!r} contains a non-object message.")
+            raise ValueError(
+                f"Sample {sample.__key__!r} contains a non-object message."
+            )
         role = message.get("role")
         if role not in {"system", "user", "assistant", "tool"}:
             raise ValueError(f"Sample {sample.__key__!r} has invalid role {role!r}.")
@@ -247,7 +123,7 @@ def _normalize_messages(sample: CanonicalSFTSample) -> list[dict[str, Any]]:
 
 
 class HFMultimodalSFTProcessorAdapter:
-    """Temporary Hugging Face implementation of the v1 processor boundary."""
+    """Hugging Face implementation of the generic processor boundary."""
 
     def __init__(
         self,
@@ -280,9 +156,9 @@ class HFMultimodalSFTProcessorAdapter:
             "add_eos": add_eos,
             "add_generation_prompt": add_generation_prompt,
         }
-        encoded = json.dumps(
-            fingerprint_data, sort_keys=True, default=str
-        ).encode("utf-8")
+        encoded = json.dumps(fingerprint_data, sort_keys=True, default=str).encode(
+            "utf-8"
+        )
         self._fingerprint = hashlib.sha256(encoded).hexdigest()
 
     @property
@@ -341,34 +217,36 @@ class HFMultimodalSFTProcessorAdapter:
         )
 
 
-class EnergonSFTTaskEncoder(
-    DefaultTaskEncoder[
-        CanonicalSFTSample,
-        EncodedSFTSample,
-        BatchedDataDict[Any],
-        BatchedDataDict[Any],
-    ]
-):
+class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
     """Encode, group, and batch complete multimodal SFT conversations."""
 
     __default_failure_tolerance__ = 0
-    cookers = (Cooker(_cook_sft_sample),)
-    # Match the existing HF VLM path, which gives PIL RGB images to the
-    # processor. The default torchrgb decoder produces already-rescaled
-    # tensors that an HF image processor may rescale a second time.
+    sample_schema = "nemo_rl.sft.encoded.v1"
+    # Match the existing HF VLM path. Its processor expects PIL RGB images.
     decoder = SampleDecoder(image_decode="pilrgb")
 
     def __init__(
         self,
         *,
         adapter: SFTProcessorAdapter,
+        cooker_functions: Sequence[Callable[[CrudeSample], CanonicalSFTSample]],
+        packing_hooks: EnergonPackingHooks[Any, Any, Any] | None,
+        include_source_ids: bool,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            cooker_functions=cooker_functions,
+            packing_hooks=packing_hooks,
+        )
         self.adapter = adapter
+        self.include_source_ids = include_source_ids
 
     @stateless
-    def encode_sample(self, sample: CanonicalSFTSample) -> EncodedSFTSample:
+    def preencode_sample(self, sample: CanonicalSFTSample) -> EncodedSFTSample:
         return self.adapter.encode(sample)
+
+    @stateless
+    def postencode_sample(self, sample: EncodedSFTSample) -> EncodedSFTSample:
+        return sample
 
     def batch_group_criterion(
         self, sample: EncodedSFTSample
@@ -377,15 +255,20 @@ class EnergonSFTTaskEncoder(
 
     @stateless
     def batch(self, samples: list[EncodedSFTSample]) -> BatchedDataDict[Any]:
-        return BatchedDataDict(
-            {
-                "message_log": [sample.message_log for sample in samples],
-                "loss_multiplier": torch.tensor(
-                    [sample.loss_multiplier for sample in samples],
-                    dtype=torch.float32,
-                ),
-            }
-        )
+        values: dict[str, Any] = {
+            "message_log": [sample.message_log for sample in samples],
+            "loss_multiplier": torch.tensor(
+                [sample.loss_multiplier for sample in samples],
+                dtype=torch.float32,
+            ),
+        }
+        if self.include_source_ids:
+            values["source_ids"] = [sample.sample_key for sample in samples]
+        return BatchedDataDict(values)
+
+    @stateless
+    def encode_batch(self, batch: BatchedDataDict[Any]) -> BatchedDataDict[Any]:
+        return batch
 
 
 def build_processor_adapter(
@@ -397,7 +280,7 @@ def build_processor_adapter(
     add_eos: bool,
     add_generation_prompt: bool,
 ) -> SFTProcessorAdapter:
-    """Build the temporary v1 processor adapter."""
+    """Build the configured model processor adapter."""
     if processor_adapter != "hf_multimodal":
         raise ValueError(f"Unsupported SFT processor adapter {processor_adapter!r}.")
     return HFMultimodalSFTProcessorAdapter(
@@ -410,11 +293,8 @@ def build_processor_adapter(
 
 
 __all__ = [
-    "CanonicalSFTSample",
-    "EncodedSFTSample",
-    "EnergonSFTTaskEncoder",
+    "GenericSFTTaskEncoder",
     "HFMultimodalSFTProcessorAdapter",
-    "MediaRef",
     "SFTProcessorAdapter",
     "build_processor_adapter",
 ]

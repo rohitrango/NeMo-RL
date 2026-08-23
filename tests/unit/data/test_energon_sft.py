@@ -1,18 +1,29 @@
+import hashlib
 import io
+import json
 from copy import deepcopy
 
 import pytest
 import torch
 
 from nemo_rl.algorithms.sft import prepare_sft_batch
-from nemo_rl.data.energon.config import EnergonLoaderConfig, EnergonSourceConfig
-from nemo_rl.data.energon.sft import (
+from nemo_rl.data.energon.config import (
+    EnergonLoaderConfig,
+    EnergonPackingConfig,
+    EnergonSourceConfig,
+)
+from nemo_rl.data.energon.multimodal import (
     CanonicalSFTSample,
-    EnergonSFTTaskEncoder,
+    GenericSFTTaskEncoder,
     HFMultimodalSFTProcessorAdapter,
     MediaRef,
+    cook_conversation,
 )
-from nemo_rl.data.energon.sft_dataloader import EnergonSFTDataLoader
+from nemo_rl.data.energon.sft_dataloader import (
+    EnergonSFTDataLoader,
+    _loader_config,
+    _v1_fingerprint,
+)
 from nemo_rl.data.llm_message_utils import message_log_to_flat_messages
 from nemo_rl.data.multimodal_utils import PackedTensor
 
@@ -58,9 +69,7 @@ class _FakeQwenProcessor:
             if isinstance(content, str):
                 return content
             return "".join(
-                part.get("text", "")
-                if part["type"] == "text"
-                else f"<{part['type']}>"
+                part.get("text", "") if part["type"] == "text" else f"<{part['type']}>"
                 for part in content
             )
 
@@ -156,6 +165,15 @@ def _adapter(processor, *, max_sequence_length=1024):
     )
 
 
+def _encoder(adapter, *, include_source_ids=False):
+    return GenericSFTTaskEncoder(
+        adapter=adapter,
+        cooker_functions=[cook_conversation],
+        packing_hooks=None,
+        include_source_ids=include_source_ids,
+    )
+
+
 def test_qwen_adapter_returns_tokenized_message_log_with_model_inputs():
     processor = _FakeQwenProcessor()
     encoded = _adapter(processor).encode(_sample(with_tools=True))
@@ -182,7 +200,7 @@ def test_qwen_adapter_returns_tokenized_message_log_with_model_inputs():
 def test_prepare_sft_batch_builds_mask_from_energon_message_log():
     processor = _FakeQwenProcessor()
     adapter = _adapter(processor)
-    encoder = EnergonSFTTaskEncoder(adapter=adapter)
+    encoder = _encoder(adapter)
     encoded = adapter.encode(_sample())
 
     batch = encoder.batch([encoded])
@@ -193,14 +211,10 @@ def test_prepare_sft_batch_builds_mask_from_energon_message_log():
         make_sequence_length_divisible_by=8,
     )
 
-    expected_ids = torch.cat(
-        [message["token_ids"] for message in encoded.message_log]
-    )
+    expected_ids = torch.cat([message["token_ids"] for message in encoded.message_log])
     expected_mask = torch.cat(
         [
-            torch.full_like(
-                message["token_ids"], int(message["role"] == "assistant")
-            )
+            torch.full_like(message["token_ids"], int(message["role"] == "assistant"))
             for message in encoded.message_log
         ]
     )
@@ -210,9 +224,7 @@ def test_prepare_sft_batch_builds_mask_from_energon_message_log():
 
 
 def test_nano_adapter_keeps_placeholder_side_tensors():
-    encoded = _adapter(NemotronH_Nano_Omni_Reasoning_V3Processor()).encode(
-        _sample()
-    )
+    encoded = _adapter(NemotronH_Nano_Omni_Reasoning_V3Processor()).encode(_sample())
 
     flat = message_log_to_flat_messages(encoded.message_log)
     assert isinstance(flat["pixel_values"], PackedTensor)
@@ -223,7 +235,7 @@ def test_nano_adapter_keeps_placeholder_side_tensors():
 def test_task_encoder_batches_heterogeneous_message_logs():
     processor = _FakeQwenProcessor()
     adapter = _adapter(processor)
-    encoder = EnergonSFTTaskEncoder(adapter=adapter)
+    encoder = _encoder(adapter)
     assert encoder.decoder.config()["image_decode"] == "pilrgb"
 
     encoded = adapter.encode(_sample())
@@ -245,6 +257,21 @@ def test_task_encoder_batches_heterogeneous_message_logs():
     assert prepared["input_ids"].shape[0] == 2
     assert len(prepared["pixel_values"]) == 2
     assert prepared["pixel_values"].tensors[1] is None
+
+
+def test_task_encoder_runs_all_five_lifecycle_methods():
+    adapter = _adapter(_FakeQwenProcessor())
+    encoder = _encoder(adapter, include_source_ids=True)
+
+    preencoded = encoder.preencode_sample(_sample())
+    postencoded = encoder.postencode_sample(preencoded)
+    batch = encoder.batch([postencoded])
+
+    assert encoder.encode_sample(_sample()).sample_key == postencoded.sample_key
+    assert encoder.encode_batch(batch) is batch
+    assert batch["source_ids"] == ["sample-0"]
+    with pytest.raises(RuntimeError, match="No Energon packing"):
+        encoder.select_samples_to_pack([preencoded])
 
 
 class _FakeLoader:
@@ -292,6 +319,10 @@ def test_energon_config_disables_sequence_packing():
     assert config.packing_buffer_size is None
     assert config.max_samples_per_sequence is None
     assert config.processor_adapter == "hf_multimodal"
+    assert config.topology_mapper == "default"
+    assert config.task_encoder.name == "generic_sft"
+    assert config.task_encoder.packing is None
+    assert [cooker.name for cooker in config.cookers] == ["generic_conversation"]
 
     source = EnergonSourceConfig(
         path="/data/prepared", split="train", virtual_epoch_length=10
@@ -301,3 +332,55 @@ def test_energon_config_disables_sequence_packing():
         EnergonLoaderConfig(packing_buffer_size=10)
     with pytest.raises(ValueError):
         EnergonLoaderConfig(max_samples_per_sequence=2)
+
+
+def test_v1_fingerprint_uses_the_former_loader_fields_only():
+    source = EnergonSourceConfig(
+        path="/data/prepared", split="train", virtual_epoch_length=10
+    )
+    config = EnergonLoaderConfig()
+    former_loader_config = {
+        "num_workers": 8,
+        "shuffle_buffer_size": 1000,
+        "max_samples_per_sequence": None,
+        "packing_buffer_size": None,
+        "batch_grouping": "auto",
+        "processor_adapter": "hf_multimodal",
+        "seed_offset": 0,
+        "prefetch_factor": 2,
+        "checkpoint_every_sec": 60.0,
+        "watchdog_timeout_seconds": 60.0,
+    }
+    payload = {
+        "source": source.model_dump(mode="json"),
+        "loader": former_loader_config,
+        "adapter": "adapter-fingerprint",
+        "split_role": "train",
+    }
+    expected = hashlib.sha256(
+        json.dumps(payload, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+    assert (
+        _v1_fingerprint(
+            source=source,
+            loader_config=config,
+            adapter_fingerprint="adapter-fingerprint",
+            split_role="train",
+        )
+        == expected
+    )
+
+
+def test_stage1_config_parses_registry_keys_and_rejects_legacy_packing_values():
+    config = EnergonLoaderConfig.model_validate(
+        {"task_encoder": "generic_sft", "cookers": ["generic_conversation"]}
+    )
+    assert config.task_encoder.name == "generic_sft"
+    assert config.cookers[0].name == "generic_conversation"
+    with pytest.raises(ValueError):
+        EnergonPackingConfig(name="future", buffer_size=0)
+    with pytest.raises(ValueError, match="not supported"):
+        _loader_config(
+            {"task_encoder": {"packing": {"name": "future", "buffer_size": 16}}}
+        )

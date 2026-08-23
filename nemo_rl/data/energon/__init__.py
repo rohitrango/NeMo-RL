@@ -14,7 +14,23 @@
 
 from typing import Any
 
-from nemo_rl.data.energon.config import EnergonLoaderConfig, EnergonSourceConfig
+from nemo_rl.data.energon.config import (
+    EnergonCookerConfig,
+    EnergonLoaderConfig,
+    EnergonPackingConfig,
+    EnergonSourceConfig,
+    EnergonTaskEncoderConfig,
+)
+
+
+def build_energon_sft_loader(**kwargs: Any) -> Any:
+    """Build one rank-aware SFT loader with an optional Energon dependency."""
+    # Deferred so importing the default Hugging Face SFT path does not require Energon.
+    from nemo_rl.data.energon.sft_dataloader import (
+        build_energon_sft_loader as _build,
+    )
+
+    return _build(**kwargs)
 
 
 def build_energon_sft_dataloaders(**kwargs: Any) -> tuple[Any, Any]:
@@ -28,7 +44,11 @@ def build_energon_sft_dataloaders(**kwargs: Any) -> tuple[Any, Any]:
 
 
 __all__ = [
+    "EnergonCookerConfig",
     "EnergonLoaderConfig",
+    "EnergonPackingConfig",
     "EnergonSourceConfig",
+    "EnergonTaskEncoderConfig",
+    "build_energon_sft_loader",
     "build_energon_sft_dataloaders",
 ]

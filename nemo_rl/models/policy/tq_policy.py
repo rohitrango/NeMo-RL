@@ -38,8 +38,9 @@ from typing import Any, Optional
 import ray
 
 from nemo_rl.algorithms.loss.interfaces import LossFunction
-from nemo_rl.data_plane import DataPlaneConfig, KVBatchMeta, build_data_plane_client
+from nemo_rl.data_plane import KVBatchMeta, build_data_plane_client
 from nemo_rl.data_plane.column_io import read_columns, round_up, write_columns
+from nemo_rl.data_plane.interfaces import DataPlaneRuntimeConfig
 from nemo_rl.data_plane.preshard import shard_meta_for_dp
 from nemo_rl.data_plane.schema import (
     DP_TRAIN_FIELDS,
@@ -49,6 +50,12 @@ from nemo_rl.data_plane.schema import (
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.policy.lm_policy import Policy
+from nemo_rl.models.policy.packing import (
+    GlobalPackingInput,
+    Packer,
+    PlacedPackingInput,
+    resolve_packer,
+)
 from nemo_rl.utils.flops_tracker import get_theoretical_tflops
 from nemo_rl.utils.timer import Timer
 
@@ -99,8 +106,9 @@ class TQPolicy(Policy):
     def __init__(
         self,
         *args: Any,
-        dp_cfg: DataPlaneConfig,
+        dp_cfg: DataPlaneRuntimeConfig,
         tq_partition_id: str = "train",
+        packer: Optional[Packer] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -121,6 +129,7 @@ class TQPolicy(Policy):
         self._router_replay_enabled = bool(
             (self.cfg.get("router_replay") or {}).get("enabled", False)
         )
+        self.packer = packer if packer is not None else self._make_default_packer()
 
         # Forward to workers (replaces ``Policy.setup_data_plane`` call
         # site in the trainer — TQPolicy bundles bootstrap + worker
@@ -244,28 +253,32 @@ class TQPolicy(Policy):
 
     # ── 1-hop entrypoints (KVBatchMeta in, no re-fan-out) ──────────────────
 
+    def _make_default_packer(self) -> Packer:
+        """Build the NeMo-RL packer from the initialized Policy state."""
+        return resolve_packer(
+            "nemo_rl",
+            cfg=self.cfg,
+            use_dynamic_batches=getattr(self, "use_dynamic_batches", False),
+            dynamic_batching_args=getattr(self, "dynamic_batching_args", None),
+            use_sequence_packing=getattr(self, "use_sequence_packing", False),
+            sequence_packing_args=getattr(self, "sequence_packing_args", None),
+            shard_meta=shard_meta_for_dp,
+        )
+
+    def _get_packer(self) -> Packer:
+        """Return the configured packer, including for bare unit-test objects."""
+        packer = getattr(self, "packer", None)
+        if packer is None:
+            packer = self._make_default_packer()
+            self.packer = packer
+        return packer
+
     def _packing_args(
         self,
         mb_tokens_key: str,
     ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
-        """Resolve (sequence_packing_args, dynamic_batching_args) for a given stage.
-
-        The stage is identified by ``mb_tokens_key`` (``"logprob_mb_tokens"`` or
-        ``"train_mb_tokens"``).
-        """
-        if getattr(self, "use_dynamic_batches", False):
-            args = dict(self.dynamic_batching_args)
-            args["max_tokens_per_microbatch"] = self.cfg["dynamic_batching"][
-                mb_tokens_key
-            ]
-            return None, args
-        if getattr(self, "use_sequence_packing", False):
-            args = dict(self.sequence_packing_args)
-            args["max_tokens_per_microbatch"] = self.cfg["sequence_packing"][
-                mb_tokens_key
-            ]
-            return args, None
-        return None, None
+        """Return packer arguments for padding calculations."""
+        return self._get_packer().packing_args(mb_tokens_key)
 
     def _logprob_dispatch(
         self,
@@ -288,7 +301,6 @@ class TQPolicy(Policy):
         always None, so this dispatcher just waits for completion.
         """
         self._stamp_pad_seqlen(meta)
-        spa, dba = self._packing_args("logprob_mb_tokens")
         lp_meta = replace(
             meta,
             fields=fields_with_optional_routed_experts(
@@ -298,13 +310,15 @@ class TQPolicy(Policy):
             task_name=task_name,
         )
         with timer.time(f"{timer_prefix}/shard_meta") if timer else nullcontext():
-            metas, _ = shard_meta_for_dp(
-                lp_meta,
-                dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
-                batch_size=None,
-                sequence_packing_args=spa,
-                dynamic_batching_args=dba,
+            packing_result = self._get_packer().pack(
+                GlobalPackingInput(
+                    meta=lp_meta,
+                    dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
+                    batch_size=None,
+                    mb_tokens_key="logprob_mb_tokens",
+                )
             )
+            metas = packing_result.dp_metas
         with timer.time(f"{timer_prefix}/submit_futures") if timer else nullcontext():
             futures = self.worker_group.run_all_workers_sharded_data(
                 worker_method,
@@ -392,7 +406,6 @@ class TQPolicy(Policy):
         micro_batch_size = mbs or self.cfg["train_micro_batch_size"]
 
         self._stamp_pad_seqlen(meta)
-        spa, dba = self._packing_args("train_mb_tokens")
         # ``train_fields`` (rollout + logprob deltas + advantages + sample_mask;
         # default ``DP_TRAIN_FIELDS``) must be in TQ before this call — written
         # by workers + driver delta-writes. Caller may narrow to drop columns
@@ -405,13 +418,15 @@ class TQPolicy(Policy):
             task_name="train",
         )
         with timer.time("policy_training/shard_meta") if timer else nullcontext():
-            dp_metas, _ = shard_meta_for_dp(
-                train_meta,
-                dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
-                batch_size=batch_size,
-                sequence_packing_args=spa,
-                dynamic_batching_args=dba,
+            packing_result = self._get_packer().pack(
+                GlobalPackingInput(
+                    meta=train_meta,
+                    dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
+                    batch_size=batch_size,
+                    mb_tokens_key="train_mb_tokens",
+                )
             )
+            dp_metas = packing_result.dp_metas
 
         if self.flops_tracker is not None:
             self.flops_tracker.reset()
@@ -520,7 +535,6 @@ class TQPolicy(Policy):
         :meth:`finish_train_step`.
         """
         self._stamp_pad_seqlen(meta)
-        spa, dba = self._packing_args("train_mb_tokens")
         train_meta = replace(
             meta,
             fields=fields_with_optional_routed_experts(
@@ -529,14 +543,76 @@ class TQPolicy(Policy):
             task_name="train",
         )
         with timer.time("policy_training/shard_meta") if timer else nullcontext():
-            dp_metas, _ = shard_meta_for_dp(
-                train_meta,
-                dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
-                batch_size=None,
-                sequence_packing_args=spa,
-                dynamic_batching_args=dba,
+            packing_result = self._get_packer().pack(
+                GlobalPackingInput(
+                    meta=train_meta,
+                    dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
+                    batch_size=None,
+                    mb_tokens_key="train_mb_tokens",
+                )
             )
+            dp_metas = packing_result.dp_metas
 
+        self._dispatch_train_microbatches(dp_metas, timer=timer)
+
+    def train_placed_microbatches(
+        self,
+        dp_metas: list[KVBatchMeta],
+        timer: Optional[Timer] = None,
+    ) -> None:
+        """Dispatch one producer-assigned metadata batch per logical DP rank.
+
+        The input order is the logical DP-rank order. Producer field lists
+        remain unchanged because an SFT loader can provide a narrower schema
+        than the rollout training path.
+        """
+        self._stamp_placed_pad_seqlen(dp_metas)
+        train_metas = [replace(meta, task_name="train") for meta in dp_metas]
+        with timer.time("policy_training/pack_placed_meta") if timer else nullcontext():
+            packing_result = self._get_packer().pack(
+                PlacedPackingInput(
+                    dp_metas=train_metas,
+                    dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
+                    mb_tokens_key="train_mb_tokens",
+                )
+            )
+        self._dispatch_train_microbatches(packing_result.dp_metas, timer=timer)
+
+    def _stamp_placed_pad_seqlen(self, dp_metas: list[KVBatchMeta]) -> None:
+        """Set one forward padding target across all placed DP batches."""
+        sequence_lengths = [
+            length for meta in dp_metas for length in (meta.sequence_lengths or [])
+        ]
+        if not sequence_lengths:
+            return
+        _, dynamic_args = self._packing_args("train_mb_tokens")
+        sequence_round = (
+            int(dynamic_args["sequence_length_round"])
+            if dynamic_args is not None
+            else 1
+        )
+        pad_multiple = max(
+            [int(meta.extra_info.get("pad_to_multiple", 1)) for meta in dp_metas]
+        )
+        existing_targets = [
+            int(meta.extra_info[GLOBAL_FORWARD_PAD_SEQLEN])
+            for meta in dp_metas
+            if GLOBAL_FORWARD_PAD_SEQLEN in meta.extra_info
+        ]
+        target = round_up(
+            max([*sequence_lengths, *existing_targets]),
+            max(pad_multiple, sequence_round),
+        )
+        for meta in dp_metas:
+            meta.extra_info[GLOBAL_FORWARD_PAD_SEQLEN] = target
+
+    def _dispatch_train_microbatches(
+        self,
+        dp_metas: list[KVBatchMeta],
+        *,
+        timer: Optional[Timer],
+    ) -> None:
+        """Send prepared per-DP metadata into an open train step."""
         if self.flops_tracker is not None:
             for m in dp_metas:
                 self.flops_tracker.track_batch(list(m.sequence_lengths or []))

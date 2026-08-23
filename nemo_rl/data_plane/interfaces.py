@@ -39,6 +39,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, NotRequired, Sequence, TypedDict
 
+from pydantic import BaseModel, Field
 from tensordict import TensorDict
 
 
@@ -86,6 +87,22 @@ class ObservabilityConfig(TypedDict):
 
     enabled: bool
     callback: NotRequired[Callable[[dict[str, Any]], None]]
+
+
+class LocalDataPlaneConfig(BaseModel, extra="allow"):
+    """User configuration for process-local data transfer.
+
+    ``max_partitions`` limits retained step batches. Set it to ``1`` for only
+    the active step or ``2`` to retain one prefetched step as well.
+    """
+
+    enabled: Literal[True] = True
+    impl: Literal["local"] = "local"
+    max_partitions: int = Field(default=2, ge=1)
+    observability: ObservabilityConfig | None = None
+
+
+DataPlaneRuntimeConfig = DataPlaneConfig | LocalDataPlaneConfig
 
 
 @dataclass

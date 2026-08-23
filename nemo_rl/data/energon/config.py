@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class EnergonSourceConfig(BaseModel, extra="allow"):
@@ -26,8 +26,45 @@ class EnergonSourceConfig(BaseModel, extra="allow"):
     limit: Annotated[int, Field(ge=1)] | None = None
 
 
+class EnergonPackingConfig(BaseModel, extra="allow"):
+    """One Energon-owned packing implementation selected by registry key."""
+
+    name: str
+    buffer_size: Annotated[int, Field(ge=1)]
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+class EnergonTaskEncoderConfig(BaseModel, extra="allow"):
+    """One task encoder and its optional Energon packing implementation."""
+
+    name: str = "generic_sft"
+    options: dict[str, Any] = Field(default_factory=dict)
+    packing: EnergonPackingConfig | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_registry_key(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return {"name": value}
+        return value
+
+
+class EnergonCookerConfig(BaseModel, extra="allow"):
+    """One source cooker selected by registry key."""
+
+    name: str = "generic_conversation"
+    options: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_registry_key(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return {"name": value}
+        return value
+
+
 class EnergonLoaderConfig(BaseModel, extra="allow"):
-    """Driver-side Energon settings for multimodal SFT."""
+    """Shared Energon settings for driver- and worker-owned SFT loaders."""
 
     num_workers: Annotated[int, Field(ge=0)] = 8
     shuffle_buffer_size: Annotated[int, Field(ge=0)] = 1000
@@ -35,6 +72,13 @@ class EnergonLoaderConfig(BaseModel, extra="allow"):
     packing_buffer_size: None = None
     batch_grouping: Literal["auto"] = "auto"
     processor_adapter: Literal["hf_multimodal"] = "hf_multimodal"
+    topology_mapper: str = "default"
+    task_encoder: EnergonTaskEncoderConfig = Field(
+        default_factory=EnergonTaskEncoderConfig
+    )
+    cookers: list[EnergonCookerConfig] = Field(
+        default_factory=lambda: [EnergonCookerConfig()]
+    )
     seed_offset: int = 0
     prefetch_factor: Annotated[int, Field(ge=1)] = 2
     checkpoint_every_sec: Annotated[float, Field(gt=0)] = 60.0
