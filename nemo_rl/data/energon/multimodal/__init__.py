@@ -25,6 +25,7 @@ _EXPORT_MODULES = {
         "nemo_rl.data.energon.multimodal.task_encoders"
     ),
     "MediaRef": "nemo_rl.data.energon.multimodal.types",
+    "PackedSFTSample": "nemo_rl.data.energon.multimodal.types",
     "SFTProcessorAdapter": "nemo_rl.data.energon.multimodal.task_encoders",
     "build_processor_adapter": "nemo_rl.data.energon.multimodal.task_encoders",
     "cook_conversation": "nemo_rl.data.energon.multimodal.cookers",

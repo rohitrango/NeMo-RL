@@ -37,6 +37,9 @@ from nemo_rl.utils.r3_trace import (
 )
 
 
+_PREPACKED_BOUNDARY_KEYS = ("cu_seqlens", "cu_seqlens_padded")
+
+
 @dataclass
 class ProcessedInputs:
     """Processed microbatch inputs used for model forward pass."""
@@ -196,7 +199,26 @@ def get_microbatch_iterator(
     if seq_length_key is None and cfg["sequence_packing"]["enabled"]:
         seq_length_key = "input_lengths"
 
-    if cfg["dynamic_batching"]["enabled"]:
+    prepacked = _has_prepacked_boundaries(data)
+    if prepacked and not cfg["sequence_packing"]["enabled"]:
+        raise ValueError(
+            "Prepacked input requires policy.sequence_packing.enabled=true."
+        )
+    if prepacked and not cfg["sequence_packing"].get("fuse_loss", False):
+        raise ValueError(
+            "Prepacked input requires policy.sequence_packing.fuse_loss=true "
+            "because one physical row can contain multiple source boundaries."
+        )
+    if prepacked and cfg["dynamic_batching"]["enabled"]:
+        raise ValueError("Prepacked input does not support dynamic batching.")
+
+    if prepacked:
+        # Every row is already one physical pack. Do not run the NeMo-RL bin
+        # planner or combine multiple packs into another microbatch.
+        raw_iterator = data.make_microbatch_iterator(1)
+        data_iterator_len = data.size
+        micro_batch_size = 1
+    elif cfg["dynamic_batching"]["enabled"]:
         raw_iterator = data.make_microbatch_iterator_with_dynamic_shapes()
         data_iterator_len = data.get_microbatch_iterator_dynamic_shapes_len()
     elif cfg["sequence_packing"]["enabled"]:
@@ -294,6 +316,12 @@ def process_microbatch(
         mtp_loss_mask = None
         media_token_validity_mask = None
 
+        prepacked = _has_prepacked_boundaries(data_dict)
+        if prepacked and not pack_sequences:
+            raise ValueError(
+                "Prepacked input requires policy.sequence_packing.enabled=true."
+            )
+
         if pack_sequences:
             # For packed sequences with padded input, we need sequence lengths
             assert seq_length_key is not None, (
@@ -306,7 +334,53 @@ def process_microbatch(
             # Get sequence lengths and context parallel size
             seq_lengths = data_dict[seq_length_key]
 
-            if delegate_pack_to_model:
+            if prepacked:
+                if delegate_pack_to_model:
+                    raise ValueError(
+                        "Prepacked input cannot be delegated to a model-side packer."
+                    )
+                cp_rank = get_context_parallel_rank()
+                cp_size = get_context_parallel_world_size()
+                (
+                    input_ids,
+                    input_ids_cp_sharded,
+                    packed_seq_params,
+                    cu_seqlens,
+                    cu_seqlens_padded,
+                ) = _prepare_prepacked_batch_for_megatron(
+                    data_dict,
+                    cp_rank=cp_rank,
+                    cp_size=cp_size,
+                    model_slices_context_parallel_inputs=(
+                        model_slices_context_parallel_inputs
+                    ),
+                )
+
+                def _cp_slice_prepacked_field(value: torch.Tensor) -> torch.Tensor:
+                    if model_slices_context_parallel_inputs:
+                        return value
+                    return _slice_prepacked_tensor_for_cp(
+                        value,
+                        cu_seqlens_padded,
+                        cp_rank,
+                        cp_size,
+                    )
+
+                if routed_experts is not None:
+                    routed_experts_cp_sharded = _cp_slice_prepacked_field(
+                        routed_experts
+                    )
+                if "mtp_loss_mask" in data_dict:
+                    mtp_loss_mask = _cp_slice_prepacked_field(
+                        data_dict["mtp_loss_mask"]
+                    )
+                if "media_token_validity_mask" in data_dict:
+                    media_token_validity_mask = _cp_slice_prepacked_field(
+                        data_dict["media_token_validity_mask"]
+                    ).bool()
+                position_ids = None
+                attention_mask = None
+            elif delegate_pack_to_model:
                 has_mtp_loss_mask = "mtp_loss_mask" in data_dict
                 assert not has_mtp_loss_mask or delegate_mtp_loss_mask_to_model, (
                     "MTP training requires a self-packing VLM that advertises "
@@ -622,6 +696,200 @@ def process_microbatch(
         routed_experts=routed_experts,
         routed_experts_cp_sharded=routed_experts_cp_sharded,
         media_token_validity_mask=media_token_validity_mask,
+    )
+
+
+def _has_prepacked_boundaries(data: BatchedDataDict[Any]) -> bool:
+    """Return whether both prepacked boundary fields are present."""
+    present = [key in data for key in _PREPACKED_BOUNDARY_KEYS]
+    if any(present) and not all(present):
+        missing = [
+            key for key, key_present in zip(_PREPACKED_BOUNDARY_KEYS, present)
+            if not key_present
+        ]
+        raise ValueError(
+            "Prepacked input must provide cu_seqlens and cu_seqlens_padded; "
+            f"missing {missing}."
+        )
+    return all(present)
+
+
+def _get_single_prepacked_boundary(
+    data: BatchedDataDict[Any], key: str, device: torch.device
+) -> torch.Tensor:
+    """Get one ragged boundary tensor from a physical-row microbatch."""
+    value = data[key]
+    if isinstance(value, list):
+        if len(value) != 1 or not torch.is_tensor(value[0]):
+            raise ValueError(
+                f"{key} must contain one tensor per physical pack; got {value!r}."
+            )
+        value = value[0]
+    elif torch.is_tensor(value) and value.ndim == 2:
+        if value.shape[0] != 1:
+            raise ValueError(
+                f"{key} must describe exactly one physical pack per microbatch; "
+                f"got shape {tuple(value.shape)}."
+            )
+        value = value[0]
+
+    if not torch.is_tensor(value) or value.ndim != 1:
+        raise ValueError(f"{key} must be a one-dimensional tensor.")
+    if value.dtype not in {
+        torch.int8,
+        torch.int16,
+        torch.int32,
+        torch.int64,
+        torch.uint8,
+    }:
+        raise ValueError(f"{key} must have an integer dtype, got {value.dtype}.")
+    return value.to(device=device, dtype=torch.int32)
+
+
+def _validate_prepacked_batch(
+    data: BatchedDataDict[Any],
+    cu_seqlens: torch.Tensor,
+    cu_seqlens_padded: torch.Tensor,
+    cp_size: int,
+) -> None:
+    """Validate one physical pack and its source boundaries."""
+    required = {"input_ids", "input_lengths", "token_mask", "sample_mask"}
+    missing = sorted(required.difference(data.keys()))
+    if missing:
+        raise ValueError(f"Prepacked input is missing required fields: {missing}.")
+
+    input_ids = data["input_ids"]
+    input_lengths = data["input_lengths"]
+    token_mask = data["token_mask"]
+    sample_mask = data["sample_mask"]
+    if not torch.is_tensor(input_ids) or input_ids.ndim != 2 or input_ids.shape[0] != 1:
+        raise ValueError(
+            "Prepacked input_ids must have shape [1, physical_pack_length]."
+        )
+    if not torch.is_tensor(input_lengths) or input_lengths.shape != (1,):
+        raise ValueError("Prepacked input_lengths must have shape [1].")
+    if not torch.is_tensor(token_mask) or token_mask.shape != input_ids.shape:
+        raise ValueError(
+            "Prepacked token_mask must have the same shape as input_ids."
+        )
+    if not torch.is_tensor(sample_mask) or sample_mask.shape != (1,):
+        raise ValueError("Prepacked sample_mask must have shape [1].")
+
+    physical_length = int(input_lengths[0].item())
+    if physical_length != input_ids.shape[1]:
+        raise ValueError(
+            "Prepacked input_lengths must equal the physical input width; "
+            f"got {physical_length} and {input_ids.shape[1]}."
+        )
+    if cu_seqlens.numel() < 2 or cu_seqlens.shape != cu_seqlens_padded.shape:
+        raise ValueError(
+            "cu_seqlens and cu_seqlens_padded must have the same shape and "
+            "contain at least one source boundary."
+        )
+    if int(cu_seqlens[0].item()) != 0 or int(cu_seqlens_padded[0].item()) != 0:
+        raise ValueError("Prepacked cumulative sequence lengths must start at zero.")
+
+    source_lengths = cu_seqlens[1:] - cu_seqlens[:-1]
+    padded_lengths = cu_seqlens_padded[1:] - cu_seqlens_padded[:-1]
+    if bool((source_lengths <= 0).any().item()) or bool(
+        (padded_lengths <= 0).any().item()
+    ):
+        raise ValueError("Prepacked source boundaries must be strictly increasing.")
+    if bool((source_lengths > padded_lengths).any().item()):
+        raise ValueError(
+            "Each prepacked source length must fit within its padded boundary."
+        )
+    if int(cu_seqlens_padded[-1].item()) != physical_length:
+        raise ValueError(
+            "The final cu_seqlens_padded boundary must equal the physical pack "
+            f"length ({physical_length})."
+        )
+    if cp_size < 1:
+        raise ValueError(f"Context parallel size must be positive, got {cp_size}.")
+    if cp_size > 1 and bool((padded_lengths % (2 * cp_size) != 0).any().item()):
+        raise ValueError(
+            "Every prepacked padded source length must be divisible by 2 * "
+            f"context_parallel_size ({2 * cp_size})."
+        )
+
+
+def _slice_prepacked_tensor_for_cp(
+    value: torch.Tensor,
+    cu_seqlens_padded: torch.Tensor,
+    cp_rank: int,
+    cp_size: int,
+) -> torch.Tensor:
+    """Apply Megatron's per-source zigzag CP slicing to an already packed row."""
+    if value.ndim < 2 or value.shape[0] != 1:
+        raise ValueError(
+            "Prepacked token-aligned tensors must have shape [1, tokens, ...]; "
+            f"got {tuple(value.shape)}."
+        )
+    if value.shape[1] != int(cu_seqlens_padded[-1].item()):
+        raise ValueError(
+            "Prepacked token-aligned tensor width does not match "
+            "cu_seqlens_padded."
+        )
+    segments = []
+    for start, end in zip(cu_seqlens_padded[:-1], cu_seqlens_padded[1:]):
+        segment = value[:, int(start.item()) : int(end.item())]
+        segments.append(
+            _get_tokens_on_this_cp_rank(
+                segment, cp_rank=cp_rank, cp_size=cp_size, seq_dim=1
+            )
+        )
+    return torch.cat(segments, dim=1).contiguous()
+
+
+def _prepare_prepacked_batch_for_megatron(
+    data: BatchedDataDict[Any],
+    cp_rank: int,
+    cp_size: int,
+    model_slices_context_parallel_inputs: bool = False,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    PackedSeqParams,
+    torch.Tensor,
+    torch.Tensor,
+]:
+    """Prepare one physical Energon pack without selecting or rebuilding packs."""
+    input_ids = data["input_ids"]
+    if not torch.is_tensor(input_ids):
+        raise ValueError("Prepacked input_ids must be a tensor.")
+    cu_seqlens = _get_single_prepacked_boundary(
+        data, "cu_seqlens", input_ids.device
+    )
+    cu_seqlens_padded = _get_single_prepacked_boundary(
+        data, "cu_seqlens_padded", input_ids.device
+    )
+    _validate_prepacked_batch(data, cu_seqlens, cu_seqlens_padded, cp_size)
+
+    padded_lengths = cu_seqlens_padded[1:] - cu_seqlens_padded[:-1]
+    max_seqlen = int(padded_lengths.max().item())
+    local_input_ids = _slice_prepacked_tensor_for_cp(
+        input_ids, cu_seqlens_padded, cp_rank, cp_size
+    )
+    input_ids_cp_sharded = (
+        input_ids if model_slices_context_parallel_inputs else local_input_ids
+    )
+    packed_seq_params = PackedSeqParams(
+        cu_seqlens_q=cu_seqlens,
+        cu_seqlens_kv=cu_seqlens,
+        cu_seqlens_q_padded=cu_seqlens_padded,
+        cu_seqlens_kv_padded=cu_seqlens_padded,
+        max_seqlen_q=max_seqlen,
+        max_seqlen_kv=max_seqlen,
+        pad_between_seqs=not torch.equal(cu_seqlens, cu_seqlens_padded),
+        qkv_format="thd",
+        total_tokens=input_ids_cp_sharded.shape[1],
+    )
+    return (
+        input_ids.contiguous(),
+        input_ids_cp_sharded,
+        packed_seq_params,
+        cu_seqlens,
+        cu_seqlens_padded,
     )
 
 

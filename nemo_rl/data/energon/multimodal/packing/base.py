@@ -13,11 +13,13 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, Protocol, TypeVar
 
 PreT = TypeVar("PreT")
 PostT = TypeVar("PostT")
 PackedT = TypeVar("PackedT")
+
+ENERGON_PACKED_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,12 @@ class EnergonPackingHooks(Generic[PreT, PostT, PackedT]):
     pack_selected_samples: Callable[[list[PostT]], PackedT]
 
 
+class EnergonPackingFactory(Protocol):
+    """Build one immutable hook pair from validated packing options."""
+
+    def __call__(self, options: Any) -> EnergonPackingHooks[Any, Any, Any]: ...
+
+
 def validate_packing_schema(
     task_encoder_schema: str, hooks: EnergonPackingHooks[Any, Any, Any]
 ) -> None:
@@ -42,4 +50,9 @@ def validate_packing_schema(
         )
 
 
-__all__ = ["EnergonPackingHooks", "validate_packing_schema"]
+__all__ = [
+    "ENERGON_PACKED_SCHEMA_VERSION",
+    "EnergonPackingFactory",
+    "EnergonPackingHooks",
+    "validate_packing_schema",
+]

@@ -21,6 +21,7 @@ import time
 import warnings
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
+from functools import partial
 from typing import Any, Callable, Optional, TypeVar
 
 import torch
@@ -67,6 +68,7 @@ from megatron.core.transformer import MegatronModule
 from megatron.core.transformer.enums import AttnBackend, InferenceCudaGraphScope
 from megatron.core.transformer.module import Float16Module
 from megatron.core.transformer.transformer_config import TransformerConfig
+from megatron.core.utils import get_model_config
 from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.distributed.model_utils import patch_gpt_model_forward_for_linear_ce_fusion
@@ -74,6 +76,24 @@ from nemo_rl.distributed.model_utils import patch_gpt_model_forward_for_linear_c
 _HF_CONFIG_PATCHED = False
 
 _NEMOTRON_OMNI_EXPANDED_SEQUENCE_CONTRACT = "expanded_sequence_v1"
+
+
+def _finalize_model_grads_with_diagnostics(
+    finalize_model_grads_func: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Log entry and successful return around gradient finalization."""
+    rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else -1
+    num_tokens = args[1] if len(args) > 1 else kwargs.get("num_tokens")
+    force_all_reduce = kwargs.get("force_all_reduce", False)
+    print(
+        "[FINALIZE_MODEL_GRADS_DIAG] enter "
+        f"rank={rank} num_tokens={num_tokens} force_all_reduce={force_all_reduce}"
+    )
+    result = finalize_model_grads_func(*args, **kwargs)
+    print(f"[FINALIZE_MODEL_GRADS_DIAG] exit rank={rank}")
+    return result
 
 
 def _patch_hf_config_double_instantiation():
@@ -2147,14 +2167,31 @@ def finalize_megatron_setup(
     Returns:
         Tuple of (megatron_tokenizer, megatron_bridge, should_disable_forward_pre_hook, dp_size)
     """
+    runtime_config = get_model_config(model)
     _update_model_config_funcs(
         [model],
-        megatron_cfg.model,
+        runtime_config,
         megatron_cfg.ddp,
         optimizer,
         align_grad_reduce=megatron_cfg.dist.align_grad_reduce,
         pg_collection=ProcessGroupCollection.use_mpu_process_groups(),
     )
+
+    print("[MODEL_CONFIG_DIAG] same config:", runtime_config is megatron_cfg.model)
+    print(
+        "[MODEL_CONFIG_DIAG] provider finalizer:",
+        megatron_cfg.model.finalize_model_grads_func,
+    )
+    print(
+        "[MODEL_CONFIG_DIAG] runtime finalizer:",
+        runtime_config.finalize_model_grads_func,
+    )
+
+    if runtime_config.finalize_model_grads_func is not None:
+        runtime_config.finalize_model_grads_func = partial(
+            _finalize_model_grads_with_diagnostics,
+            runtime_config.finalize_model_grads_func,
+        )
 
     tokenizer_config = TokenizerConfig(
         tokenizer_type="HuggingFaceTokenizer",

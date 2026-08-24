@@ -18,6 +18,7 @@ from nemo_rl.data.energon.config import (
     EnergonCookerConfig,
     EnergonLoaderConfig,
     EnergonPackingConfig,
+    EnergonPackingOptions,
     EnergonSourceConfig,
     EnergonTaskEncoderConfig,
 )
@@ -47,6 +48,7 @@ __all__ = [
     "EnergonCookerConfig",
     "EnergonLoaderConfig",
     "EnergonPackingConfig",
+    "EnergonPackingOptions",
     "EnergonSourceConfig",
     "EnergonTaskEncoderConfig",
     "build_energon_sft_loader",

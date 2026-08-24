@@ -24,6 +24,11 @@ from nemo_rl.models.policy.packing.base import (
     PlacedPackingInput,
 )
 from nemo_rl.models.policy.packing.nemo_rl import NeMoRLPacker, ShardMetaFn
+from nemo_rl.models.policy.packing.no_op import (
+    ENERGON_PACKING_META_KEY,
+    ENERGON_PACKING_SCHEMA_VERSION,
+    NoOpPacker,
+)
 
 
 def resolve_packer(
@@ -36,10 +41,13 @@ def resolve_packer(
     sequence_packing_args: Optional[Mapping[str, Any]],
     shard_meta: Optional[ShardMetaFn] = None,
 ) -> Packer:
-    """Resolve a Stage 1 policy packer by name."""
+    """Resolve a policy packer by name."""
+    if name == "no_op":
+        return NoOpPacker()
     if name != "nemo_rl":
         raise ValueError(
-            f"Unknown policy packer {name!r}. Stage 1 supports only 'nemo_rl'."
+            f"Unknown policy packer {name!r}. Supported packers are "
+            "'nemo_rl' and 'no_op'."
         )
     if shard_meta is None:
         return NeMoRLPacker(
@@ -60,8 +68,11 @@ def resolve_packer(
 
 
 __all__ = [
+    "ENERGON_PACKING_META_KEY",
+    "ENERGON_PACKING_SCHEMA_VERSION",
     "GlobalPackingInput",
     "NeMoRLPacker",
+    "NoOpPacker",
     "Packer",
     "PackingInput",
     "PackingResult",

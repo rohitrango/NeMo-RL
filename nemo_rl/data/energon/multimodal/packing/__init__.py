@@ -13,8 +13,15 @@
 # limitations under the License.
 
 from nemo_rl.data.energon.multimodal.packing.base import (
+    ENERGON_PACKED_SCHEMA_VERSION,
+    EnergonPackingFactory,
     EnergonPackingHooks,
     validate_packing_schema,
 )
 
-__all__ = ["EnergonPackingHooks", "validate_packing_schema"]
+__all__ = [
+    "ENERGON_PACKED_SCHEMA_VERSION",
+    "EnergonPackingFactory",
+    "EnergonPackingHooks",
+    "validate_packing_schema",
+]

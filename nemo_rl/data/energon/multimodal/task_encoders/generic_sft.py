@@ -18,16 +18,20 @@ import hashlib
 import json
 from collections.abc import Callable, Sequence
 from copy import deepcopy
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import torch
 from megatron.energon import CrudeSample, SampleDecoder, stateless
 
-from nemo_rl.data.energon.multimodal.packing import EnergonPackingHooks
+from nemo_rl.data.energon.multimodal.packing import (
+    ENERGON_PACKED_SCHEMA_VERSION,
+    EnergonPackingHooks,
+)
 from nemo_rl.data.energon.multimodal.task_encoders.base import BaseSFTTaskEncoder
 from nemo_rl.data.energon.multimodal.types import (
     CanonicalSFTSample,
     EncodedSFTSample,
+    PackedSFTSample,
 )
 from nemo_rl.data.interfaces import TaskDataSpec
 from nemo_rl.data.llm_message_utils import get_formatted_message_log
@@ -249,21 +253,51 @@ class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
         return sample
 
     def batch_group_criterion(
-        self, sample: EncodedSFTSample
+        self, sample: EncodedSFTSample | PackedSFTSample
     ) -> tuple[tuple[Any, ...], None]:
         return sample.group_key, None
 
     @stateless
-    def batch(self, samples: list[EncodedSFTSample]) -> BatchedDataDict[Any]:
+    def batch(
+        self, samples: list[EncodedSFTSample | PackedSFTSample]
+    ) -> BatchedDataDict[Any]:
+        if samples and isinstance(samples[0], PackedSFTSample):
+            if not all(isinstance(sample, PackedSFTSample) for sample in samples):
+                raise TypeError("Energon SFT batches cannot mix packed and unpacked rows.")
+            packed_samples = cast(list[PackedSFTSample], samples)
+            capacities = {sample.pack_capacity for sample in packed_samples}
+            if len(capacities) != 1:
+                raise ValueError("Energon SFT packs in one batch need one capacity.")
+            return BatchedDataDict(
+                {
+                    "packed_schema_version": ENERGON_PACKED_SCHEMA_VERSION,
+                    "packed_message_log": [
+                        [source.message_log for source in sample.samples]
+                        for sample in packed_samples
+                    ],
+                    "source_padded_lengths": [
+                        sample.source_padded_lengths for sample in packed_samples
+                    ],
+                    "source_loss_multipliers": [
+                        [source.loss_multiplier for source in sample.samples]
+                        for sample in packed_samples
+                    ],
+                    "source_ids": [sample.source_ids for sample in packed_samples],
+                    "pack_capacity": capacities.pop(),
+                }
+            )
+        if not all(isinstance(sample, EncodedSFTSample) for sample in samples):
+            raise TypeError("Energon SFT batches cannot mix packed and unpacked rows.")
+        encoded_samples = cast(list[EncodedSFTSample], samples)
         values: dict[str, Any] = {
-            "message_log": [sample.message_log for sample in samples],
+            "message_log": [sample.message_log for sample in encoded_samples],
             "loss_multiplier": torch.tensor(
-                [sample.loss_multiplier for sample in samples],
+                [sample.loss_multiplier for sample in encoded_samples],
                 dtype=torch.float32,
             ),
         }
         if self.include_source_ids:
-            values["source_ids"] = [sample.sample_key for sample in samples]
+            values["source_ids"] = [sample.sample_key for sample in encoded_samples]
         return BatchedDataDict(values)
 
     @stateless

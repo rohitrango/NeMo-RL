@@ -313,6 +313,7 @@ def prepare_packed_loss_input(
 
     input_ids = data["input_ids"]
     unpacked_seqlen = input_ids.shape[1]
+    input_is_prepacked = "cu_seqlens" in data
     cp_size = (
         1
         if context_parallel_group is None
@@ -324,14 +325,20 @@ def prepare_packed_loss_input(
         else torch.distributed.get_rank(context_parallel_group)
     )
 
-    packed_rolled_targets = _pack_input_ids(
-        input_ids,
-        cu_seqlens_q,
-        cu_seqlens_q_padded,
-        cp_rank=cp_rank,
-        cp_size=cp_size,
-        roll_shift=-1,
-    )
+    if input_is_prepacked:
+        # Energon already produced one physical row. The distributed helper
+        # shifts each source independently before CP slicing, so source N never
+        # predicts the first token of source N+1.
+        packed_targets = input_ids
+    else:
+        packed_targets = _pack_input_ids(
+            input_ids,
+            cu_seqlens_q,
+            cu_seqlens_q_padded,
+            cp_rank=cp_rank,
+            cp_size=cp_size,
+            roll_shift=-1,
+        )
 
     # With chunking, keep logits in their original dtype: the chunked logprob
     # kernel casts each chunk to float32 internally.
@@ -342,7 +349,7 @@ def prepare_packed_loss_input(
 
     logprobs = from_parallel_logits_to_logprobs_packed_sequences(
         logits_for_logprobs,
-        packed_rolled_targets,
+        packed_targets,
         cu_seqlens_q_padded,
         unpacked_seqlen,
         vocab_start_index=vocab_parallel_rank * logits.shape[-1],
@@ -352,7 +359,8 @@ def prepare_packed_loss_input(
         cp_group=context_parallel_group,
         sampling_params=sampling_params,
         chunk_size=chunk_size if use_chunking else None,
-        target_is_pre_rolled=True,
+        target_is_pre_rolled=not input_is_prepacked,
+        return_packed_layout=input_is_prepacked,
     )
 
     # Match prepare_loss_input behavior for top-k/top-p filtered training:
@@ -368,7 +376,7 @@ def prepare_packed_loss_input(
             data["curr_logprobs_unfiltered"] = (
                 from_parallel_logits_to_logprobs_packed_sequences(
                     logits_for_logprobs,
-                    packed_rolled_targets,
+                    packed_targets,
                     cu_seqlens_q_padded,
                     unpacked_seqlen,
                     vocab_start_index=vocab_parallel_rank * logits.shape[-1],
@@ -378,7 +386,8 @@ def prepare_packed_loss_input(
                     cp_group=context_parallel_group,
                     sampling_params=None,
                     chunk_size=chunk_size if use_chunking else None,
-                    target_is_pre_rolled=True,
+                    target_is_pre_rolled=not input_is_prepacked,
+                    return_packed_layout=input_is_prepacked,
                 )
             )
 

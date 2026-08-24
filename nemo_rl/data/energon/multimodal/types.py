@@ -46,4 +46,21 @@ class EncodedSFTSample(Sample):
     sample_key: str
 
 
-__all__ = ["CanonicalSFTSample", "EncodedSFTSample", "MediaRef"]
+@edataclass
+class PackedSFTSample(Sample):
+    """One physical pack selected from compatible encoded conversations."""
+
+    samples: list[EncodedSFTSample]
+    source_lengths: list[int]
+    source_padded_lengths: list[int]
+    source_ids: list[str]
+    group_key: tuple[Any, ...]
+    pack_capacity: int
+
+
+__all__ = [
+    "CanonicalSFTSample",
+    "EncodedSFTSample",
+    "MediaRef",
+    "PackedSFTSample",
+]

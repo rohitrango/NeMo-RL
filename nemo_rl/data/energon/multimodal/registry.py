@@ -118,6 +118,13 @@ TASK_ENCODER_REGISTRY.register(
 )
 
 PACKING_REGISTRY = LazyRegistry("packing")
+PACKING_REGISTRY.register(
+    "first_fit_multimodal",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.packing.first_fit:build_packing_hooks"
+    ),
+    version="1",
+)
 
 
 def selected_registry_identity(

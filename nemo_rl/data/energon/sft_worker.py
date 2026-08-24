@@ -26,13 +26,19 @@ import torch
 from megatron.core import parallel_state
 
 from nemo_rl.algorithms.sft import prepare_sft_batch
+from nemo_rl.data.energon.multimodal.packing import ENERGON_PACKED_SCHEMA_VERSION
+from nemo_rl.data.energon.multimodal.packing.prepare import (
+    prepare_energon_packed_batch,
+)
 from nemo_rl.data.energon.sft_dataloader import (
     EnergonSFTDataLoader,
     build_energon_sft_loader,
 )
 from nemo_rl.data.energon.sft_types import StepEnvelope
 from nemo_rl.data_plane.adapters.local import local_batch_to_tensordict
+from nemo_rl.data_plane.schema import MICRO_BATCH_INDICES, MICRO_BATCH_LENGTHS
 from nemo_rl.data.multimodal_utils import PackedTensor
+from nemo_rl.models.policy.packing import ENERGON_PACKING_META_KEY
 from nemo_rl.models.policy.utils import get_runtime_env_for_policy_worker
 from nemo_rl.models.policy.workers.megatron_policy_worker import (
     MegatronPolicyWorkerImpl,
@@ -110,15 +116,35 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
 
         started = time.monotonic()
         batch = next(self._sft_loader_iterator)
-        prepared = prepare_sft_batch(
-            batch,
-            tokenizer=self.tokenizer,
-            only_unmask_final=only_unmask_final,
-            make_sequence_length_divisible_by=make_sequence_length_divisible_by,
-        )
+        packed_schema_version = batch.get("packed_schema_version")
+        energon_packed = packed_schema_version is not None
+        if (
+            energon_packed
+            and packed_schema_version != ENERGON_PACKED_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Unsupported Energon packed SFT schema version "
+                f"{packed_schema_version!r}; expected "
+                f"{ENERGON_PACKED_SCHEMA_VERSION}."
+            )
+        if energon_packed:
+            prepared = prepare_energon_packed_batch(
+                batch,
+                tokenizer=self.tokenizer,
+                only_unmask_final=only_unmask_final,
+            )
+        else:
+            prepared = prepare_sft_batch(
+                batch,
+                tokenizer=self.tokenizer,
+                only_unmask_final=only_unmask_final,
+                make_sequence_length_divisible_by=(
+                    make_sequence_length_divisible_by
+                ),
+            )
         load_seconds = time.monotonic() - started
         batch_size = prepared.size
-        source_ids = self._source_ids(batch, batch_size=batch_size)
+        source_ids = self._source_ids(prepared, batch_size=batch_size)
         partition_id = (
             f"sft_v2_dp{self._sft_logical_rank}_batch{self._sft_next_batch_index}"
         )
@@ -132,11 +158,12 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             num_samples=batch_size,
             consumer_tasks=["train"],
         )
+        tags = self._source_tags(prepared, batch_size=batch_size)
         published_meta = client.put_samples(
             sample_ids=sample_ids,
             partition_id=partition_id,
             fields=fields,
-            tags=[{"source_id": source_id} for source_id in source_ids],
+            tags=tags,
         )
 
         lengths_tensor = prepared["input_lengths"]
@@ -145,8 +172,24 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         valid_tokens = int(
             (sample_mask.unsqueeze(-1) * prepared["token_mask"][:, 1:]).sum().item()
         )
+        extra_info = dict(published_meta.extra_info)
+        if make_sequence_length_divisible_by > 1:
+            extra_info["pad_to_multiple"] = int(make_sequence_length_divisible_by)
+        if energon_packed:
+            extra_info[ENERGON_PACKING_META_KEY] = self._packing_metadata(prepared)
+            # The local fetch path trusts these producer-supplied boundaries
+            # and skips its NeMo-RL bin planner. The Megatron prepacked path
+            # then consumes one physical pack per microbatch.
+            extra_info[MICRO_BATCH_INDICES] = [
+                [[index, index + 1] for index in range(batch_size)]
+            ]
+            extra_info[MICRO_BATCH_LENGTHS] = [list(lengths)]
         envelope = StepEnvelope(
-            meta=replace(published_meta, task_name="train"),
+            meta=replace(
+                published_meta,
+                task_name="train",
+                extra_info=extra_info,
+            ),
             logical_rank=self._sft_logical_rank,
             logical_world_size=self._sft_logical_world_size,
             source_ids=source_ids,
@@ -199,8 +242,60 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         for key in ("source_ids", "sample_keys"):
             values = batch.get(key)
             if isinstance(values, (list, tuple)) and len(values) == batch_size:
-                return tuple(str(value) for value in values)
+                return tuple(
+                    str(source_id)
+                    for value in values
+                    for source_id in (
+                        value if isinstance(value, (list, tuple)) else [value]
+                    )
+                )
         return tuple(f"unknown:{row}" for row in range(batch_size))
+
+    @staticmethod
+    def _source_tags(
+        batch: Mapping[str, Any], *, batch_size: int
+    ) -> list[dict[str, Any]]:
+        values = batch.get("source_ids")
+        if not isinstance(values, (list, tuple)) or len(values) != batch_size:
+            return [{"source_id": f"unknown:{row}"} for row in range(batch_size)]
+        return [
+            (
+                {"source_ids": [str(source_id) for source_id in value]}
+                if isinstance(value, (list, tuple))
+                else {"source_id": str(value)}
+            )
+            for value in values
+        ]
+
+    @staticmethod
+    def _packing_metadata(batch: Mapping[str, Any]) -> dict[str, Any]:
+        source_ids = batch["source_ids"]
+        cu_seqlens = batch["cu_seqlens"]
+        cu_seqlens_padded = batch["cu_seqlens_padded"]
+        pack_lengths = [int(value) for value in batch["input_lengths"].tolist()]
+        capacities = {int(value) for value in batch["pack_capacity"].tolist()}
+        schema_versions = {
+            int(value) for value in batch["packed_schema_version"].tolist()
+        }
+        if len(capacities) != 1 or len(schema_versions) != 1:
+            raise ValueError("One Energon batch must use one packing schema and capacity.")
+        return {
+            "schema_version": schema_versions.pop(),
+            "pack_count": len(pack_lengths),
+            "source_count": sum(len(ids) for ids in source_ids),
+            "source_counts": [len(ids) for ids in source_ids],
+            "pack_lengths": pack_lengths,
+            "pack_capacity": capacities.pop(),
+            "boundaries": [
+                {
+                    "cu_seqlens": boundaries.tolist(),
+                    "cu_seqlens_padded": padded_boundaries.tolist(),
+                }
+                for boundaries, padded_boundaries in zip(
+                    cu_seqlens, cu_seqlens_padded
+                )
+            ],
+        }
 
     @classmethod
     def _field_fingerprints(cls, batch: Mapping[str, Any]) -> dict[str, Any]:

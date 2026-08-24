@@ -25,6 +25,7 @@ from nemo_rl.data.energon.multimodal.packing import (
 from nemo_rl.data.energon.multimodal.types import (
     CanonicalSFTSample,
     EncodedSFTSample,
+    PackedSFTSample,
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
@@ -87,7 +88,9 @@ class BaseSFTTaskEncoder(
         """Finish the selected sample before physical packing."""
 
     @abstractmethod
-    def batch(self, samples: list[EncodedSFTSample]) -> BatchedDataDict[Any]:
+    def batch(
+        self, samples: list[EncodedSFTSample | PackedSFTSample]
+    ) -> BatchedDataDict[Any]:
         """Combine encoded samples into one minibatch."""
 
     @abstractmethod

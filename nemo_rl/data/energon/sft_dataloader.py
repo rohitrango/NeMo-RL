@@ -31,8 +31,10 @@ from megatron.energon import (
 )
 
 from nemo_rl.data.energon.config import EnergonLoaderConfig, EnergonSourceConfig
+from nemo_rl.data.energon.multimodal.packing import EnergonPackingFactory
 from nemo_rl.data.energon.multimodal.registry import (
     COOKER_REGISTRY,
+    PACKING_REGISTRY,
     TASK_ENCODER_REGISTRY,
     selected_registry_identity,
 )
@@ -137,8 +139,6 @@ def _loader_config(value: Any) -> EnergonLoaderConfig:
         raise ValueError(
             f"Unknown data-loader topology mapper {config.topology_mapper!r}."
         )
-    if config.task_encoder.packing is not None:
-        raise ValueError("Energon-owned packing is not supported in SFTv2 Stage 1.")
     if config.task_encoder.options:
         raise ValueError("The Stage 1 generic SFT task encoder has no options.")
     if not config.cookers:
@@ -251,12 +251,25 @@ def _task_encoder(
     encoder_type = cast(
         Any, TASK_ENCODER_REGISTRY.resolve(loader_config.task_encoder.name)
     )
+    packing_config = loader_config.task_encoder.packing
+    packing_hooks = None
+    if packing_config is not None:
+        packing_factory = cast(
+            EnergonPackingFactory,
+            PACKING_REGISTRY.resolve(packing_config.name),
+        )
+        packing_hooks = packing_factory(packing_config.options)
+        if packing_hooks.key != packing_config.name:
+            raise ValueError(
+                f"Energon packing factory {packing_config.name!r} returned "
+                f"hooks for {packing_hooks.key!r}."
+            )
     return cast(
         BaseSFTTaskEncoder,
         encoder_type(
             adapter=adapter,
             cooker_functions=cooker_functions,
-            packing_hooks=None,
+            packing_hooks=packing_hooks,
             include_source_ids=include_source_ids,
         ),
     )
@@ -283,6 +296,19 @@ def _build_energon_sft_loader(
         raise ValueError("SFTv2 requires a non-empty placement fingerprint.")
 
     loader_config = _loader_config(data_config["energon"])
+    if (
+        state_format_version == _V1_STATE_FORMAT_VERSION
+        and loader_config.task_encoder.packing is not None
+    ):
+        raise ValueError("Energon-owned packing requires the SFTv2 loader path.")
+    if (
+        loader_config.task_encoder.packing is not None
+        and loader_config.task_encoder.packing.options.max_sequence_length
+        != max_sequence_length
+    ):
+        raise ValueError(
+            "Energon pack capacity must match the SFT maximum sequence length."
+        )
     adapter = build_processor_adapter(
         processor_adapter=loader_config.processor_adapter,
         processor=processor,
@@ -313,7 +339,11 @@ def _build_energon_sft_loader(
             worker_config=worker_config,
             batch_size=batch_size,
             batch_drop_last=True,
-            packing_buffer_size=None,
+            packing_buffer_size=(
+                None
+                if loader_config.task_encoder.packing is None
+                else loader_config.task_encoder.packing.buffer_size
+            ),
             shuffle_buffer_size=(
                 loader_config.shuffle_buffer_size if data_config["shuffle"] else None
             ),
@@ -328,7 +358,11 @@ def _build_energon_sft_loader(
             worker_config=worker_config,
             batch_size=batch_size,
             batch_drop_last=False,
-            packing_buffer_size=None,
+            packing_buffer_size=(
+                None
+                if loader_config.task_encoder.packing is None
+                else loader_config.task_encoder.packing.buffer_size
+            ),
             limit=source.limit,
             task_encoder=task_encoder,
         )
