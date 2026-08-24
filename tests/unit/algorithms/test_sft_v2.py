@@ -16,7 +16,7 @@ from nemo_rl.data_plane import KVBatchMeta
 _ACTOR_CLS = SFTSingleControllerActor.__ray_metadata__.modified_class
 
 
-def _envelope(rank: int) -> StepEnvelope:
+def _envelope(rank: int, *, source_count: int = 1) -> StepEnvelope:
     return StepEnvelope(
         meta=KVBatchMeta(
             partition_id=f"p{rank}",
@@ -27,7 +27,9 @@ def _envelope(rank: int) -> StepEnvelope:
         ),
         logical_rank=rank,
         logical_world_size=2,
-        source_ids=(f"source-{rank}",),
+        source_ids=tuple(
+            f"source-{rank}-{source_index}" for source_index in range(source_count)
+        ),
         field_names=("input_ids",),
         sequence_lengths=(8,),
         field_fingerprints={"input_ids": {"hash": f"hash-{rank}"}},
@@ -54,6 +56,10 @@ def _controller() -> object:
 
 def test_train_step_orders_split_policy_lifecycle_and_commit() -> None:
     controller = _controller()
+    controller._load_envelopes.return_value = [
+        _envelope(0, source_count=2),
+        _envelope(1),
+    ]
 
     metrics = controller._run_train_step()
 
@@ -62,8 +68,10 @@ def test_train_step_orders_split_policy_lifecycle_and_commit() -> None:
     controller._trainer.finish_train_step.assert_called_once_with()
     controller._owner_call.assert_called_once_with("commit_sft_batch")
     assert controller._save_state.total_steps == 1
-    assert controller._save_state.consumed_samples == 2
+    assert controller._save_state.consumed_samples == 3
     assert metrics["valid_tokens"] == 8
+    assert metrics["source_samples"] == 3
+    assert metrics["physical_packs"] == 2
 
 
 def test_train_step_aborts_policy_and_loader_on_training_failure() -> None:

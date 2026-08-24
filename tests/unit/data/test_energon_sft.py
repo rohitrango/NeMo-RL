@@ -259,7 +259,7 @@ def test_task_encoder_batches_heterogeneous_message_logs():
     assert prepared["pixel_values"].tensors[1] is None
 
 
-def test_task_encoder_runs_all_five_lifecycle_methods():
+def test_task_encoder_runs_split_encode_and_batch_lifecycle_methods():
     adapter = _adapter(_FakeQwenProcessor())
     encoder = _encoder(adapter, include_source_ids=True)
 
@@ -267,7 +267,6 @@ def test_task_encoder_runs_all_five_lifecycle_methods():
     postencoded = encoder.postencode_sample(preencoded)
     batch = encoder.batch([postencoded])
 
-    assert encoder.encode_sample(_sample()).sample_key == postencoded.sample_key
     assert encoder.encode_batch(batch) is batch
     assert batch["source_ids"] == ["sample-0"]
     with pytest.raises(RuntimeError, match="No Energon packing"):
@@ -372,7 +371,7 @@ def test_v1_fingerprint_uses_the_former_loader_fields_only():
     )
 
 
-def test_stage1_config_parses_registry_keys_and_rejects_legacy_packing_values():
+def test_config_parses_registry_keys_and_validates_packing_options():
     config = EnergonLoaderConfig.model_validate(
         {"task_encoder": "generic_sft", "cookers": ["generic_conversation"]}
     )
@@ -380,7 +379,19 @@ def test_stage1_config_parses_registry_keys_and_rejects_legacy_packing_values():
     assert config.cookers[0].name == "generic_conversation"
     with pytest.raises(ValueError):
         EnergonPackingConfig(name="future", buffer_size=0)
-    with pytest.raises(ValueError, match="not supported"):
-        _loader_config(
-            {"task_encoder": {"packing": {"name": "future", "buffer_size": 16}}}
-        )
+    packed = _loader_config(
+        {
+            "task_encoder": {
+                "packing": {
+                    "name": "first_fit_multimodal",
+                    "buffer_size": 16,
+                    "options": {
+                        "max_sequence_length": 1024,
+                        "sequence_length_pad_multiple": 8,
+                    },
+                }
+            }
+        }
+    )
+    assert packed.task_encoder.packing is not None
+    assert packed.task_encoder.packing.options.max_sequence_length == 1024
