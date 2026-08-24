@@ -12,16 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from nemo_rl.data.energon.multimodal.packing.base import (
-    ENERGON_PACKED_SCHEMA_VERSION,
-    EnergonPackingHooks,
-    validate_packing_schema,
-)
-from nemo_rl.data.energon.multimodal.packing.sft import build_packing_hooks
+"""Random-order first-fit sequence packing."""
 
-__all__ = [
-    "ENERGON_PACKED_SCHEMA_VERSION",
-    "EnergonPackingHooks",
-    "build_packing_hooks",
-    "validate_packing_schema",
-]
+import random
+
+from nemo_rl.data.packing.base import FirstFitPacker
+
+
+class FirstFitShufflePacker(FirstFitPacker):
+    """Shuffle items before first-fit placement."""
+
+    def _prepare_sequences(self, sequence_lengths: list[int]) -> list[tuple[int, int]]:
+        indexed_lengths = [
+            (length, source_index)
+            for source_index, length in enumerate(sequence_lengths)
+        ]
+        random.shuffle(indexed_lengths)
+        return indexed_lengths
+
+
+__all__ = ["FirstFitShufflePacker"]

@@ -1,0 +1,41 @@
+defaults:
+  - sft_vlm_nemotron_omni_30B_energon_tp4etp4_v2.yaml
+
+policy:
+  train_global_batch_size: 8
+  sequence_packing:
+    enabled: true
+    fuse_loss: true
+  dynamic_batching:
+    enabled: false
+
+data:
+  energon:
+    model_family: nemotron
+    cookers:
+      - name: nemotron_general_conversations_webdataset
+        options: {}
+    task_encoder:
+      name: nemotron_omni_sft
+      options: {}
+      packing:
+        name: first_fit_decreasing
+        buffer_size: 4
+        options:
+          max_sequence_length: ${policy.max_total_sequence_length}
+          sequence_length_pad_multiple: 1
+  train:
+    # Media rows must include the immutable processed visual and audio metadata
+    # documented in design-docs/ideas/energon_integration/stage3-impl.md.
+    path: /data/nemorl-datasets/nemotron-omni-stage3
+
+logger:
+  log_dir: logs/sft-nemotron-omni-30b-energon-stage3-packed-v2
+  wandb:
+    name: sft-nemotron-omni-30b-energon-stage3-packed-v2
+  tensorboard:
+    log_dir: tb_logs-sft-nemotron-omni-30b-energon-stage3-packed-v2
+  swanlab:
+    name: sft-nemotron-omni-30b-energon-stage3-packed-v2
+  mlflow:
+    run_name: sft-nemotron-omni-30b-energon-stage3-packed-v2

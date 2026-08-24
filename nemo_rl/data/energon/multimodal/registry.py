@@ -18,6 +18,13 @@ import importlib
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from nemo_rl.data.energon.multimodal.model_families import (
+    ALL_MODEL_FAMILIES,
+    ModelFamily,
+    get_supported_model_families,
+    supports_model_family,
+)
+
 RegistryKind = Literal["cooker", "task_encoder", "packing"]
 
 
@@ -78,6 +85,27 @@ class LazyRegistry:
             raise ValueError(f"Unknown {self.kind} registry key {key!r}.")
         return {"key": key, "version": entry.version}
 
+    def resolve_for_model_family(self, key: str, *, model_family: ModelFamily) -> Any:
+        """Resolve a cooker or task encoder and validate its model family."""
+        if self.kind == "packing":
+            raise TypeError("Packing registry entries have no model-family metadata.")
+        resolved = self.resolve(key)
+        try:
+            supported = get_supported_model_families(resolved)
+        except TypeError as error:
+            raise TypeError(
+                f"{self.kind.replace('_', ' ').capitalize()} registry key {key!r} "
+                "must declare its supported model families."
+            ) from error
+        if supports_model_family(resolved, model_family):
+            return resolved
+        supported_names = ", ".join(sorted(supported - {ALL_MODEL_FAMILIES}))
+        raise ValueError(
+            f"{self.kind.replace('_', ' ').capitalize()} registry key {key!r} "
+            f"does not support model family {model_family!r}; supported model "
+            f"families: {supported_names}."
+        )
+
     def _validate(self, key: str, resolved: Any) -> None:
         if self.kind == "task_encoder":
             # Deferred with the component so registry import stays dependency-light.
@@ -93,6 +121,17 @@ class LazyRegistry:
                     "BaseSFTTaskEncoder subclass."
                 )
             return
+        if self.kind == "packing":
+            from nemo_rl.data.packing import SequencePacker
+
+            if not isinstance(resolved, type) or not issubclass(
+                resolved, SequencePacker
+            ):
+                raise TypeError(
+                    f"Packing registry key {key!r} must resolve to a "
+                    "SequencePacker subclass."
+                )
+            return
         if not callable(resolved):
             raise TypeError(
                 f"{self.kind.capitalize()} registry key {key!r} must resolve "
@@ -106,6 +145,69 @@ COOKER_REGISTRY.register(
     import_path=("nemo_rl.data.energon.multimodal.cookers.generic:cook_conversation"),
     version="1",
 )
+COOKER_REGISTRY.register(
+    "nemotron_general_conversations_webdataset",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.cookers.nemotron:"
+        "cook_general_conversations_webdataset"
+    ),
+    version="1",
+)
+COOKER_REGISTRY.register(
+    "nemotron_general_conversations_jsonl",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.cookers.nemotron:"
+        "cook_general_conversations_jsonl"
+    ),
+    version="1",
+)
+COOKER_REGISTRY.register(
+    "nemotron_granary_english_webdataset",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.cookers.nemotron:"
+        "cook_granary_english_webdataset"
+    ),
+    version="1",
+)
+COOKER_REGISTRY.register(
+    "nemotron_granary_english_jsonl",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.cookers.nemotron:cook_granary_english_jsonl"
+    ),
+    version="1",
+)
+COOKER_REGISTRY.register(
+    "nemotron_nano_openai_messages_jsonl",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.cookers.nemotron_legacy:"
+        "cook_nano_openai_messages_jsonl"
+    ),
+    version="1",
+)
+COOKER_REGISTRY.register(
+    "nemotron_nano_openai_messages_offline_packed_jsonl",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.cookers.nemotron_legacy:"
+        "cook_nano_openai_messages_offline_packed_jsonl"
+    ),
+    version="1",
+)
+COOKER_REGISTRY.register(
+    "nemotron_audio_conversation_jsonl",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.cookers.nemotron_legacy:"
+        "cook_audio_conversation_jsonl"
+    ),
+    version="1",
+)
+COOKER_REGISTRY.register(
+    "nemotron_omcat_legacy_conversation_monolithic",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.cookers.nemotron_legacy:"
+        "cook_omcat_legacy_conversation_monolithic"
+    ),
+    version="1",
+)
 
 TASK_ENCODER_REGISTRY = LazyRegistry("task_encoder")
 TASK_ENCODER_REGISTRY.register(
@@ -116,13 +218,57 @@ TASK_ENCODER_REGISTRY.register(
     ),
     version="1",
 )
+TASK_ENCODER_REGISTRY.register(
+    "qwen_vl_sft",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.task_encoders.qwen_vl:QwenVLSFTTaskEncoder"
+    ),
+    version="1",
+)
+TASK_ENCODER_REGISTRY.register(
+    "nemotron_visual_sft",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.task_encoders.nemotron_sft:"
+        "NemotronSFTTaskEncoder"
+    ),
+    version="1",
+)
+TASK_ENCODER_REGISTRY.register(
+    "nemotron_omni_sft",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.task_encoders.nemotron_omni:"
+        "NemotronOmniSFTTaskEncoder"
+    ),
+    version="1",
+)
 
 PACKING_REGISTRY = LazyRegistry("packing")
 PACKING_REGISTRY.register(
-    "first_fit_multimodal",
+    "concatenative",
+    import_path="nemo_rl.data.packing.concatenative:ConcatenativePacker",
+    version="1",
+)
+PACKING_REGISTRY.register(
+    "first_fit_decreasing",
+    import_path=("nemo_rl.data.packing.first_fit_decreasing:FirstFitDecreasingPacker"),
+    version="1",
+)
+PACKING_REGISTRY.register(
+    "first_fit_shuffle",
+    import_path="nemo_rl.data.packing.first_fit_shuffle:FirstFitShufflePacker",
+    version="1",
+)
+PACKING_REGISTRY.register(
+    "modified_first_fit_decreasing",
     import_path=(
-        "nemo_rl.data.energon.multimodal.packing.first_fit:build_packing_hooks"
+        "nemo_rl.data.packing.modified_first_fit_decreasing:"
+        "ModifiedFirstFitDecreasingPacker"
     ),
+    version="1",
+)
+PACKING_REGISTRY.register(
+    "greedy_knapsack",
+    import_path="nemo_rl.data.packing.greedy_knapsack:GreedyKnapsackPacker",
     version="1",
 )
 

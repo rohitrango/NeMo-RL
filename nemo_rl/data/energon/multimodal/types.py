@@ -12,10 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeAlias
 
 from megatron.energon import Sample, edataclass
+
+MediaMetadataValue: TypeAlias = str | int | float | bool | None
+FrozenMediaMetadata: TypeAlias = tuple[tuple[str, MediaMetadataValue], ...]
+
+
+def freeze_media_metadata(metadata: object = None) -> FrozenMediaMetadata:
+    """Validate and freeze media metadata without reading the media payload."""
+    if metadata is None:
+        return ()
+    if not isinstance(metadata, Mapping):
+        raise ValueError("Media metadata must be an object when present.")
+
+    frozen: list[tuple[str, MediaMetadataValue]] = []
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError("Media metadata keys must be non-empty strings.")
+        if value is not None and not isinstance(value, (str, int, float, bool)):
+            raise ValueError(
+                f"Media metadata value for {key!r} must be a scalar or null."
+            )
+        frozen.append((key, value))
+    return tuple(sorted(frozen))
 
 
 @dataclass(frozen=True)
@@ -24,6 +47,7 @@ class MediaRef:
 
     modality: str
     value: Any
+    metadata: FrozenMediaMetadata = ()
 
 
 @edataclass
@@ -41,9 +65,11 @@ class EncodedSFTSample(Sample):
 
     message_log: list[dict[str, Any]]
     length: int
+    packing_cost: int
     loss_multiplier: float
     group_key: tuple[Any, ...]
     sample_key: str
+    pending_sample: CanonicalSFTSample | None = None
 
 
 @edataclass
@@ -61,6 +87,9 @@ class PackedSFTSample(Sample):
 __all__ = [
     "CanonicalSFTSample",
     "EncodedSFTSample",
+    "FrozenMediaMetadata",
     "MediaRef",
+    "MediaMetadataValue",
     "PackedSFTSample",
+    "freeze_media_metadata",
 ]

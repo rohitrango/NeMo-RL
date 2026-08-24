@@ -42,6 +42,10 @@ policy:
 checkpointing:
   enabled: false
 
+data:
+  energon:
+    model_family: nemotron
+
 logger:
   log_dir: logs/sft-nemotron-omni-30b-clevr-energon-tp4etp4-v2
   wandb:

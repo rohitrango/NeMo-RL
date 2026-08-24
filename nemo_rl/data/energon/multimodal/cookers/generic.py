@@ -21,7 +21,15 @@ from typing import Any
 
 from megatron.energon import CrudeSample, basic_sample_keys, stateless
 
-from nemo_rl.data.energon.multimodal.types import CanonicalSFTSample, MediaRef
+from nemo_rl.data.energon.multimodal.model_families import (
+    ALL_MODEL_FAMILIES,
+    supports_model_families,
+)
+from nemo_rl.data.energon.multimodal.types import (
+    CanonicalSFTSample,
+    MediaRef,
+    freeze_media_metadata,
+)
 
 _MEDIA_TYPES = frozenset({"image", "video", "audio"})
 
@@ -81,6 +89,7 @@ def _get_media_value(sample: CrudeSample, entry: dict[str, Any]) -> Any:
     )
 
 
+@supports_model_families(ALL_MODEL_FAMILIES)
 @stateless
 def cook_conversation(sample: CrudeSample) -> CanonicalSFTSample:
     """Convert one crude JSON-plus-media sample into canonical SFT data."""
@@ -104,7 +113,13 @@ def cook_conversation(sample: CrudeSample) -> CanonicalSFTSample:
         if modality not in _MEDIA_TYPES:
             raise ValueError(f"Unsupported media type {modality!r}.")
         assert isinstance(modality, str)
-        media.append(MediaRef(modality=modality, value=_get_media_value(sample, entry)))
+        media.append(
+            MediaRef(
+                modality=modality,
+                value=_get_media_value(sample, entry),
+                metadata=freeze_media_metadata(entry.get("metadata")),
+            )
+        )
 
     tools = payload.get("tools")
     if tools is not None and not isinstance(tools, list):

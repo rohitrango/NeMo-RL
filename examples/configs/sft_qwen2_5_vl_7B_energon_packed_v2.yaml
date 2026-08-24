@@ -1,0 +1,52 @@
+defaults:
+  - sft_vlm_3B_energon_v2.yaml
+
+sft:
+  max_num_steps: 100
+
+policy:
+  model_name: /data/models/Qwen2.5-VL-7B-Instruct
+  tokenizer:
+    name: ${policy.model_name}
+  # One physical pack per DP replica. The four-source packing buffer keeps
+  # source samples per step close to the prior unpacked global batch of 32.
+  train_global_batch_size: 8
+  train_micro_batch_size: 1
+  sequence_packing:
+    enabled: true
+    fuse_loss: true
+  dynamic_batching:
+    enabled: false
+  megatron_cfg:
+    use_fused_linear_logprobs: false
+
+data:
+  energon:
+    model_family: qwen
+    task_encoder:
+      name: qwen_vl_sft
+      options: {}
+      packing:
+        name: first_fit_decreasing
+        buffer_size: 4
+        options:
+          max_sequence_length: ${policy.max_total_sequence_length}
+          sequence_length_pad_multiple: 1
+
+checkpointing:
+  enabled: false
+
+logger:
+  log_dir: logs/sft-qwen2.5-vl-7b-clevr-energon-packed-v2
+  wandb_enabled: true
+  tensorboard_enabled: true
+  monitor_gpus: true
+  wandb:
+    project: rohit-sc-agent
+    name: sft-qwen2.5-vl-7b-clevr-energon-packed-v2
+  tensorboard:
+    log_dir: tb_logs-sft-qwen2.5-vl-7b-clevr-energon-packed-v2
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 1

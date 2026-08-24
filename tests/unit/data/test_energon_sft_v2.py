@@ -17,7 +17,7 @@ from nemo_rl.distributed.ray_actor_environment_registry import get_actor_python_
 
 def test_worker_config_uses_logical_data_rank() -> None:
     worker = _worker_config(
-        EnergonLoaderConfig(num_workers=3),
+        EnergonLoaderConfig(model_family="qwen", num_workers=3),
         logical_rank=2,
         logical_world_size=4,
     )
@@ -29,7 +29,7 @@ def test_worker_config_uses_logical_data_rank() -> None:
 
 def test_v2_fingerprint_identifies_each_logical_shard() -> None:
     source = EnergonSourceConfig(path="/dataset", split="train", virtual_epoch_length=8)
-    loader = EnergonLoaderConfig()
+    loader = EnergonLoaderConfig(model_family="qwen")
     common = {
         "source": source,
         "loader_config": loader,
@@ -45,11 +45,17 @@ def test_v2_fingerprint_identifies_each_logical_shard() -> None:
     assert rank_zero != rank_one
     assert rank_zero == _v2_fingerprint(logical_rank=0, **common)
 
+    nemotron = loader.model_copy(update={"model_family": "nemotron"})
+    assert rank_zero != _v2_fingerprint(
+        logical_rank=0,
+        **{**common, "loader_config": nemotron},
+    )
+
 
 def test_v1_builder_uses_shared_loader_as_rank_zero_of_one() -> None:
     train_loader = MagicMock()
     data_config = {
-        "energon": {},
+        "energon": {"model_family": "qwen"},
         "shuffle": True,
         "train": {
             "path": "/dataset",

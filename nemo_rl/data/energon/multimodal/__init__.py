@@ -16,6 +16,7 @@ from importlib import import_module
 from typing import Any
 
 _EXPORT_MODULES = {
+    "ALL_MODEL_FAMILIES": "nemo_rl.data.energon.multimodal.model_families",
     "BaseSFTTaskEncoder": "nemo_rl.data.energon.multimodal.task_encoders",
     "CanonicalSFTSample": "nemo_rl.data.energon.multimodal.types",
     "EncodedSFTSample": "nemo_rl.data.energon.multimodal.types",
@@ -25,10 +26,37 @@ _EXPORT_MODULES = {
         "nemo_rl.data.energon.multimodal.task_encoders"
     ),
     "MediaRef": "nemo_rl.data.energon.multimodal.types",
+    "ModelFamily": "nemo_rl.data.energon.multimodal.model_families",
+    "NemotronSFTTaskEncoder": "nemo_rl.data.energon.multimodal.task_encoders",
+    "NemotronOmniSFTProcessorAdapter": (
+        "nemo_rl.data.energon.multimodal.task_encoders"
+    ),
+    "NemotronOmniSFTTaskEncoder": ("nemo_rl.data.energon.multimodal.task_encoders"),
+    "NemotronVisualSFTProcessorAdapter": (
+        "nemo_rl.data.energon.multimodal.task_encoders"
+    ),
     "PackedSFTSample": "nemo_rl.data.energon.multimodal.types",
+    "QwenVLSFTTaskEncoder": "nemo_rl.data.energon.multimodal.task_encoders",
     "SFTProcessorAdapter": "nemo_rl.data.energon.multimodal.task_encoders",
     "build_processor_adapter": "nemo_rl.data.energon.multimodal.task_encoders",
     "cook_conversation": "nemo_rl.data.energon.multimodal.cookers",
+    "cook_general_conversations_jsonl": ("nemo_rl.data.energon.multimodal.cookers"),
+    "cook_general_conversations_webdataset": (
+        "nemo_rl.data.energon.multimodal.cookers"
+    ),
+    "cook_granary_english_jsonl": "nemo_rl.data.energon.multimodal.cookers",
+    "cook_granary_english_webdataset": ("nemo_rl.data.energon.multimodal.cookers"),
+    "cook_audio_conversation_jsonl": "nemo_rl.data.energon.multimodal.cookers",
+    "cook_nano_openai_messages_jsonl": ("nemo_rl.data.energon.multimodal.cookers"),
+    "cook_nano_openai_messages_offline_packed_jsonl": (
+        "nemo_rl.data.energon.multimodal.cookers"
+    ),
+    "cook_omcat_legacy_conversation_monolithic": (
+        "nemo_rl.data.energon.multimodal.cookers"
+    ),
+    "get_supported_model_families": ("nemo_rl.data.energon.multimodal.model_families"),
+    "supports_model_families": "nemo_rl.data.energon.multimodal.model_families",
+    "supports_model_family": "nemo_rl.data.energon.multimodal.model_families",
 }
 
 

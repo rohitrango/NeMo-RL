@@ -16,18 +16,25 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from copy import deepcopy
 from typing import Any, Protocol, cast
 
 import torch
-from megatron.energon import CrudeSample, SampleDecoder, stateless
+from megatron.energon import SampleDecoder, stateless
 
 from nemo_rl.data.energon.multimodal.packing import (
     ENERGON_PACKED_SCHEMA_VERSION,
     EnergonPackingHooks,
 )
-from nemo_rl.data.energon.multimodal.task_encoders.base import BaseSFTTaskEncoder
+from nemo_rl.data.energon.multimodal.model_families import (
+    ALL_MODEL_FAMILIES,
+    supports_model_families,
+)
+from nemo_rl.data.energon.multimodal.task_encoders.base import (
+    BaseSFTTaskEncoder,
+    SFTCooker,
+)
 from nemo_rl.data.energon.multimodal.types import (
     CanonicalSFTSample,
     EncodedSFTSample,
@@ -215,12 +222,14 @@ class HFMultimodalSFTProcessorAdapter:
             sample,
             message_log=message_log,
             length=length,
+            packing_cost=length,
             loss_multiplier=loss_multiplier,
             group_key=(self.fingerprint, model_input_keys, media_cost_bucket),
             sample_key=sample.__key__,
         )
 
 
+@supports_model_families(ALL_MODEL_FAMILIES)
 class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
     """Encode, group, and batch complete multimodal SFT conversations."""
 
@@ -233,7 +242,7 @@ class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
         self,
         *,
         adapter: SFTProcessorAdapter,
-        cooker_functions: Sequence[Callable[[CrudeSample], CanonicalSFTSample]],
+        cooker_functions: Sequence[SFTCooker],
         packing_hooks: EnergonPackingHooks[Any, Any, Any] | None,
         include_source_ids: bool,
     ) -> None:
@@ -263,7 +272,9 @@ class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
     ) -> BatchedDataDict[Any]:
         if samples and isinstance(samples[0], PackedSFTSample):
             if not all(isinstance(sample, PackedSFTSample) for sample in samples):
-                raise TypeError("Energon SFT batches cannot mix packed and unpacked rows.")
+                raise TypeError(
+                    "Energon SFT batches cannot mix packed and unpacked rows."
+                )
             packed_samples = cast(list[PackedSFTSample], samples)
             capacities = {sample.pack_capacity for sample in packed_samples}
             if len(capacities) != 1:

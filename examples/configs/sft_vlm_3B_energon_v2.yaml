@@ -43,6 +43,7 @@ data:
   shuffle: true
   num_workers: 0
   energon:
+    model_family: qwen
     num_workers: 8
     shuffle_buffer_size: 1000
     processor_adapter: hf_multimodal

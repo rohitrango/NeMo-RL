@@ -22,6 +22,7 @@ from typing import Any, Iterator, Literal, Mapping, Protocol, cast
 
 import torch
 from megatron.energon import (
+    Cooker,
     CrudeSample,
     WorkerConfig,
     get_savable_loader,
@@ -31,7 +32,7 @@ from megatron.energon import (
 )
 
 from nemo_rl.data.energon.config import EnergonLoaderConfig, EnergonSourceConfig
-from nemo_rl.data.energon.multimodal.packing import EnergonPackingFactory
+from nemo_rl.data.energon.multimodal.packing import build_packing_hooks
 from nemo_rl.data.energon.multimodal.registry import (
     COOKER_REGISTRY,
     PACKING_REGISTRY,
@@ -43,6 +44,7 @@ from nemo_rl.data.energon.multimodal.task_encoders import (
     build_processor_adapter,
 )
 from nemo_rl.data.energon.multimodal.types import CanonicalSFTSample
+from nemo_rl.data.packing import SequencePacker
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 _V1_STATE_FORMAT_VERSION = 1
@@ -139,18 +141,65 @@ def _loader_config(value: Any) -> EnergonLoaderConfig:
         raise ValueError(
             f"Unknown data-loader topology mapper {config.topology_mapper!r}."
         )
-    if config.task_encoder.options:
-        raise ValueError("The Stage 1 generic SFT task encoder has no options.")
+    configured_encoder_options = config.task_encoder.options.model_fields_set
+    if config.task_encoder.name in {"generic_sft", "qwen_vl_sft"}:
+        if configured_encoder_options:
+            raise ValueError(
+                f"Task encoder {config.task_encoder.name!r} has no configurable "
+                "options."
+            )
+    elif config.task_encoder.name == "nemotron_visual_sft":
+        audio_options = {
+            "audio_subsampling_factor",
+            "audio_num_mel_bins",
+            "audio_clip_duration_seconds",
+            "min_audio_duration_seconds",
+            "max_audio_duration_seconds",
+        }
+        invalid_options = configured_encoder_options & audio_options
+        if invalid_options:
+            raise ValueError(
+                "Nemotron visual task encoder does not use audio options: "
+                f"{sorted(invalid_options)!r}."
+            )
     if not config.cookers:
         raise ValueError("At least one Energon cooker must be configured.")
     if any(cooker.options for cooker in config.cookers):
         raise ValueError("The Stage 1 generic conversation cooker has no options.")
+    fallback_cookers = [
+        index
+        for index, cooker in enumerate(config.cookers)
+        if cooker.has_subflavors is None
+    ]
+    if len(fallback_cookers) > 1:
+        raise ValueError(
+            "At most one Energon cooker can omit has_subflavors when several "
+            "cookers are configured."
+        )
+    if fallback_cookers and fallback_cookers[0] != len(config.cookers) - 1:
+        raise ValueError("An Energon fallback cooker must be the final cooker.")
+    filters = [
+        cooker.has_subflavors
+        for cooker in config.cookers
+        if cooker.has_subflavors is not None
+    ]
+    if any(current in filters[:index] for index, current in enumerate(filters)):
+        raise ValueError("Energon cooker has_subflavors filters must be unique.")
+    TASK_ENCODER_REGISTRY.resolve_for_model_family(
+        config.task_encoder.name,
+        model_family=config.model_family,
+    )
+    for cooker in config.cookers:
+        COOKER_REGISTRY.resolve_for_model_family(
+            cooker.name,
+            model_family=config.model_family,
+        )
     return config
 
 
 def _v1_loader_projection(config: EnergonLoaderConfig) -> dict[str, Any]:
-    """Return exactly the fields used by the former V1 fingerprint."""
-    return {
+    """Preserve legacy V1 state while identifying Stage 3 components."""
+    projection: dict[str, Any] = {
         "num_workers": config.num_workers,
         "shuffle_buffer_size": config.shuffle_buffer_size,
         "max_samples_per_sequence": config.max_samples_per_sequence,
@@ -162,6 +211,33 @@ def _v1_loader_projection(config: EnergonLoaderConfig) -> dict[str, Any]:
         "checkpoint_every_sec": config.checkpoint_every_sec,
         "watchdog_timeout_seconds": config.watchdog_timeout_seconds,
     }
+    legacy_components = (
+        config.task_encoder.name == "generic_sft"
+        and not config.task_encoder.options.model_fields_set
+        and config.task_encoder.packing is None
+        and len(config.cookers) == 1
+        and config.cookers[0].name == "generic_conversation"
+        and not config.cookers[0].options
+        and config.cookers[0].has_subflavors is None
+    )
+    if legacy_components:
+        return projection
+
+    projection["stage3"] = {
+        "model_family": config.model_family,
+        "task_encoder": config.task_encoder.model_dump(mode="json"),
+        "cookers": [cooker.model_dump(mode="json") for cooker in config.cookers],
+        "registries": selected_registry_identity(
+            task_encoder=config.task_encoder.name,
+            cookers=[cooker.name for cooker in config.cookers],
+            packing=(
+                None
+                if config.task_encoder.packing is None
+                else config.task_encoder.packing.name
+            ),
+        ),
+    }
+    return projection
 
 
 def _v1_fingerprint(
@@ -242,28 +318,43 @@ def _task_encoder(
     include_source_ids: bool,
 ) -> BaseSFTTaskEncoder:
     cooker_functions = [
-        cast(
-            Callable[[CrudeSample], CanonicalSFTSample],
-            COOKER_REGISTRY.resolve(cooker.name),
+        Cooker(
+            cast(
+                Callable[[CrudeSample], CanonicalSFTSample],
+                COOKER_REGISTRY.resolve(cooker.name),
+            ),
+            has_subflavors=cooker.has_subflavors,
         )
         for cooker in loader_config.cookers
     ]
     encoder_type = cast(
         Any, TASK_ENCODER_REGISTRY.resolve(loader_config.task_encoder.name)
     )
+    encoder_options: dict[str, Any] = {}
+    if loader_config.task_encoder.name == "nemotron_visual_sft":
+        encoder_options = loader_config.task_encoder.options.model_dump(
+            include={
+                "patch_dim",
+                "temporal_patch_size",
+                "prompt_format",
+                "thinking_trace_format",
+            }
+        )
+    elif loader_config.task_encoder.name == "nemotron_omni_sft":
+        encoder_options = loader_config.task_encoder.options.model_dump()
     packing_config = loader_config.task_encoder.packing
     packing_hooks = None
     if packing_config is not None:
-        packing_factory = cast(
-            EnergonPackingFactory,
+        packer_type = cast(
+            type[SequencePacker],
             PACKING_REGISTRY.resolve(packing_config.name),
         )
-        packing_hooks = packing_factory(packing_config.options)
-        if packing_hooks.key != packing_config.name:
-            raise ValueError(
-                f"Energon packing factory {packing_config.name!r} returned "
-                f"hooks for {packing_hooks.key!r}."
-            )
+        packing_hooks = build_packing_hooks(
+            packing_config.options,
+            algorithm=packing_config.name,
+            version=PACKING_REGISTRY.identity(packing_config.name)["version"],
+            packer_type=packer_type,
+        )
     return cast(
         BaseSFTTaskEncoder,
         encoder_type(
@@ -271,6 +362,7 @@ def _task_encoder(
             cooker_functions=cooker_functions,
             packing_hooks=packing_hooks,
             include_source_ids=include_source_ids,
+            **encoder_options,
         ),
     )
 
