@@ -277,6 +277,8 @@ project-includes = [
   "tools/model_diagnostics/4.vllm_precision_compilation_test.py",
   "tools/model_diagnostics/5.prefix_caching_nan.py",
   "tools/sft_v2_reference.py",
+  "tools/sft_v1_v2_ab.py",
+  "tools/run_sft_v1_dp_reference.py",
   "tools/model_diagnostics/6.vllm_routed_experts_completeness.py",
   "tools/refit_bandwidth_calculator.py",
   "tools/x_token/__init__.py",

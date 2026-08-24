@@ -141,10 +141,9 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
 
         lengths_tensor = prepared["input_lengths"]
         lengths = tuple(int(value) for value in lengths_tensor.tolist())
+        sample_mask = prepared["sample_mask"]
         valid_tokens = int(
-            (prepared["sample_mask"].unsqueeze(-1) * prepared["token_mask"])
-            .sum()
-            .item()
+            (sample_mask.unsqueeze(-1) * prepared["token_mask"][:, 1:]).sum().item()
         )
         envelope = StepEnvelope(
             meta=replace(published_meta, task_name="train"),
