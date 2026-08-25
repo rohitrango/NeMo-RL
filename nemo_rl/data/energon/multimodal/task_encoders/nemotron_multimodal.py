@@ -25,11 +25,13 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
+from megatron.energon import edataclass, stateless
 
 from nemo_rl.data.energon.multimodal.model_families import supports_model_families
 from nemo_rl.data.energon.multimodal.packing import EnergonPackingHooks
 from nemo_rl.data.energon.multimodal.task_encoders.base import SFTCooker
 from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (
+    GenericSFTTaskEncoder,
     HFMultimodalSFTProcessorAdapter,
     SFTProcessorAdapter,
     _normalize_messages,
@@ -37,14 +39,15 @@ from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (
 from nemo_rl.data.energon.multimodal.task_encoders.media import (
     decode_selected_av_bytes,
 )
-from nemo_rl.data.energon.multimodal.task_encoders.nemotron_sft import (
+from nemo_rl.data.energon.multimodal.task_encoders.nemotron_visual import (
     COMPACT_IMAGE_PLACEHOLDER,
-    NemotronSFTTaskEncoder,
-    NemotronVisualSFTProcessorAdapter,
+    NemotronEncodedSFTSample,
+    _NemotronVisualProcessorAdapter,
     _expand_visual_placeholders,
     _normalize_assistant_thinking,
-    _predicted_visual_cost,
     _token_id,
+    _tokenize_nemotron_sample,
+    _truncate_message_log,
     _video_prompt,
 )
 from nemo_rl.data.energon.multimodal.types import (
@@ -52,8 +55,6 @@ from nemo_rl.data.energon.multimodal.types import (
     EncodedSFTSample,
     MediaRef,
 )
-from nemo_rl.data.interfaces import TaskDataSpec
-from nemo_rl.data.llm_message_utils import get_formatted_message_log
 from nemo_rl.data.multimodal_utils import PackedTensor
 
 SOUND_PLACEHOLDER = "<so_embedding>"
@@ -71,13 +72,25 @@ _VISUAL_MODEL_INPUT_KEYS = ("imgs_sizes", "num_frames", "pixel_values")
 
 @dataclass(frozen=True)
 class _AudioPlan:
-    clip_sample_counts: tuple[int, ...]
+    num_embeddings: int
+    num_clips: int
+    audio_length: int
+    timestamps: tuple[float, float]
+    samples_per_clip: tuple[int, ...]
     valid_frame_counts: tuple[int, ...]
     embedding_counts: tuple[int, ...]
+    source_sampling_rate: int
 
     @property
     def total_embeddings(self) -> int:
-        return sum(self.embedding_counts)
+        return self.num_embeddings
+
+
+@edataclass
+class NemotronOmniEncodedSFTSample(NemotronEncodedSFTSample):
+    """Encoded Omni sample with the exact audio plan from pre-encoding."""
+
+    audio_plans: tuple[_AudioPlan, ...]
 
 
 def _required_metadata_int(ref: MediaRef, key: str) -> int:
@@ -91,24 +104,94 @@ def _required_metadata_int(ref: MediaRef, key: str) -> int:
     return value
 
 
-def _source_audio_samples(ref: MediaRef) -> tuple[int, int]:
+def _source_sampling_rate(ref: MediaRef) -> int:
+    return _required_metadata_int(ref, "audio_sample_rate")
+
+
+def _audio_duration(ref: MediaRef) -> float:
     metadata = dict(ref.metadata)
-    source_sampling_rate = _required_metadata_int(ref, "audio_sample_rate")
-    source_samples = metadata.get("audio_num_samples")
-    if source_samples is None:
-        duration = metadata.get("audio_duration")
-        if type(duration) not in (int, float) or duration <= 0:
-            raise ValueError(
-                "Nemotron audio media requires positive audio_num_samples or "
-                "audio_duration metadata for lazy width prediction."
-            )
-        source_samples = round(float(duration) * source_sampling_rate)
-    if type(source_samples) is not int or source_samples <= 0:
+    duration = metadata.get("audio_duration")
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)):
         raise ValueError(
-            "Nemotron audio media requires positive integer metadata "
-            f"'audio_num_samples'; got {source_samples!r}."
+            "Nemotron audio media requires numeric metadata 'audio_duration'; "
+            f"got {duration!r}."
         )
-    return source_samples, source_sampling_rate
+    return float(duration)
+
+
+def _decoded_audio_clips(ref: MediaRef) -> tuple[torch.Tensor, ...]:
+    """Load audio in the same channels-first form used by the reference."""
+    payload = ref.value.get() if callable(getattr(ref.value, "get", None)) else ref.value
+    from_soundfile = False
+    if isinstance(payload, str):
+        import soundfile as sf
+
+        payload, sampling_rate = sf.read(
+            payload,
+            dtype="float32",
+            always_2d=True,
+        )
+        expected_sampling_rate = _source_sampling_rate(ref)
+        if sampling_rate != expected_sampling_rate:
+            raise ValueError(
+                f"Nemotron audio file sampling rate {sampling_rate} does not match "
+                f"audio_sample_rate={expected_sampling_rate}."
+            )
+        from_soundfile = True
+    if isinstance(payload, (bytes, bytearray, memoryview)):
+        payload = decode_selected_av_bytes(payload, modality="audio")
+    if callable(getattr(payload, "get_audio", None)):
+        payload = payload.get_audio().audio_clips
+
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
+        values = list(payload)
+    else:
+        values = [payload]
+    if not values:
+        raise ValueError("Nemotron audio payload has no clips.")
+
+    expected_channels = dict(ref.metadata).get("audio_channels")
+    clips: list[torch.Tensor] = []
+    for value in values:
+        clip = torch.as_tensor(value)
+        if clip.ndim == 1:
+            clip = clip.unsqueeze(0)
+        elif clip.ndim != 2:
+            raise ValueError(
+                "Nemotron audio clips must have shape [channels, samples]; "
+                f"got {tuple(clip.shape)}."
+            )
+        if from_soundfile:
+            clip = clip.transpose(0, 1)
+        elif (
+            type(expected_channels) is int
+            and clip.shape[0] != expected_channels
+            and clip.shape[1] == expected_channels
+        ):
+            clip = clip.transpose(0, 1)
+        clips.append(clip)
+    return tuple(clips)
+
+
+def _normalized_mono_audio(ref: MediaRef) -> torch.Tensor:
+    clips = _decoded_audio_clips(ref)
+    try:
+        audio = torch.stack(clips, dim=0)
+    except RuntimeError as error:
+        raise ValueError(
+            "Nemotron audio decoder returned clips with different sample lengths."
+        ) from error
+
+    if audio.dtype == torch.int16:
+        audio = audio.to(torch.float32) / 32768.0
+    elif audio.dtype == torch.int32:
+        audio = audio.to(torch.float32) / 2147483648.0
+    else:
+        audio = audio.to(torch.float32)
+    max_value = audio.abs().max()
+    if max_value > 1.0:
+        audio = audio / max_value
+    return audio.mean(dim=1, keepdim=True)
 
 
 def _subsampled_length(frame_count: int, subsampling_factor: int) -> int:
@@ -129,23 +212,33 @@ def _audio_plan(
     min_duration_seconds: float,
     max_duration_seconds: float,
 ) -> _AudioPlan:
-    source_samples, source_sampling_rate = _source_audio_samples(ref)
-    source_duration = source_samples / source_sampling_rate
-    if source_duration > max_duration_seconds:
+    metadata_duration = _audio_duration(ref)
+    if metadata_duration < min_duration_seconds:
         raise ValueError(
-            f"Nemotron audio duration {source_duration:.3f}s exceeds "
+            f"Nemotron audio duration {metadata_duration:.3f}s is below "
+            f"min_audio_duration_seconds={min_duration_seconds}."
+        )
+    if metadata_duration > max_duration_seconds:
+        raise ValueError(
+            f"Nemotron audio duration {metadata_duration:.3f}s exceeds "
             f"max_audio_duration_seconds={max_duration_seconds}."
         )
 
-    target_samples = round(source_samples * target_sampling_rate / source_sampling_rate)
+    source_sampling_rate = _source_sampling_rate(ref)
+    source_audio = _decoded_audio_clips(ref)
+    source_samples = source_audio[0].shape[-1]
+    source_duration = max(min_duration_seconds, source_samples / source_sampling_rate)
+    target_samples = round(source_duration * target_sampling_rate)
     min_samples = round(min_duration_seconds * target_sampling_rate)
-    target_samples = max(target_samples, min_samples)
     clip_samples = round(clip_duration_seconds * target_sampling_rate)
     num_clips = math.ceil(target_samples / clip_samples)
     remainder = target_samples % clip_samples
     last_clip_samples = clip_samples if remainder == 0 else max(remainder, min_samples)
-    clip_sample_counts = (clip_samples,) * (num_clips - 1) + (last_clip_samples,)
-    valid_frame_counts = tuple(count // hop_length for count in clip_sample_counts)
+    samples_per_clip = (clip_samples,) * (num_clips - 1) + (last_clip_samples,)
+    audio_length = sum(samples_per_clip)
+    if audio_length > target_samples:
+        source_duration = audio_length / target_sampling_rate
+    valid_frame_counts = tuple(count // hop_length for count in samples_per_clip)
     if any(count <= 0 for count in valid_frame_counts):
         raise ValueError(
             "Nemotron audio clip produces no mel frames. Increase "
@@ -155,9 +248,14 @@ def _audio_plan(
         _subsampled_length(count, subsampling_factor) for count in valid_frame_counts
     )
     return _AudioPlan(
-        clip_sample_counts=clip_sample_counts,
+        num_embeddings=sum(embedding_counts),
+        num_clips=num_clips,
+        audio_length=audio_length,
+        timestamps=(0.0, source_duration),
+        samples_per_clip=samples_per_clip,
         valid_frame_counts=valid_frame_counts,
         embedding_counts=embedding_counts,
+        source_sampling_rate=source_sampling_rate,
     )
 
 
@@ -167,6 +265,8 @@ def _render_omni_messages(
     temporal_patch_size: int,
     prompt_format: str,
     thinking_trace_format: str,
+    relax_thinking_trace_check: bool,
+    video_timestamps: dict[int, tuple[float, ...]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[tuple[int, MediaRef]]]:
     messages = _normalize_messages(sample)
     occurrences: list[tuple[int, MediaRef]] = []
@@ -174,8 +274,11 @@ def _render_omni_messages(
     for message_index, message in enumerate(messages):
         _normalize_assistant_thinking(
             message,
+            sample=sample,
+            message_index=message_index,
             prompt_format=prompt_format,
             thinking_trace_format=thinking_trace_format,
+            relax_thinking_trace_check=relax_thinking_trace_check,
         )
         rendered_content: list[dict[str, str]] = []
         for part in message["content"]:
@@ -185,7 +288,7 @@ def _render_omni_messages(
                     {"type": "text", "text": str(part.get("text", ""))}
                 )
                 continue
-            if part_type not in {"audio", "image", "video"}:
+            if part_type not in {"audio", "image", "video", "video_frame"}:
                 raise ValueError(f"Nemotron Omni does not support {part_type!r} media.")
             if media_index >= len(sample.media):
                 raise ValueError(
@@ -197,12 +300,13 @@ def _render_omni_messages(
                     f"Nemotron Omni media order mismatch: expected {part_type!r}, "
                     f"got {ref.modality!r}."
                 )
-            if part_type == "image":
+            if part_type in {"image", "video_frame"}:
                 text = COMPACT_IMAGE_PLACEHOLDER
             elif part_type == "video":
                 text, _ = _video_prompt(
                     ref,
                     temporal_patch_size=temporal_patch_size,
+                    frame_timestamps=(video_timestamps or {}).get(media_index),
                 )
             else:
                 text = f"{SOUND_START}{SOUND_PLACEHOLDER}{SOUND_END}"
@@ -234,6 +338,16 @@ def _expand_audio_placeholders(
             raise ValueError(
                 "Nemotron Omni tokenized messages require one-dimensional token_ids."
             )
+        token_loss_mask = message_log[message_index].get("token_loss_mask")
+        if (
+            not isinstance(token_loss_mask, torch.Tensor)
+            or token_loss_mask.ndim != 1
+            or token_loss_mask.shape != token_ids.shape
+        ):
+            raise ValueError(
+                "Nemotron Omni tokenized messages require token_loss_mask aligned "
+                "with token_ids."
+            )
         placeholder_positions = torch.where(token_ids == sound_token_id)[0].tolist()
         if len(placeholder_positions) != len(plans):
             raise ValueError(
@@ -241,11 +355,12 @@ def _expand_audio_placeholders(
                 f"{len(placeholder_positions)} compact sound placeholders for "
                 f"{len(plans)} audio items."
             )
-        pieces: list[torch.Tensor] = []
+        token_pieces: list[torch.Tensor] = []
+        mask_pieces: list[torch.Tensor] = []
         start = 0
         for position, plan in zip(placeholder_positions, plans, strict=True):
-            pieces.append(token_ids[start:position])
-            pieces.append(
+            token_pieces.append(token_ids[start:position])
+            token_pieces.append(
                 torch.full(
                     (plan.total_embeddings,),
                     sound_token_id,
@@ -253,65 +368,15 @@ def _expand_audio_placeholders(
                     device=token_ids.device,
                 )
             )
+            mask_pieces.append(token_loss_mask[start:position])
+            mask_pieces.append(
+                token_loss_mask[position].expand(plan.total_embeddings)
+            )
             start = position + 1
-        pieces.append(token_ids[start:])
-        message_log[message_index]["token_ids"] = torch.cat(pieces)
-
-
-def _native_waveform(
-    value: Any,
-    *,
-    expected_samples: int,
-    expected_sampling_rate: int,
-) -> torch.Tensor:
-    payload = value.get() if callable(getattr(value, "get", None)) else value
-    if isinstance(payload, str):
-        import soundfile as sf
-
-        payload, sampling_rate = sf.read(
-            payload,
-            dtype="float32",
-            always_2d=False,
-        )
-        if sampling_rate != expected_sampling_rate:
-            raise ValueError(
-                f"Nemotron audio file sampling rate {sampling_rate} does not match "
-                f"immutable audio_sample_rate={expected_sampling_rate}."
-            )
-    if isinstance(payload, (bytes, bytearray, memoryview)):
-        payload = decode_selected_av_bytes(payload, modality="audio")
-    if callable(getattr(payload, "get_audio", None)):
-        payload = payload.get_audio().audio_clips
-    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
-        tensors = [torch.as_tensor(clip) for clip in payload]
-        if not tensors:
-            raise ValueError("Nemotron audio payload has no clips.")
-        payload = torch.cat(tensors, dim=-1)
-    waveform = torch.as_tensor(payload)
-    if waveform.ndim == 2:
-        waveform = waveform.to(dtype=torch.float32)
-        if waveform.shape[-1] == expected_samples:
-            waveform = waveform.mean(dim=0)
-        elif waveform.shape[0] == expected_samples:
-            waveform = waveform.mean(dim=1)
-        else:
-            raise ValueError(
-                "Nemotron audio payload has no axis matching immutable "
-                f"audio_num_samples={expected_samples}; got shape "
-                f"{tuple(waveform.shape)}."
-            )
-    elif waveform.ndim != 1:
-        raise ValueError(
-            f"Nemotron audio payload must be one- or two-dimensional, got "
-            f"shape {tuple(waveform.shape)}."
-        )
-    if waveform.dtype == torch.int16:
-        waveform = waveform.to(dtype=torch.float32) / 32768.0
-    elif waveform.dtype == torch.int32:
-        waveform = waveform.to(dtype=torch.float32) / 2147483648.0
-    else:
-        waveform = waveform.to(dtype=torch.float32)
-    return waveform
+        token_pieces.append(token_ids[start:])
+        mask_pieces.append(token_loss_mask[start:])
+        message_log[message_index]["token_ids"] = torch.cat(token_pieces)
+        message_log[message_index]["token_loss_mask"] = torch.cat(mask_pieces)
 
 
 def _feature_output(features: Any) -> Mapping[str, Any]:
@@ -323,8 +388,8 @@ def _feature_output(features: Any) -> Mapping[str, Any]:
     raise TypeError("Nemotron audio feature extractor must return a mapping.")
 
 
-class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
-    """Predict Omni image and sound width before loading media payloads."""
+class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
+    """Predict Nemotron image, video, and optional sound widths lazily."""
 
     def __init__(
         self,
@@ -335,6 +400,7 @@ class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
         temporal_patch_size: int = 2,
         prompt_format: str = "nemotron-h-5p5-reasoning",
         thinking_trace_format: str = "default",
+        relax_thinking_trace_check: bool = False,
         audio_subsampling_factor: int | None = None,
         audio_num_mel_bins: int = 128,
         audio_clip_duration_seconds: float = 60.0,
@@ -351,6 +417,7 @@ class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
             temporal_patch_size=temporal_patch_size,
             prompt_format=prompt_format,
             thinking_trace_format=thinking_trace_format,
+            relax_thinking_trace_check=relax_thinking_trace_check,
             add_bos=add_bos,
             add_eos=add_eos,
             add_generation_prompt=add_generation_prompt,
@@ -362,44 +429,35 @@ class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
         hop_length = getattr(feature_extractor, "hop_length", None)
         if hop_length is None:
             hop_length = getattr(processor, "audio_hop_length", None)
-        if (
-            type(target_sampling_rate) is not int
-            or target_sampling_rate <= 0
-            or type(hop_length) is not int
-            or hop_length <= 0
-        ):
-            raise ValueError(
-                "Nemotron Omni processor feature_extractor must expose positive "
-                "integer sampling_rate and hop_length values so pre-encode can "
-                "predict audio width without reading the payload."
-            )
-        if feature_extractor is None:
-            from transformers import ParakeetFeatureExtractor
-
-            if type(audio_num_mel_bins) is not int or audio_num_mel_bins <= 0:
-                raise ValueError(
-                    "audio_num_mel_bins must be a positive integer when the "
-                    "processor feature_extractor is absent."
-                )
-            feature_extractor = ParakeetFeatureExtractor(
-                feature_size=audio_num_mel_bins,
-                sampling_rate=target_sampling_rate,
-                hop_length=hop_length,
-            )
+        has_audio_frontend = (
+            type(target_sampling_rate) is int
+            and target_sampling_rate > 0
+            and type(hop_length) is int
+            and hop_length > 0
+        )
+        if type(audio_num_mel_bins) is not int or audio_num_mel_bins <= 0:
+            raise ValueError("audio_num_mel_bins must be a positive integer.")
         if audio_subsampling_factor is None:
             audio_subsampling_factor = getattr(
                 processor,
                 "audio_subsampling_factor",
                 None,
             )
-        if type(audio_subsampling_factor) is not int:
-            raise ValueError(
-                "Nemotron Omni processor must expose integer audio_subsampling_factor."
-            )
-        if audio_subsampling_factor <= 0 or audio_subsampling_factor & (
-            audio_subsampling_factor - 1
+        has_audio_frontend = has_audio_frontend and (
+            type(audio_subsampling_factor) is int
+        )
+        if has_audio_frontend and (
+            audio_subsampling_factor <= 0
+            or audio_subsampling_factor & (audio_subsampling_factor - 1)
         ):
             raise ValueError("audio_subsampling_factor must be a power of two.")
+        if (
+            audio_subsampling_factor is not None
+            and type(audio_subsampling_factor) is not int
+        ):
+            raise ValueError(
+                "Nemotron audio_subsampling_factor must be an integer when set."
+            )
         if not 0 < min_audio_duration_seconds <= audio_clip_duration_seconds:
             raise ValueError(
                 "min_audio_duration_seconds must be positive and no larger than "
@@ -414,6 +472,7 @@ class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
         self.target_sampling_rate = target_sampling_rate
         self.hop_length = hop_length
         self.audio_subsampling_factor = audio_subsampling_factor
+        self.audio_num_mel_bins = audio_num_mel_bins
         self.audio_clip_duration_seconds = audio_clip_duration_seconds
         self.min_audio_duration_seconds = min_audio_duration_seconds
         self.max_audio_duration_seconds = max_audio_duration_seconds
@@ -431,6 +490,15 @@ class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
         self._fingerprint = hashlib.sha256(encoded).hexdigest()
 
     def _plan_audio(self, ref: MediaRef) -> _AudioPlan:
+        if (
+            type(self.target_sampling_rate) is not int
+            or type(self.hop_length) is not int
+            or type(self.audio_subsampling_factor) is not int
+        ):
+            raise ValueError(
+                "This Nemotron processor has no audio frontend; audio samples "
+                "require sampling_rate, hop_length, and audio_subsampling_factor."
+            )
         return _audio_plan(
             ref,
             target_sampling_rate=self.target_sampling_rate,
@@ -442,25 +510,28 @@ class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
         )
 
     def preencode(self, sample: CanonicalSFTSample) -> EncodedSFTSample:
-        """Expand sound placeholders and predict visual width from metadata."""
+        """Expand sound placeholders and retain exact media transform plans."""
+        video_selections = self._video_selections(sample)
         messages, occurrences = _render_omni_messages(
             sample,
             temporal_patch_size=self.temporal_patch_size,
             prompt_format=self.prompt_format,
             thinking_trace_format=self.thinking_trace_format,
+            relax_thinking_trace_check=self.relax_thinking_trace_check,
+            video_timestamps={
+                index: selection.timestamps
+                for index, selection in video_selections.items()
+            },
         )
-        message_log = get_formatted_message_log(
+        message_log = _tokenize_nemotron_sample(
+            sample,
             messages,
-            self.processor,
-            TaskDataSpec(),
-            add_bos_token=self.add_bos,
-            add_eos_token=self.add_eos,
-            add_generation_prompt=self.add_generation_prompt,
-            tools=sample.tools,
+            processor=self.processor,
+            prompt_format=self.prompt_format,
         )
         audio_occurrences = [
-            (message_index, ref, self._plan_audio(ref))
-            for message_index, ref in occurrences
+            (0, ref, self._plan_audio(ref))
+            for _, ref in occurrences
             if ref.modality == "audio"
         ]
         sound_token_id = _token_id(self.processor.tokenizer, SOUND_PLACEHOLDER)
@@ -471,28 +542,60 @@ class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
         )
 
         length = sum(len(message["token_ids"]) for message in message_log)
-        visual_embeddings = 0
-        visual_placeholders = 0
-        for _, ref in occurrences:
-            if ref.modality == "audio":
-                continue
-            embeddings, placeholders = _predicted_visual_cost(
-                ref,
-                patch_dim=self.patch_dim,
-                temporal_patch_size=self.temporal_patch_size,
-            )
-            visual_embeddings += embeddings
-            visual_placeholders += placeholders
+        visual_media_indexes = [
+            index
+            for index, (_, ref) in enumerate(occurrences)
+            if ref.modality != "audio"
+        ]
+        visual_occurrences = [
+            (0, occurrences[index][1]) for index in visual_media_indexes
+        ]
+        visual_plans = self._plan_visual_occurrences(
+            visual_occurrences,
+            video_selections=video_selections,
+            num_tokens_available=self.max_sequence_length - length - 4,
+            data_augment=bool(sample.__subflavors__.get("data_augment", False)),
+            media_indexes=visual_media_indexes,
+        )
+        visual_embeddings = sum(plan.num_embeddings for plan in visual_plans)
+        visual_placeholders = sum(
+            len(plan.embedding_widths) for plan in visual_plans
+        )
         audio_embeddings = sum(
             plan.total_embeddings for _, _, plan in audio_occurrences
         )
-        packing_cost = length + visual_embeddings - visual_placeholders
-        if packing_cost > self.max_sequence_length:
+        max_text_tokens = (
+            self.max_sequence_length - visual_embeddings + visual_placeholders
+        )
+        original_length, length = _truncate_message_log(
+            message_log,
+            max_text_tokens=max_text_tokens,
+            sample=sample,
+        )
+        image_token_id = _token_id(self.processor.tokenizer, "<image>")
+        remaining_visual_placeholders = sum(
+            int((message["token_ids"] == image_token_id).sum().item())
+            for message in message_log
+        )
+        if remaining_visual_placeholders != visual_placeholders:
             raise ValueError(
-                f"Nemotron Omni sample {sample.__key__!r} has expanded length "
-                f"{packing_cost}, above max_sequence_length="
-                f"{self.max_sequence_length}."
+                f"Nemotron Omni truncation removed visual placeholders from sample "
+                f"{sample.__key__!r}: expected {visual_placeholders}, found "
+                f"{remaining_visual_placeholders}; original text/audio length: "
+                f"{original_length}; max text/audio tokens: {max_text_tokens}."
             )
+        remaining_audio_embeddings = sum(
+            int((message["token_ids"] == sound_token_id).sum().item())
+            for message in message_log
+        )
+        if remaining_audio_embeddings != audio_embeddings:
+            raise ValueError(
+                f"Nemotron Omni truncation removed sound tokens from sample "
+                f"{sample.__key__!r}: expected {audio_embeddings}, found "
+                f"{remaining_audio_embeddings}; original text/audio length: "
+                f"{original_length}; max text/audio tokens: {max_text_tokens}."
+            )
+        packing_cost = length + visual_embeddings - visual_placeholders
         model_input_keys = (
             *(_VISUAL_MODEL_INPUT_KEYS if visual_placeholders else ()),
         ) + (*(_SOUND_MODEL_INPUT_KEYS if audio_occurrences else ()),)
@@ -500,7 +603,7 @@ class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
         cost_bucket = (
             0 if media_embeddings <= 256 else 1 if media_embeddings <= 2_048 else 2
         )
-        return EncodedSFTSample.derive_from(
+        return NemotronOmniEncodedSFTSample.derive_from(
             sample,
             message_log=message_log,
             length=length,
@@ -509,66 +612,92 @@ class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
             group_key=(self.fingerprint, model_input_keys, cost_bucket),
             sample_key=sample.__key__,
             pending_sample=sample,
+            visual_plans=visual_plans,
+            audio_plans=tuple(plan for _, _, plan in audio_occurrences),
         )
 
     def _process_audio(
         self,
         ref: MediaRef,
-    ) -> tuple[dict[str, PackedTensor], _AudioPlan]:
-        plan = self._plan_audio(ref)
-        source_samples, source_sampling_rate = _source_audio_samples(ref)
-        waveform = _native_waveform(
-            ref.value,
-            expected_samples=source_samples,
-            expected_sampling_rate=source_sampling_rate,
-        )
-        if len(waveform) != source_samples:
-            raise ValueError(
-                f"Nemotron audio payload has {len(waveform)} samples, but immutable "
-                f"metadata predicted {source_samples}."
+        plan: _AudioPlan,
+    ) -> dict[str, PackedTensor]:
+        feature_extractor = self.feature_extractor
+        if feature_extractor is None:
+            from transformers import ParakeetFeatureExtractor
+
+            feature_extractor = ParakeetFeatureExtractor(
+                feature_size=self.audio_num_mel_bins,
+                sampling_rate=self.target_sampling_rate,
+                hop_length=self.hop_length,
             )
-        target_samples = round(
-            source_samples * self.target_sampling_rate / source_sampling_rate
-        )
-        target_samples = max(
-            target_samples,
-            round(self.min_audio_duration_seconds * self.target_sampling_rate),
-        )
-        if source_sampling_rate != self.target_sampling_rate:
+        audio = _normalized_mono_audio(ref)
+        if plan.source_sampling_rate != self.target_sampling_rate:
             # Librosa is an optional audio dependency, so keep it off non-audio
             # import paths. ParakeetFeatureExtractor also requires this package.
             import librosa
 
-            waveform = torch.from_numpy(
+            audio = torch.from_numpy(
                 librosa.resample(
-                    waveform.numpy(),
-                    orig_sr=source_sampling_rate,
+                    audio.numpy(),
+                    orig_sr=plan.source_sampling_rate,
                     target_sr=self.target_sampling_rate,
                 )
             )
-        if len(waveform) < target_samples:
-            waveform = F.pad(waveform, (0, target_samples - len(waveform)))
-        elif len(waveform) > target_samples:
-            waveform = waveform[:target_samples]
-        planned_samples = sum(plan.clip_sample_counts)
-        if len(waveform) < planned_samples:
-            waveform = F.pad(waveform, (0, planned_samples - len(waveform)))
+        min_samples = round(
+            self.min_audio_duration_seconds * self.target_sampling_rate
+        )
+        if audio.shape[2] < min_samples:
+            audio = F.pad(audio, (0, min_samples - audio.shape[2]))
+        audio = audio.squeeze(1)
+        if audio.shape[1] < plan.audio_length:
+            audio = F.pad(audio, (0, plan.audio_length - audio.shape[1]))
+        elif audio.shape[1] > plan.audio_length:
+            audio = audio[:, : plan.audio_length]
 
+        audio_lengths = torch.tensor([plan.audio_length], dtype=torch.long)
         clip_width = round(self.audio_clip_duration_seconds * self.target_sampling_rate)
-        clips = list(torch.split(waveform, clip_width))
-        if tuple(len(clip) for clip in clips) != plan.clip_sample_counts:
+        if audio.shape[1] > clip_width:
+            clips = list(torch.split(audio, clip_width, dim=1))
+            if len(clips) != plan.num_clips:
+                raise ValueError(
+                    f"Nemotron audio plan expects {plan.num_clips} clips, got "
+                    f"{len(clips)} after resampling."
+                )
+            audio_lengths = torch.tensor(plan.samples_per_clip, dtype=torch.long)
+            clips[-1] = F.pad(clips[-1], (0, clip_width - clips[-1].shape[1]))
+            audio = torch.stack(clips).squeeze(1)
+
+        if audio.ndim != 2:
             raise ValueError(
-                "Nemotron audio clip sizes changed after payload processing: "
-                f"predicted {plan.clip_sample_counts}, got "
-                f"{tuple(len(clip) for clip in clips)}."
+                "Nemotron audio transform must produce [clips, samples], got "
+                f"{tuple(audio.shape)}."
+            )
+        if audio_lengths.sum().item() != plan.audio_length:
+            raise ValueError(
+                f"Nemotron audio plan expects {plan.audio_length} samples, got "
+                f"{audio_lengths.sum().item()}."
+            )
+        if audio.shape[0] != plan.num_clips:
+            raise ValueError(
+                f"Nemotron audio plan expects {plan.num_clips} clips, got "
+                f"{audio.shape[0]}."
+            )
+        if tuple(audio_lengths.tolist()) != plan.samples_per_clip:
+            raise ValueError(
+                "Nemotron audio samples per clip changed after resampling: "
+                f"expected {plan.samples_per_clip}, got "
+                f"{tuple(audio_lengths.tolist())}."
             )
 
         mel_features: list[torch.Tensor] = []
         valid_lengths: list[int] = []
         actual_embedding_counts: list[int] = []
-        for clip in clips:
+        for clip, sample_count in zip(audio, plan.samples_per_clip, strict=True):
+            # Bridge consumes mel tensors. Extract only the planned valid prefix;
+            # batch collation supplies the physical mel padding.
+            clip = clip[:sample_count]
             features = _feature_output(
-                self.feature_extractor(
+                feature_extractor(
                     clip,
                     sampling_rate=self.target_sampling_rate,
                     return_tensors="pt",
@@ -632,7 +761,7 @@ class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
                 torch.tensor(valid_lengths, dtype=torch.long),
                 dim_to_pack=0,
             ),
-        }, plan
+        }
 
     def postencode(self, sample: EncodedSFTSample) -> EncodedSFTSample:
         """Load selected Omni media and verify the predicted expanded width."""
@@ -641,11 +770,22 @@ class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
             raise ValueError(
                 f"Nemotron Omni sample {sample.sample_key!r} has no pending media."
             )
+        if not isinstance(sample, NemotronOmniEncodedSFTSample):
+            raise TypeError(
+                "Nemotron Omni post-encoding requires the audio plan saved during "
+                "pre-encoding."
+            )
         _, occurrences = _render_omni_messages(
             pending_sample,
             temporal_patch_size=self.temporal_patch_size,
             prompt_format=self.prompt_format,
             thinking_trace_format=self.thinking_trace_format,
+            relax_thinking_trace_check=self.relax_thinking_trace_check,
+            video_timestamps={
+                plan.media_index: plan.frame_timestamps
+                for plan in sample.visual_plans
+                if plan.modality == "video"
+            },
         )
         message_log = deepcopy(sample.message_log)
         inputs_by_message: defaultdict[int, defaultdict[str, list[PackedTensor]]] = (
@@ -655,29 +795,48 @@ class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
         visual_placeholders = 0
         visual_occurrences: list[tuple[int, tuple[int, ...]]] = []
         actual_audio_embeddings = 0
-        for message_index, ref in occurrences:
+        audio_plan_index = 0
+        visual_plans = {plan.media_index: plan for plan in sample.visual_plans}
+        for media_index, (_, ref) in enumerate(occurrences):
+            message_index = 0
             if ref.modality == "audio":
-                media_inputs, plan = self._process_audio(ref)
+                if audio_plan_index >= len(sample.audio_plans):
+                    raise ValueError(
+                        "Nemotron Omni has more audio occurrences than saved plans."
+                    )
+                plan = sample.audio_plans[audio_plan_index]
+                audio_plan_index += 1
+                media_inputs = self._process_audio(ref, plan)
                 actual_audio_embeddings += plan.total_embeddings
             else:
-                media_inputs, embeddings = self._process_media(ref)
-                actual_visual_embeddings += embeddings
-                _, placeholders = _predicted_visual_cost(
-                    ref,
-                    patch_dim=self.patch_dim,
-                    temporal_patch_size=self.temporal_patch_size,
-                )
-                visual_placeholders += placeholders
-                if embeddings % placeholders:
+                plan = visual_plans.get(media_index)
+                if plan is None:
                     raise ValueError(
-                        f"Nemotron {ref.modality} produced {embeddings} visual "
-                        f"features for {placeholders} placeholder rows."
+                        f"Nemotron Omni media {media_index} has no saved visual plan."
                     )
+                media_inputs, embeddings = self._process_media(
+                    ref,
+                    plan,
+                    pending_sample,
+                )
+                actual_visual_embeddings += embeddings
+                placeholders = len(plan.embedding_widths)
+                visual_placeholders += placeholders
                 visual_occurrences.append(
-                    (message_index, (embeddings // placeholders,) * placeholders)
+                    (message_index, plan.embedding_widths)
                 )
             for key, value in media_inputs.items():
                 inputs_by_message[message_index][key].append(value)
+
+        if audio_plan_index != len(sample.audio_plans):
+            raise ValueError(
+                f"Nemotron Omni used {audio_plan_index}/{len(sample.audio_plans)} "
+                "saved audio plans."
+            )
+        if set(visual_plans) != {
+            index for index, (_, ref) in enumerate(occurrences) if ref.modality != "audio"
+        }:
+            raise ValueError("Nemotron Omni did not use every saved visual plan.")
 
         sound_token_id = _token_id(self.processor.tokenizer, SOUND_PLACEHOLDER)
         actual_sound_placeholders = sum(
@@ -719,13 +878,20 @@ class NemotronOmniSFTProcessorAdapter(NemotronVisualSFTProcessorAdapter):
             sample,
             message_log=message_log,
             length=expanded_length,
+            packing_cost=sample.packing_cost,
+            loss_multiplier=sample.loss_multiplier,
+            group_key=sample.group_key,
+            sample_key=sample.sample_key,
             pending_sample=None,
         )
 
 
 @supports_model_families("nemotron")
-class NemotronOmniSFTTaskEncoder(NemotronSFTTaskEncoder):
-    """Run the split Nemotron Omni visual and sound encoding lifecycle."""
+class NemotronMultiModalTaskEncoder(GenericSFTTaskEncoder):
+    """Run the reference Nemotron image, video, and optional audio lifecycle."""
+
+    # Keep WebDataset payloads lazy until postencode selects the sample.
+    decoder = None
 
     def __init__(
         self,
@@ -738,22 +904,24 @@ class NemotronOmniSFTTaskEncoder(NemotronSFTTaskEncoder):
         temporal_patch_size: int = 2,
         prompt_format: str = "nemotron-h-5p5-reasoning",
         thinking_trace_format: str = "default",
+        relax_thinking_trace_check: bool = False,
         audio_subsampling_factor: int | None = None,
         audio_num_mel_bins: int = 128,
         audio_clip_duration_seconds: float = 60.0,
         min_audio_duration_seconds: float = 0.1,
         max_audio_duration_seconds: float = 1800.0,
     ) -> None:
-        if isinstance(adapter, NemotronOmniSFTProcessorAdapter):
+        if isinstance(adapter, NemotronMultiModalProcessorAdapter):
             omni_adapter = adapter
         elif isinstance(adapter, HFMultimodalSFTProcessorAdapter):
-            omni_adapter = NemotronOmniSFTProcessorAdapter(
+            omni_adapter = NemotronMultiModalProcessorAdapter(
                 processor=adapter.processor,
                 max_sequence_length=adapter.max_sequence_length,
                 patch_dim=patch_dim,
                 temporal_patch_size=temporal_patch_size,
                 prompt_format=prompt_format,
                 thinking_trace_format=thinking_trace_format,
+                relax_thinking_trace_check=relax_thinking_trace_check,
                 audio_subsampling_factor=audio_subsampling_factor,
                 audio_num_mel_bins=audio_num_mel_bins,
                 audio_clip_duration_seconds=audio_clip_duration_seconds,
@@ -765,7 +933,7 @@ class NemotronOmniSFTTaskEncoder(NemotronSFTTaskEncoder):
             )
         else:
             raise TypeError(
-                "Nemotron Omni SFT requires the Hugging Face or Nemotron Omni "
+                "Nemotron multimodal SFT requires the Hugging Face or Nemotron "
                 "processor adapter."
             )
         super().__init__(
@@ -773,16 +941,27 @@ class NemotronOmniSFTTaskEncoder(NemotronSFTTaskEncoder):
             cooker_functions=cooker_functions,
             packing_hooks=packing_hooks,
             include_source_ids=include_source_ids,
-            patch_dim=patch_dim,
-            temporal_patch_size=temporal_patch_size,
-            prompt_format=prompt_format,
-            thinking_trace_format=thinking_trace_format,
         )
+        self._multimodal_adapter = omni_adapter
+
+    @stateless(restore_seeds=True)
+    def preencode_sample(self, sample: CanonicalSFTSample) -> EncodedSFTSample:
+        return self._multimodal_adapter.preencode(sample)
+
+    @stateless(restore_seeds=True)
+    def postencode_sample(self, sample: EncodedSFTSample) -> EncodedSFTSample:
+        return self._multimodal_adapter.postencode(sample)
+
+    @stateless
+    def batch(self, samples: list[Any]) -> Any:
+        batch = super().batch(samples)
+        batch["loss_mask_mode"] = "precomputed"
+        return batch
 
 
 __all__ = [
-    "NemotronOmniSFTProcessorAdapter",
-    "NemotronOmniSFTTaskEncoder",
+    "NemotronMultiModalProcessorAdapter",
+    "NemotronMultiModalTaskEncoder",
     "SOUND_END",
     "SOUND_PLACEHOLDER",
     "SOUND_START",

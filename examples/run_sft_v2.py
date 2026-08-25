@@ -46,7 +46,10 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         "--config",
         type=str,
         default=os.path.join(
-            os.path.dirname(__file__), "configs", "sft_vlm_3B_energon_v2.yaml"
+            os.path.dirname(__file__),
+            "configs",
+            "sft_v2_tests",
+            "sft_vlm_3B_energon_v2.yaml",
         ),
     )
     return parser.parse_known_args()

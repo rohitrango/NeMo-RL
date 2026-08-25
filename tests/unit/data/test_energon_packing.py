@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from megatron.energon import FileStoreCachePool
 
 from nemo_rl.data.energon.config import EnergonLoaderConfig, EnergonPackingOptions
 from nemo_rl.data.energon.multimodal.packing.sft import (
@@ -428,3 +429,44 @@ def test_v2_loader_passes_registered_packing_buffer_to_energon(
     assert (
         task_encoder.select_samples_to_pack([_sample("s0", 4)])[0][0].sample_key == "s0"
     )
+    assert get_savable_loader.call_args.kwargs["cache_pool"] is None
+
+
+@patch("nemo_rl.data.energon.sft_dataloader.get_savable_loader")
+@patch("nemo_rl.data.energon.sft_dataloader.get_train_dataset")
+def test_loader_provides_raw_cache_pool_for_cache_requiring_cooker(
+    get_train_dataset: MagicMock, get_savable_loader: MagicMock
+) -> None:
+    get_train_dataset.return_value = MagicMock()
+    get_savable_loader.return_value = MagicMock()
+    processor = MagicMock()
+    processor.tokenizer = MagicMock()
+    data_config = {
+        "shuffle": False,
+        "energon": {
+            "model_family": "nemotron",
+            "num_workers": 0,
+            "cookers": [{"name": "nemotron_conversation"}],
+        },
+    }
+
+    build_energon_sft_loader(
+        data_config=data_config,
+        source={
+            "path": "/dataset",
+            "split": "train",
+            "virtual_epoch_length": 8,
+        },
+        processor=processor,
+        batch_size=1,
+        max_sequence_length=128,
+        split_role="train",
+        logical_rank=0,
+        logical_world_size=1,
+        placement_fingerprint="placement",
+    )
+
+    cache_pool = get_savable_loader.call_args.kwargs["cache_pool"]
+    assert isinstance(cache_pool, FileStoreCachePool)
+    assert cache_pool.method == "raw"
+    cache_pool.close()

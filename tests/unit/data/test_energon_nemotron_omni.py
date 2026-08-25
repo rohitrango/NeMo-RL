@@ -11,12 +11,12 @@ from nemo_rl.data.energon.multimodal.cookers.nemotron import (
 from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (
     HFMultimodalSFTProcessorAdapter,
 )
-from nemo_rl.data.energon.multimodal.task_encoders.nemotron_omni import (
+from nemo_rl.data.energon.multimodal.task_encoders.nemotron_multimodal import (
     SOUND_END,
     SOUND_PLACEHOLDER,
     SOUND_START,
-    NemotronOmniSFTProcessorAdapter,
-    NemotronOmniSFTTaskEncoder,
+    NemotronMultiModalProcessorAdapter,
+    NemotronMultiModalTaskEncoder,
 )
 from nemo_rl.data.energon.multimodal.types import (
     CanonicalSFTSample,
@@ -228,14 +228,14 @@ def test_loader_hf_adapter_builds_nemotron_omni_adapter() -> None:
         add_generation_prompt=True,
     )
 
-    encoder = NemotronOmniSFTTaskEncoder(
+    encoder = NemotronMultiModalTaskEncoder(
         adapter=hf_adapter,
         cooker_functions=[],
         packing_hooks=None,
         include_source_ids=False,
     )
 
-    assert isinstance(encoder.adapter, NemotronOmniSFTProcessorAdapter)
+    assert isinstance(encoder.adapter, NemotronMultiModalProcessorAdapter)
     assert encoder.adapter.processor is processor
     assert encoder.adapter.max_sequence_length == 4_096
     assert encoder.adapter.add_generation_prompt is True
@@ -271,20 +271,38 @@ def _encoder(
     processor,
     *,
     clip_duration_seconds=60.0,
-) -> NemotronOmniSFTTaskEncoder:
-    adapter = NemotronOmniSFTProcessorAdapter(
+    max_sequence_length=16_384,
+) -> NemotronMultiModalTaskEncoder:
+    adapter = NemotronMultiModalProcessorAdapter(
         processor=processor,
-        max_sequence_length=16_384,
+        max_sequence_length=max_sequence_length,
         patch_dim=16,
         temporal_patch_size=2,
         audio_clip_duration_seconds=clip_duration_seconds,
     )
-    return NemotronOmniSFTTaskEncoder(
+    return NemotronMultiModalTaskEncoder(
         adapter=adapter,
         cooker_functions=[],
         packing_hooks=None,
         include_source_ids=False,
     )
+
+
+def test_oversized_text_sample_is_truncated_to_sequence_length() -> None:
+    processor = NemotronH_Nano_Omni_Reasoning_V3Processor()
+    encoder = _encoder(processor, max_sequence_length=80)
+    sample = _sample("short question", [])
+    sample.messages[1]["content"] = "<think>reason</think>" + "a" * 200
+
+    preencoded = encoder.preencode_sample(sample)
+
+    assert preencoded.length == 80
+    assert preencoded.packing_cost == 80
+    assert sum(
+        len(message["token_ids"])
+        for message in preencoded.message_log
+        if message["role"] == "assistant"
+    ) > 0
 
 
 def test_audio_width_is_predicted_without_processing_payload() -> None:

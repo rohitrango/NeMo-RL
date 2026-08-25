@@ -146,6 +146,14 @@ COOKER_REGISTRY.register(
     version="1",
 )
 COOKER_REGISTRY.register(
+    "nemotron_conversation",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.cookers.nemotron:"
+        "cook_nemotron_conversation"
+    ),
+    version="1",
+)
+COOKER_REGISTRY.register(
     "nemotron_general_conversations_webdataset",
     import_path=(
         "nemo_rl.data.energon.multimodal.cookers.nemotron:"
@@ -158,6 +166,14 @@ COOKER_REGISTRY.register(
     import_path=(
         "nemo_rl.data.energon.multimodal.cookers.nemotron:"
         "cook_general_conversations_jsonl"
+    ),
+    version="1",
+)
+COOKER_REGISTRY.register(
+    "nemotron_general_conversations_jsonl_explicit_loss_v1",
+    import_path=(
+        "nemo_rl.data.energon.multimodal.cookers.nemotron:"
+        "cook_general_conversations_jsonl_explicit_loss_v1"
     ),
     version="1",
 )
@@ -226,18 +242,10 @@ TASK_ENCODER_REGISTRY.register(
     version="1",
 )
 TASK_ENCODER_REGISTRY.register(
-    "nemotron_visual_sft",
+    "nemotron_multimodal",
     import_path=(
-        "nemo_rl.data.energon.multimodal.task_encoders.nemotron_sft:"
-        "NemotronSFTTaskEncoder"
-    ),
-    version="1",
-)
-TASK_ENCODER_REGISTRY.register(
-    "nemotron_omni_sft",
-    import_path=(
-        "nemo_rl.data.energon.multimodal.task_encoders.nemotron_omni:"
-        "NemotronOmniSFTTaskEncoder"
+        "nemo_rl.data.energon.multimodal.task_encoders.nemotron_multimodal:"
+        "NemotronMultiModalTaskEncoder"
     ),
     version="1",
 )

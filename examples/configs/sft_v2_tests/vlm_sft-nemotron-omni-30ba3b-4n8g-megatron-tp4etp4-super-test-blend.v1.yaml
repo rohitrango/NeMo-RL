@@ -1,0 +1,50 @@
+defaults: sft_vlm_nemotron_omni_30B_energon_tp4etp4_v2.yaml
+
+sft:
+  max_num_epochs: 1
+  max_num_steps: 100
+
+policy:
+  max_total_sequence_length: 131072
+  tokenizer:
+    chat_template: default
+
+data:
+  energon:
+    model_family: nemotron
+    task_encoder:
+      packing: null
+    cookers:
+      - name: nemotron_conversation
+        has_subflavors:
+          cook: conversation
+      - name: nemotron_general_conversations_jsonl
+        has_subflavors:
+          cook: general_conversations_jsonl
+      - name: nemotron_general_conversations_webdataset
+        has_subflavors:
+          cook: general_conversations_webdataset
+      - name: nemotron_nano_openai_messages_jsonl
+        has_subflavors:
+          cook: openai_messages_jsonl
+  train:
+    path: /data/super-test-blend/cook_subset_v1/subset_container.yaml
+    split: train
+    virtual_epoch_length: 487
+  validation: null
+
+logger:
+  wandb_enabled: false
+  log_dir: logs/sft-nemotron-omni-30b-super-test-blend-energon-v2
+  wandb:
+    name: sft-nemotron-omni-30b-super-test-blend-energon-v2
+  tensorboard:
+    log_dir: tb_logs-sft-nemotron-omni-30b-super-test-blend-energon-v2
+  swanlab:
+    name: sft-nemotron-omni-30b-super-test-blend-energon-v2
+  mlflow:
+    run_name: sft-nemotron-omni-30b-super-test-blend-energon-v2
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 4

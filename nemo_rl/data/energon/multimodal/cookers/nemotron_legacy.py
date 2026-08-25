@@ -21,8 +21,21 @@ import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from megatron.energon import CrudeSample, basic_sample_keys, stateless
+from megatron.energon import (
+    CachePool,
+    CrudeSample,
+    FileStore,
+    SourceInfo,
+    cooker,
+    stateless,
+)
 
+from nemo_rl.data.energon.multimodal.cookers.nemotron import (
+    _aux_media,
+    _derived_media_metadata,
+    _primary_media,
+    _sample_keys_with_dataset,
+)
 from nemo_rl.data.energon.multimodal.model_families import supports_model_families
 from nemo_rl.data.energon.multimodal.types import (
     CanonicalSFTSample,
@@ -60,9 +73,9 @@ _OMCAT_TAG_PATTERN = re.compile(
     r"<(image|video|sound|video-sound|speech|speeches|audio|audios|images|videos)>"
 )
 _OMCAT_MEMBER_EXTENSIONS = {
-    "image": frozenset({"png", "jpeg", "jpg", "img"}),
-    "video": frozenset({"mp4"}),
-    "sound": frozenset({"wav", "flac", "mp3"}),
+    "image": ("png", "jpeg", "jpg", "img"),
+    "video": ("mp4",),
+    "sound": ("wav", "flac", "mp3"),
 }
 
 
@@ -83,8 +96,9 @@ def _canonical_sample(
     messages: list[dict[str, Any]],
     media: list[MediaRef] | None = None,
     offline_packed_messages: bool = False,
+    extra_sources: tuple[SourceInfo, ...] = (),
 ) -> CanonicalSFTSample:
-    sample_keys = basic_sample_keys(sample)
+    sample_keys = _sample_keys_with_dataset(sample, extra_sources)
     if offline_packed_messages:
         subflavors = dict(sample_keys.get("__subflavors__", {}) or {})
         subflavors["offline_packed_messages"] = True
@@ -202,7 +216,12 @@ def _raw_nano_messages(sample: CrudeSample) -> list[object]:
 
 @supports_model_families("nemotron")
 @stateless
-def cook_nano_openai_messages_jsonl(sample: CrudeSample) -> CanonicalSFTSample:
+@cooker(need_cache=True)
+def cook_nano_openai_messages_jsonl(
+    sample: CrudeSample,
+    cache: CachePool | None = None,
+    media_source: FileStore | None = None,
+) -> CanonicalSFTSample:
     """Normalize one Nano OpenAI-style text conversation."""
     messages = _normalize_nano_messages(_raw_nano_messages(sample))
     if any(message["role"] == "system" for message in messages[1:]):
@@ -227,8 +246,11 @@ def _split_nano_messages(raw_messages: list[object]) -> list[list[object]]:
 
 @supports_model_families("nemotron")
 @stateless
+@cooker(need_cache=True)
 def cook_nano_openai_messages_offline_packed_jsonl(
     sample: CrudeSample,
+    cache: CachePool | None = None,
+    media_source: FileStore | None = None,
 ) -> CanonicalSFTSample:
     """Normalize a Nano row that contains several pre-packed conversations."""
     messages = [
@@ -255,9 +277,14 @@ def _media_descriptor(entry: Any) -> tuple[Any, FrozenMediaMetadata]:
 
 def _media_parts(
     *,
+    sample: CrudeSample,
     payload: Mapping[str, Any],
     tag: str,
+    cache: CachePool | None,
+    media_source: FileStore | None,
+    media_sources: dict[str, FileStore],
     media: list[MediaRef],
+    source_info: list[SourceInfo],
 ) -> list[dict[str, Any]]:
     prefixes = ("vis_video", "vis_sound") if tag == "video-sound" else (tag,)
     parts: list[dict[str, Any]] = []
@@ -271,6 +298,26 @@ def _media_parts(
         modality = "audio" if modality in ("sound", "vis_sound") else modality
         for entry in matches:
             value, metadata = _media_descriptor(entry)
+            if isinstance(value, str):
+                value, store_metadata, source = _aux_media(
+                    sample,
+                    value,
+                    modality=modality,
+                    metadata=metadata,
+                    cache=cache,
+                    media_source=media_source,
+                    media_sources=media_sources,
+                    strip_matched_prefix=True,
+                    basename_missing_absolute=False,
+                    allow_local=False,
+                    derive_missing_metadata=True,
+                    missing_aux_source_is_error=True,
+                )
+                metadata = metadata or store_metadata
+                if source is not None:
+                    source_info.append(source)
+            elif not metadata:
+                metadata = _derived_media_metadata(modality, value)
             media_index = len(media)
             media.append(MediaRef(modality=modality, value=value, metadata=metadata))
             parts.append({"type": modality, "media_index": media_index})
@@ -312,20 +359,37 @@ def _legacy_message(
 
 @supports_model_families("nemotron")
 @stateless
-def cook_audio_conversation_jsonl(sample: CrudeSample) -> CanonicalSFTSample:
+@cooker(need_cache=True, need_primary=True)
+def cook_audio_conversation_jsonl(
+    sample: CrudeSample,
+    cache: CachePool | None = None,
+    primary: FileStore | None = None,
+    media_source: FileStore | None = None,
+    **media_sources: FileStore,
+) -> CanonicalSFTSample:
     """Cook the polylithic Nemotron audio-conversation source schema."""
     payload = _decode_payload(sample)
     raw_messages = payload.get("conversations")
     if not isinstance(raw_messages, list) or not raw_messages:
         raise ValueError("Audio conversations require a non-empty conversations list.")
     media: list[MediaRef] = []
+    source_info: list[SourceInfo] = []
     seen_tags: set[str] = set()
     messages = [
         _legacy_message(
             raw_message=message,
             tag_pattern=_AUDIO_TAG_PATTERN,
             normalize_tag={},
-            resolve_tag=lambda tag: _media_parts(payload=payload, tag=tag, media=media),
+            resolve_tag=lambda tag: _media_parts(
+                sample=sample,
+                payload=payload,
+                tag=tag,
+                cache=cache,
+                media_source=media_source,
+                media_sources=media_sources,
+                media=media,
+                source_info=source_info,
+            ),
             seen_tags=seen_tags,
         )
         for message in raw_messages
@@ -335,38 +399,44 @@ def cook_audio_conversation_jsonl(sample: CrudeSample) -> CanonicalSFTSample:
             raise ValueError(
                 f"Legacy media field {tag!r} is not used by a message tag."
             )
-    return _canonical_sample(sample, messages=messages, media=media)
+    return _canonical_sample(
+        sample,
+        messages=messages,
+        media=media,
+        extra_sources=tuple(source_info),
+    )
 
 
-def _omcat_member(sample: CrudeSample, tag: str) -> Any:
+def _omcat_member(sample: CrudeSample, tag: str) -> str:
     if tag == "video-sound":
         raise ValueError(
             "OMCAT video-sound has no defined member mapping in the pinned reference."
         )
     extensions = _OMCAT_MEMBER_EXTENSIONS[tag]
-    matches = [key for key in sample if key.lower() in extensions]
-    if len(matches) != 1:
-        raise ValueError(
-            f"OMCAT tag <{tag}> needs exactly one member with extension "
-            f"{sorted(extensions)!r}; found {matches!r}."
-        )
-    return sample[matches[0]]
+    for extension in extensions:
+        if extension in sample:
+            return extension
+    for member in sample:
+        if member.lower() in extensions:
+            return member
+    raise ValueError(
+        f"OMCAT tag <{tag}> needs a member with extension {list(extensions)!r}."
+    )
 
 
 @supports_model_families("nemotron")
 @stateless
+@cooker(need_cache=True, need_primary=True)
 def cook_omcat_legacy_conversation_monolithic(
     sample: CrudeSample,
+    cache: CachePool | None = None,
+    primary: FileStore | None = None,
 ) -> CanonicalSFTSample:
     """Cook the OMCAT monolithic extension-keyed source schema."""
     payload = _decode_payload(sample)
     for alias, canonical in _OMCAT_TAG_ALIASES.items():
         if alias not in payload:
             continue
-        if canonical in payload:
-            raise ValueError(
-                f"OMCAT fields {alias!r} and {canonical!r} cannot both be present."
-            )
         payload[canonical] = payload.pop(alias)
 
     raw_messages = payload.get("conversations")
@@ -378,7 +448,16 @@ def cook_omcat_legacy_conversation_monolithic(
     def resolve_tag(tag: str) -> list[dict[str, Any]]:
         media_index = len(media)
         modality = "audio" if tag == "sound" else tag
-        media.append(MediaRef(modality=modality, value=_omcat_member(sample, tag)))
+        member = _omcat_member(sample, tag)
+        value, metadata = _primary_media(
+            sample,
+            member,
+            modality=modality,
+            metadata=(),
+            cache=cache,
+            primary=primary,
+        )
+        media.append(MediaRef(modality=modality, value=value, metadata=metadata))
         return [{"type": modality, "media_index": media_index}]
 
     messages = [

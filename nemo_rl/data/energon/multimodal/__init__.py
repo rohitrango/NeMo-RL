@@ -27,14 +27,10 @@ _EXPORT_MODULES = {
     ),
     "MediaRef": "nemo_rl.data.energon.multimodal.types",
     "ModelFamily": "nemo_rl.data.energon.multimodal.model_families",
-    "NemotronSFTTaskEncoder": "nemo_rl.data.energon.multimodal.task_encoders",
-    "NemotronOmniSFTProcessorAdapter": (
+    "NemotronMultiModalProcessorAdapter": (
         "nemo_rl.data.energon.multimodal.task_encoders"
     ),
-    "NemotronOmniSFTTaskEncoder": ("nemo_rl.data.energon.multimodal.task_encoders"),
-    "NemotronVisualSFTProcessorAdapter": (
-        "nemo_rl.data.energon.multimodal.task_encoders"
-    ),
+    "NemotronMultiModalTaskEncoder": ("nemo_rl.data.energon.multimodal.task_encoders"),
     "PackedSFTSample": "nemo_rl.data.energon.multimodal.types",
     "QwenVLSFTTaskEncoder": "nemo_rl.data.energon.multimodal.task_encoders",
     "SFTProcessorAdapter": "nemo_rl.data.energon.multimodal.task_encoders",
@@ -46,6 +42,7 @@ _EXPORT_MODULES = {
     ),
     "cook_granary_english_jsonl": "nemo_rl.data.energon.multimodal.cookers",
     "cook_granary_english_webdataset": ("nemo_rl.data.energon.multimodal.cookers"),
+    "cook_nemotron_conversation": "nemo_rl.data.energon.multimodal.cookers",
     "cook_audio_conversation_jsonl": "nemo_rl.data.energon.multimodal.cookers",
     "cook_nano_openai_messages_jsonl": ("nemo_rl.data.energon.multimodal.cookers"),
     "cook_nano_openai_messages_offline_packed_jsonl": (

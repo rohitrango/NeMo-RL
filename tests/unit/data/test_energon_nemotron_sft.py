@@ -9,10 +9,12 @@ from PIL import Image
 from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (
     HFMultimodalSFTProcessorAdapter,
 )
-from nemo_rl.data.energon.multimodal.task_encoders.nemotron_sft import (
+from nemo_rl.data.energon.multimodal.task_encoders.nemotron_multimodal import (
+    NemotronMultiModalProcessorAdapter,
+    NemotronMultiModalTaskEncoder,
+)
+from nemo_rl.data.energon.multimodal.task_encoders.nemotron_visual import (
     COMPACT_IMAGE_PLACEHOLDER,
-    NemotronSFTTaskEncoder,
-    NemotronVisualSFTProcessorAdapter,
 )
 from nemo_rl.data.energon.multimodal.types import (
     CanonicalSFTSample,
@@ -68,6 +70,15 @@ class _FakeTokenizer:
 
 class _FakeVisualProcessor:
     model_input_names = ["pixel_values", "imgs_sizes", "num_frames"]
+    patch_size = 16
+    _downsample_factor = 2
+    min_num_patches = 1
+    max_num_patches = 4_096
+    max_model_len = 4_096
+
+    def _compute_target_patches(self, image, tokens_available):
+        assert tokens_available > 0
+        return image.width // self.patch_size, image.height // self.patch_size
 
 
 class NemotronH_Nano_Omni_Reasoning_V3Processor:
@@ -176,14 +187,14 @@ def _encoder(
     processor: NemotronH_Nano_Omni_Reasoning_V3Processor,
     *,
     temporal_patch_size: int = 2,
-) -> NemotronSFTTaskEncoder:
-    adapter = NemotronVisualSFTProcessorAdapter(
+) -> NemotronMultiModalTaskEncoder:
+    adapter = NemotronMultiModalProcessorAdapter(
         processor=processor,
         max_sequence_length=16_384,
         patch_dim=16,
         temporal_patch_size=temporal_patch_size,
     )
-    return NemotronSFTTaskEncoder(
+    return NemotronMultiModalTaskEncoder(
         adapter=adapter,
         cooker_functions=[],
         packing_hooks=None,
@@ -201,14 +212,14 @@ def test_loader_hf_adapter_builds_nemotron_visual_adapter() -> None:
         add_generation_prompt=True,
     )
 
-    encoder = NemotronSFTTaskEncoder(
+    encoder = NemotronMultiModalTaskEncoder(
         adapter=hf_adapter,
         cooker_functions=[],
         packing_hooks=None,
         include_source_ids=False,
     )
 
-    assert isinstance(encoder.adapter, NemotronVisualSFTProcessorAdapter)
+    assert isinstance(encoder.adapter, NemotronMultiModalProcessorAdapter)
     assert encoder.adapter.processor is processor
     assert encoder.adapter.max_sequence_length == 4_096
     assert encoder.adapter.add_generation_prompt is True
@@ -256,7 +267,48 @@ def test_assistant_thinking_trace_is_normalized_before_tokenization() -> None:
     )
 
 
-def test_missing_prepared_image_metadata_stops_before_processing() -> None:
+def test_preformatted_sample_skips_thinking_check_and_chat_template() -> None:
+    processor = NemotronH_Nano_Omni_Reasoning_V3Processor()
+    encoder = _encoder(processor)
+    sample = _sample("<|im_start|>assistant\n<think>\n", [])
+    sample.messages[1]["content"] = "reasoning</think>answer<|im_end|>\n"
+    sample.__subflavors__["skip_chat_template"] = True
+
+    preencoded = encoder.preencode_sample(sample)
+
+    expected = processor.tokenizer(
+        "<|im_start|>assistant\n<think>\nreasoning</think>answer<|im_end|>\n"
+    )["input_ids"][0]
+    actual = torch.cat(
+        [message["token_ids"] for message in preencoded.message_log]
+    )
+    assert torch.equal(actual, expected)
+
+
+def test_invalid_thinking_trace_logs_complete_conversation(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    processor = NemotronH_Nano_Omni_Reasoning_V3Processor()
+    encoder = _encoder(processor)
+    sample = _sample("question from the failing sample", [])
+    sample.messages[1]["content"] = "<think>first</think><think>second</think>answer"
+
+    with caplog.at_level(
+        "ERROR",
+        logger="nemo_rl.data.energon.multimodal.task_encoders.nemotron_visual",
+    ):
+        with pytest.raises(ValueError, match="Sample key: 'nemotron-0'"):
+            encoder.preencode_sample(sample)
+
+    assert "[NEMOTRON_THINKING_TRACE_DIAG]" in caplog.text
+    assert "assistant_message_index=1" in caplog.text
+    assert "think_start_count=2" in caplog.text
+    assert "think_end_count=2" in caplog.text
+    assert '"content": "question from the failing sample"' in caplog.text
+    assert '"content": "<think>first</think><think>second</think>answer"' in caplog.text
+
+
+def test_raw_image_dimensions_predict_processed_size_without_loading_media() -> None:
     processor = NemotronH_Nano_Omni_Reasoning_V3Processor()
     encoder = _encoder(processor)
     image = _FakeMedia("image-a", height=64, width=32, marker=1.0)
@@ -271,8 +323,9 @@ def test_missing_prepared_image_metadata_stops_before_processing() -> None:
         ],
     )
 
-    with pytest.raises(ValueError, match="processed_height"):
-        encoder.preencode_sample(sample)
+    preencoded = encoder.preencode_sample(sample)
+
+    assert preencoded.packing_cost == preencoded.length + 1
     assert processor.visual_calls == []
 
 
@@ -307,7 +360,7 @@ def test_wds_image_bytes_are_decoded_only_after_selection() -> None:
 def test_wds_video_bytes_are_decoded_only_after_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from nemo_rl.data.energon.multimodal.task_encoders import nemotron_sft
+    from nemo_rl.data.energon.multimodal.task_encoders import nemotron_visual
 
     processor = NemotronH_Nano_Omni_Reasoning_V3Processor()
     encoder = _encoder(processor)
@@ -320,7 +373,7 @@ def test_wds_video_bytes_are_decoded_only_after_selection(
     )
     decode_calls: list[tuple[object, str]] = []
     monkeypatch.setattr(
-        nemotron_sft,
+        nemotron_visual,
         "decode_selected_av_bytes",
         lambda value, *, modality: decode_calls.append((value, modality)) or decoded,
     )

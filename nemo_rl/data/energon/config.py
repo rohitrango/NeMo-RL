@@ -60,6 +60,10 @@ class EnergonTaskEncoderOptions(BaseModel, extra="forbid"):
         "nemotron-h-5p5-reasoning"
     )
     thinking_trace_format: Literal["default", "ultra"] = "default"
+    relax_thinking_trace_check: bool = Field(
+        default=False,
+        description="Skip validation and normalization of assistant thinking tags.",
+    )
     audio_subsampling_factor: Annotated[int, Field(ge=1)] | None = None
     audio_num_mel_bins: Annotated[int, Field(ge=1)] = 128
     audio_clip_duration_seconds: Annotated[float, Field(gt=0)] = 60.0

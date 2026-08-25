@@ -17,6 +17,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import traceback
+import urllib.parse
 from collections.abc import Callable
 from typing import Any, Iterator, Literal, Mapping, Protocol, cast
 
@@ -24,11 +26,12 @@ import torch
 from megatron.energon import (
     Cooker,
     CrudeSample,
+    FileStoreCachePool,
+    SourceInfo,
     WorkerConfig,
     get_savable_loader,
     get_train_dataset,
     get_val_dataset,
-    reraise_exception,
 )
 
 from nemo_rl.data.energon.config import EnergonLoaderConfig, EnergonSourceConfig
@@ -49,6 +52,48 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 _V1_STATE_FORMAT_VERSION = 1
 _V2_STATE_FORMAT_VERSION = 2
+_FIRST_SAMPLE_ASSERTION = False
+
+
+def compact_sample_error_handler(
+    exception: Exception,
+    sample: Any | list[Any],
+    sources: list[SourceInfo] | None = None,
+) -> None:
+    """Log a sample-processing error and let Energon request another sample."""
+    global _FIRST_SAMPLE_ASSERTION
+
+    if isinstance(exception, AssertionError):
+        if sources is None:
+            print(f"Assertion error in sample {str(sample)[:100]}: {exception}")
+            return
+
+        data = [
+            {
+                "dataset_path": str(source.dataset_path),
+                "index": source.index,
+                "shard_name": source.shard_name,
+                "file_names": list(source.file_names),
+            }
+            for source in sources
+        ]
+        url = (
+            "vscode://nvidia.energon-sample-viewer/open?data="
+            f"{urllib.parse.quote(json.dumps(data))}"
+        )
+        print(f"Assertion error: {exception}")
+        print(f"(Ctrl+)Click to view sample in energon viewer: {url}")
+        if _FIRST_SAMPLE_ASSERTION:
+            print(
+                "If not installed yet, install energon sample viewer from "
+                "https://gitlab-master.nvidia.com/lvoegtle/"
+                "vscode-energon-sample-viewer"
+            )
+            _FIRST_SAMPLE_ASSERTION = False
+        return
+
+    print("Ignoring error processing sample:")
+    traceback.print_exc()
 
 
 class SFTDataLoader(Protocol):
@@ -147,20 +192,6 @@ def _loader_config(value: Any) -> EnergonLoaderConfig:
             raise ValueError(
                 f"Task encoder {config.task_encoder.name!r} has no configurable "
                 "options."
-            )
-    elif config.task_encoder.name == "nemotron_visual_sft":
-        audio_options = {
-            "audio_subsampling_factor",
-            "audio_num_mel_bins",
-            "audio_clip_duration_seconds",
-            "min_audio_duration_seconds",
-            "max_audio_duration_seconds",
-        }
-        invalid_options = configured_encoder_options & audio_options
-        if invalid_options:
-            raise ValueError(
-                "Nemotron visual task encoder does not use audio options: "
-                f"{sorted(invalid_options)!r}."
             )
     if not config.cookers:
         raise ValueError("At least one Energon cooker must be configured.")
@@ -307,7 +338,8 @@ def _worker_config(
         world_size=logical_world_size,
         num_workers=config.num_workers,
         seed_offset=config.seed_offset,
-        global_error_handler=reraise_exception,
+        global_error_handler=compact_sample_error_handler,
+        restore_error_handler=compact_sample_error_handler,
     )
 
 
@@ -331,16 +363,7 @@ def _task_encoder(
         Any, TASK_ENCODER_REGISTRY.resolve(loader_config.task_encoder.name)
     )
     encoder_options: dict[str, Any] = {}
-    if loader_config.task_encoder.name == "nemotron_visual_sft":
-        encoder_options = loader_config.task_encoder.options.model_dump(
-            include={
-                "patch_dim",
-                "temporal_patch_size",
-                "prompt_format",
-                "thinking_trace_format",
-            }
-        )
-    elif loader_config.task_encoder.name == "nemotron_omni_sft":
+    if loader_config.task_encoder.name == "nemotron_multimodal":
         encoder_options = loader_config.task_encoder.options.model_dump()
     packing_config = loader_config.task_encoder.packing
     packing_hooks = None
@@ -459,8 +482,14 @@ def _build_energon_sft_loader(
             task_encoder=task_encoder,
         )
 
+    cache_pool = (
+        FileStoreCachePool(method="raw")
+        if any(cooker.need_cache for cooker in task_encoder.cookers)
+        else None
+    )
     loader = get_savable_loader(
         dataset,
+        cache_pool=cache_pool,
         checkpoint_every_sec=loader_config.checkpoint_every_sec,
         prefetch_factor=loader_config.prefetch_factor,
         watchdog_timeout_seconds=loader_config.watchdog_timeout_seconds,

@@ -13,7 +13,9 @@
 # limitations under the License.
 
 from io import BytesIO
-from typing import Any, Literal
+from typing import Any, Literal, cast
+
+import torch
 
 
 def decode_selected_av_bytes(
@@ -39,4 +41,37 @@ def decode_selected_av_bytes(
     return clips[0]
 
 
-__all__ = ["decode_selected_av_bytes"]
+def materialize_media_value(
+    value: Any,
+    *,
+    modality: str,
+    sample: Any = None,
+) -> Any:
+    """Resolve one Energon lazy value and decode AV payloads for a processor."""
+    payload = value.get(sample) if callable(getattr(value, "get", None)) else value
+    if isinstance(payload, tuple) and len(payload) == 1:
+        payload = payload[0]
+    if modality == "image":
+        return payload
+    if modality not in {"audio", "video"}:
+        raise ValueError(f"Unsupported media modality {modality!r}.")
+    if isinstance(payload, (bytes, bytearray, memoryview)):
+        payload = decode_selected_av_bytes(
+            payload,
+            modality=cast(Literal["audio", "video"], modality),
+        )
+    elif modality == "video" and callable(getattr(payload, "get_video", None)):
+        clips = payload.get_video().video_clips
+        if len(clips) != 1:
+            raise ValueError(f"Selected video must decode to one clip; got {len(clips)}.")
+        payload = clips[0]
+    elif modality == "audio" and callable(getattr(payload, "get_audio", None)):
+        payload = payload.get_audio().audio_clips
+    if modality == "audio" and isinstance(payload, (tuple, list)):
+        if not payload:
+            raise ValueError("Selected audio must decode to at least one clip.")
+        payload = torch.cat([torch.as_tensor(clip) for clip in payload], dim=-1)
+    return payload
+
+
+__all__ = ["decode_selected_av_bytes", "materialize_media_value"]

@@ -13,8 +13,10 @@
 # limitations under the License.
 
 from dataclasses import FrozenInstanceError
+from types import SimpleNamespace
 
 import pytest
+from megatron.energon import Cooker
 
 from nemo_rl.data.energon.multimodal.cookers.generic import cook_conversation
 from nemo_rl.data.energon.multimodal.cookers.nemotron import (
@@ -23,6 +25,7 @@ from nemo_rl.data.energon.multimodal.cookers.nemotron import (
     cook_general_conversations_webdataset,
     cook_granary_english_jsonl,
     cook_granary_english_webdataset,
+    cook_nemotron_conversation,
 )
 from nemo_rl.data.energon.multimodal.model_families import (
     get_supported_model_families,
@@ -34,9 +37,58 @@ def _sample(payload, **members):
         "__key__": "sample-0",
         "__restore_key__": ("sample-0",),
         "__subflavors__": {},
+        "__sources__": (),
         "json": payload,
         **members,
     }
+
+
+class _FakeMediaStore:
+    def get_path(self):
+        return "/data/media"
+
+    def get_media_metadata(self, path):
+        return SimpleNamespace(width=80, height=40)
+
+
+class _FakeCache:
+    def get_lazy(self, store, path):
+        return ("lazy", store.get_path(), path)
+
+
+def test_nemotron_conversation_cooker_loads_fragment_media_from_aux_store():
+    sample = _sample(
+        {
+            "conversation": [
+                {
+                    "sender": "user",
+                    "fragments": [
+                        {"t": "image", "value": "data/example.png"},
+                        {"t": "text", "value": "Describe it."},
+                    ],
+                },
+                {
+                    "sender": "assistant",
+                    "fragments": [{"t": "text", "value": "A diagram."}],
+                },
+            ]
+        }
+    )
+
+    cooked = cook_nemotron_conversation(
+        sample,
+        cache=_FakeCache(),
+        media_source=_FakeMediaStore(),
+    )
+
+    assert cooked.media[0].value == ("lazy", "/data/media", "data/example.png")
+    assert cooked.media[0].metadata == (("height", 40), ("width", 80))
+    assert cooked.messages[0]["content"] == [
+        {"type": "image", "media_index": 0},
+        {"type": "text", "text": "Describe it."},
+    ]
+    assert cooked.__sources__[-1].index == "data/example.png"
+    assert Cooker(cook_nemotron_conversation).need_cache
 
 
 def test_generic_cooker_freezes_explicit_media_metadata_without_opening_media():
@@ -157,6 +209,38 @@ def test_general_jsonl_cooker_keeps_lazy_paths_and_rejects_source_errors():
         )
 
 
+def test_general_cookers_receive_aux_media_and_apply_source_loss_mask():
+    sample = _sample(
+        {
+            "image": "example.png",
+            "conversations": [
+                {"from": "human", "value": "<image> first"},
+                {"from": "gpt", "value": "draft"},
+                {"from": "human", "value": "revise"},
+                {"from": "gpt", "value": "final"},
+            ],
+        }
+    )
+    sample["__subflavors__"] = {"train_only_on_last_assistant_turn": True}
+
+    cooked = cook_general_conversations_jsonl(
+        sample,
+        cache=_FakeCache(),
+        primary=_FakeMediaStore(),
+        media_source=_FakeMediaStore(),
+    )
+
+    assert cooked.media[0].value == ("lazy", "/data/media", "example.png")
+    assert [message["train_on_message"] for message in cooked.messages] == [
+        False,
+        False,
+        False,
+        True,
+    ]
+    assert Cooker(cook_general_conversations_jsonl).need_cache
+    assert Cooker(cook_general_conversations_jsonl).need_primary
+
+
 @pytest.mark.parametrize(
     ("cooker", "payload", "members", "expected_value"),
     [
@@ -224,5 +308,6 @@ def test_new_cookers_declare_nemotron_support():
         cook_general_conversations_webdataset,
         cook_granary_english_jsonl,
         cook_granary_english_webdataset,
+        cook_nemotron_conversation,
     ):
         assert get_supported_model_families(cooker) == frozenset({"nemotron"})

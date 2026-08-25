@@ -35,6 +35,9 @@ from nemo_rl.data.energon.multimodal.task_encoders.base import (
     BaseSFTTaskEncoder,
     SFTCooker,
 )
+from nemo_rl.data.energon.multimodal.task_encoders.media import (
+    materialize_media_value,
+)
 from nemo_rl.data.energon.multimodal.types import (
     CanonicalSFTSample,
     EncodedSFTSample,
@@ -104,7 +107,11 @@ def _normalize_messages(sample: CanonicalSFTSample) -> list[dict[str, Any]]:
                         f"to {media_ref.modality!r} media."
                     )
                 part["type"] = media_ref.modality
-                part[media_ref.modality] = media_ref.value
+                part[media_ref.modality] = materialize_media_value(
+                    media_ref.value,
+                    modality=media_ref.modality,
+                    sample=sample,
+                )
                 used_media.append(media_index)
             normalized_content.append(part)
         message["content"] = normalized_content

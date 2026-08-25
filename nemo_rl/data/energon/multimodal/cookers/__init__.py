@@ -24,11 +24,17 @@ _EXPORT_MODULES = {
     "cook_general_conversations_jsonl": (
         "nemo_rl.data.energon.multimodal.cookers.nemotron"
     ),
+    "cook_general_conversations_jsonl_explicit_loss_v1": (
+        "nemo_rl.data.energon.multimodal.cookers.nemotron"
+    ),
     "cook_general_conversations_webdataset": (
         "nemo_rl.data.energon.multimodal.cookers.nemotron"
     ),
     "cook_granary_english_jsonl": ("nemo_rl.data.energon.multimodal.cookers.nemotron"),
     "cook_granary_english_webdataset": (
+        "nemo_rl.data.energon.multimodal.cookers.nemotron"
+    ),
+    "cook_nemotron_conversation": (
         "nemo_rl.data.energon.multimodal.cookers.nemotron"
     ),
     "cook_nano_openai_messages_jsonl": (

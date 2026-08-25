@@ -16,8 +16,6 @@ data:
       - name: nemotron_general_conversations_webdataset
         options: {}
     task_encoder:
-      name: nemotron_omni_sft
-      options: {}
       packing:
         name: first_fit_decreasing
         buffer_size: 4
