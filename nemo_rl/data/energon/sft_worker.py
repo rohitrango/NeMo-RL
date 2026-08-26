@@ -83,15 +83,22 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         # multiple to CP, so a mismatch otherwise surfaces as a ValueError deep in
         # the first forward pass instead of here, where the fix is obvious.
         cp_size = parallel_state.get_context_parallel_world_size()
-        packing = (
-            ((data_config.get("energon") or {}).get("task_encoder") or {}).get(
-                "packing"
-            )
-            or {}
+        # data_config["energon"] is a parsed EnergonLoaderConfig here but a plain
+        # dict on other call paths, so walk it without assuming either shape.
+        def _field(obj: Any, key: str) -> Any:
+            if obj is None:
+                return None
+            if isinstance(obj, Mapping):
+                return obj.get(key)
+            return getattr(obj, key, None)
+
+        pad_multiple = _field(
+            _field(
+                _field(_field(data_config, "energon"), "task_encoder"), "packing"
+            ),
+            "options",
         )
-        pad_multiple = (packing.get("options") or {}).get(
-            "sequence_length_pad_multiple"
-        )
+        pad_multiple = _field(pad_multiple, "sequence_length_pad_multiple")
         if cp_size > 1 and pad_multiple is not None:
             if pad_multiple % (2 * cp_size):
                 raise ValueError(
