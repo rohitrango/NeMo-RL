@@ -21,8 +21,12 @@ data:
     watchdog_timeout_seconds: 600
     model_family: nemotron
     task_encoder:
+      options:
+        # The blend carries >10min youtube clips; the reference prod run passes
+        # --allow-large-videos, so without this every one of them is dropped.
+        allow_large_videos: true
       # packing: null
-      packing: 
+      packing:
         name: greedy_knapsack
         buffer_size: 128
         options:

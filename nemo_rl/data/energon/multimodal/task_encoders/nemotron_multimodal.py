@@ -591,22 +591,38 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
         max_text_tokens = (
             self.packing_sequence_length - visual_embeddings + visual_placeholders
         )
+        image_token_id = _token_id(self.processor.tokenizer, "<image>")
+        image_tokens_before_truncation = sum(
+            int((message["token_ids"] == image_token_id).sum().item())
+            for message in message_log
+        )
+        # Separate the two ways the placeholder count can disagree with the plan.
+        # Conflating them blames truncation for samples that were never truncated.
+        if image_tokens_before_truncation != visual_placeholders:
+            raise ValueError(
+                f"Nemotron Omni sample {sample.__key__!r} tokenizes to "
+                f"{image_tokens_before_truncation} image tokens but pre-encoding "
+                f"planned {visual_placeholders} from {len(visual_plans)} visual "
+                "media items. The conversation text most likely contains a literal "
+                "'<image>' substring that is not backed by a media entry; the "
+                "tokenizer maps it to the image token."
+            )
         original_length, length = _truncate_message_log(
             message_log,
             max_text_tokens=max_text_tokens,
             sample=sample,
         )
-        image_token_id = _token_id(self.processor.tokenizer, "<image>")
         remaining_visual_placeholders = sum(
             int((message["token_ids"] == image_token_id).sum().item())
             for message in message_log
         )
-        if remaining_visual_placeholders != visual_placeholders:
+        if remaining_visual_placeholders != image_tokens_before_truncation:
             raise ValueError(
                 f"Nemotron Omni truncation removed visual placeholders from sample "
-                f"{sample.__key__!r}: expected {visual_placeholders}, found "
-                f"{remaining_visual_placeholders}; original text/audio length: "
-                f"{original_length}; max text/audio tokens: {max_text_tokens}."
+                f"{sample.__key__!r}: expected {image_tokens_before_truncation}, "
+                f"found {remaining_visual_placeholders}; original text/audio "
+                f"length: {original_length}; max text/audio tokens: "
+                f"{max_text_tokens}."
             )
         remaining_audio_embeddings = sum(
             int((message["token_ids"] == sound_token_id).sum().item())

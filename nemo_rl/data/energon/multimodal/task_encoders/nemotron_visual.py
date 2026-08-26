@@ -1084,22 +1084,37 @@ class _NemotronVisualProcessorAdapter:
         max_text_tokens = (
             self.packing_sequence_length - visual_embeddings + compact_placeholders
         )
+        image_token_id = _token_id(self.processor.tokenizer, "<image>")
+        image_tokens_before_truncation = sum(
+            int((message["token_ids"] == image_token_id).sum().item())
+            for message in message_log
+        )
+        # Separate the two ways the placeholder count can disagree with the plan.
+        # Conflating them blames truncation for samples that were never truncated.
+        if image_tokens_before_truncation != compact_placeholders:
+            raise ValueError(
+                f"Nemotron sample {sample.__key__!r} tokenizes to "
+                f"{image_tokens_before_truncation} image tokens but pre-encoding "
+                f"planned {compact_placeholders} from {len(visual_plans)} visual "
+                "media items. The conversation text most likely contains a literal "
+                "'<image>' substring that is not backed by a media entry; the "
+                "tokenizer maps it to the image token."
+            )
         original_length, length = _truncate_message_log(
             message_log,
             max_text_tokens=max_text_tokens,
             sample=sample,
         )
-        image_token_id = _token_id(self.processor.tokenizer, "<image>")
         remaining_placeholders = sum(
             int((message["token_ids"] == image_token_id).sum().item())
             for message in message_log
         )
-        if remaining_placeholders != compact_placeholders:
+        if remaining_placeholders != image_tokens_before_truncation:
             raise ValueError(
                 f"Nemotron truncation removed visual placeholders from sample "
-                f"{sample.__key__!r}: expected {compact_placeholders}, found "
-                f"{remaining_placeholders}; original text length: {original_length}; "
-                f"max text tokens: {max_text_tokens}."
+                f"{sample.__key__!r}: expected {image_tokens_before_truncation}, "
+                f"found {remaining_placeholders}; original text length: "
+                f"{original_length}; max text tokens: {max_text_tokens}."
             )
         packing_cost = length + visual_embeddings - compact_placeholders
         cost_bucket = (
