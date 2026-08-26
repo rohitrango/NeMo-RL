@@ -5,15 +5,29 @@ sft:
   max_num_steps: 100
 
 policy:
-  max_total_sequence_length: 131072
+  train_global_batch_size: 128
+  max_total_sequence_length: 524288
+  megatron_cfg:
+    context_parallel_size: 4
+    sequence_parallel: true
+  sequence_packing:
+    enabled: true
+    fuse_loss: true
   tokenizer:
     chat_template: default
 
 data:
   energon:
+    watchdog_timeout_seconds: 600
     model_family: nemotron
     task_encoder:
-      packing: null
+      # packing: null
+      packing: 
+        name: greedy_knapsack
+        buffer_size: 128
+        options:
+          max_sequence_length: ${policy.max_total_sequence_length}
+          sequence_length_pad_multiple: 1
     cookers:
       - name: nemotron_conversation
         has_subflavors:

@@ -526,7 +526,7 @@ def cook_nemotron_conversation(
                 strip_matched_prefix=True,
                 basename_missing_absolute=False,
                 allow_local=False,
-                derive_missing_metadata=False,
+                derive_missing_metadata=True,
                 missing_aux_source_is_error=True,
             )
             metadata = _merge_media_metadata(

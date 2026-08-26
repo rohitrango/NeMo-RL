@@ -1,0 +1,71 @@
+# grpo_qwen4b_sc.yaml, with the agentic loop moved out of the NeMo-Gym agent
+# servers and into the NemoGym actor.
+#
+# Launch with:
+#   uv run examples/run_grpo_single_controller.py \
+#     --config examples/nemo_gym/grpo_qwen4b_sc_central_agent.yaml
+#
+# RolloutManager selects AsyncNemoGymRolloutImplWithAgent, the actor runs the
+# turn loop itself, and no `*_simple_agent` server process is started — their
+# config blocks become an internal registry instead. The verify result is
+# unchanged, so postprocessing, metrics, and reward penalties behave identically
+# to the base config. Implementation: nemo_rl/environments/central_agent_helpers/.
+defaults: grpo_qwen4b_sc.yaml
+
+env:
+  nemo_gym:
+    central_agent:
+      enabled: true
+      rollout_tree:
+        # linear = one branch, append-only, no compaction. Compacting trees need
+        # per-token train masks first; see the follow-up note in the design doc.
+        type: linear
+      tool_calls:
+        # serial: run every call of a turn in the model's original order.
+        # parallel: keep one queue per rollout that spans turns and return as
+        #   soon as `finished >= min(min_returns, calls this turn)`. Parallel can
+        #   leave a function_call unanswered in the next prompt, which the chat
+        #   template may reject — confirm before switching.
+        mode: serial
+        min_returns: 1
+      steering_message:
+        # true POSTs {"latest_model_output": [...], "step": n} to url_path on the
+        # agent's own resources server and appends the returned "messages".
+        # No resources server ships that endpoint yet, so this stays off.
+        enabled: false
+        url_path: /steering
+      termination:
+        max_turns: 20
+        max_malformed_tool_calls: null   # Stop after this many cumulative malformed tool calls; null disables.
+        stop_on_no_tool_calls: true    # Stop on an assistant message with no tool calls (and no steering).
+        stop_on_incomplete_details: true   # Stop when the model response is length-truncated.
+
+    # Any responses_api_agents block may carry its own `central_agent:` key,
+    # which is merged over the config above for that agent's rollouts.
+    #
+    # workplace_assistant is the one env in config_paths whose bundled Gym
+    # config caps the agent loop: `max_steps: 6` in
+    # resources_servers/workplace_assistant/configs/workplace_assistant.yaml.
+    # simple_agent counts a step per model call and breaks once
+    # `step >= max_steps` (after that turn's tools run), which is the same point
+    # TerminationManager stops at for `turns >= max_turns` — so 6 here
+    # reproduces the baseline trajectory length. Without it these rollouts
+    # inherit the block above and the verifier scores a different-length
+    # trajectory than the per-agent-server baseline does.
+    workplace_assistant_simple_agent:
+      responses_api_agents:
+        simple_agent:
+          central_agent:
+            termination:
+              max_turns: 6
+
+logger:
+  wandb:
+    name: "grpo-qwen4b-sc-central-agent"
+  swanlab:
+    name: "grpo-qwen4b-sc-central-agent"
+  mlflow:
+    run_name: "grpo-qwen4b-sc-central-agent"
+
+checkpointing:
+  checkpoint_dir: "results/grpo-qwen4b-sc-central-agent"

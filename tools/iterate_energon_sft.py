@@ -48,14 +48,36 @@ def _value_summary(value: Any) -> dict[str, Any]:
             "type": "tensor",
             "shape": list(value.shape),
             "dtype": str(value.dtype),
+            "device": str(value.device),
+            "numel": value.numel(),
         }
     if isinstance(value, PackedTensor):
-        tensors = [tensor for tensor in value.tensors if tensor is not None]
+        segments = [
+            (
+                {"index": index, "type": "none"}
+                if tensor is None
+                else {
+                    "index": index,
+                    "type": "tensor",
+                    "shape": list(tensor.shape),
+                    "dtype": str(tensor.dtype),
+                    "device": str(tensor.device),
+                    "numel": tensor.numel(),
+                }
+            )
+            for index, tensor in enumerate(value.tensors)
+        ]
         return {
             "type": "packed_tensor",
-            "rows": len(value),
-            "tensor_shapes": [list(tensor.shape) for tensor in tensors],
-            "tensor_dtypes": sorted({str(tensor.dtype) for tensor in tensors}),
+            "logical_rows": len(value),
+            "physical_segments": len(value.tensors),
+            "logical_segment_counts_by_row": value.logical_segment_counts_by_row(),
+            "config": {
+                "dim_to_pack": value.dim_to_pack,
+                "pad_to_max_shape": value.pad_to_max_shape,
+                "deduplication_enabled": value.deduplication_enabled,
+            },
+            "segments": segments,
         }
     if isinstance(value, Mapping):
         return {
@@ -183,6 +205,77 @@ def _loss_token_spans(
     return samples
 
 
+def _decoded_message_logs(
+    batch: Mapping[str, Any], tokenizer: Any
+) -> list[dict[str, Any]]:
+    """Describe each encoded conversation, including masked prompt turns."""
+    message_logs = batch.get("message_log")
+    if message_logs is None:
+        message_logs = batch.get("packed_message_log")
+    if not isinstance(message_logs, Sequence) or isinstance(
+        message_logs, (str, bytes, bytearray)
+    ):
+        return []
+
+    decoded_logs: list[dict[str, Any]] = []
+    for row_index, row in enumerate(message_logs):
+        conversations = row if "packed_message_log" in batch else [row]
+        for conversation_index, conversation in enumerate(conversations):
+            if not isinstance(conversation, Sequence):
+                continue
+            messages: list[dict[str, Any]] = []
+            sequence_token_ids: list[int] = []
+            for message_index, message in enumerate(conversation):
+                if not isinstance(message, Mapping):
+                    continue
+                token_ids = message.get("token_ids")
+                message_token_ids = (
+                    token_ids.detach().cpu().tolist()
+                    if isinstance(token_ids, torch.Tensor) and token_ids.ndim == 1
+                    else []
+                )
+                sequence_token_ids.extend(message_token_ids)
+                field_summaries = {
+                    str(key): _value_summary(value)
+                    for key, value in message.items()
+                    if key not in {"content", "token_ids", "token_loss_mask"}
+                }
+                packed_tensor_fields = sorted(
+                    str(key)
+                    for key, value in message.items()
+                    if isinstance(value, PackedTensor)
+                )
+                messages.append(
+                    {
+                        "message": message_index,
+                        "role": message.get("role"),
+                        "content": message.get("content"),
+                        "token_count": len(message_token_ids),
+                        "decoded_tokens": tokenizer.decode(
+                            message_token_ids,
+                            skip_special_tokens=False,
+                            clean_up_tokenization_spaces=False,
+                        ),
+                        "packed_tensor_fields": packed_tensor_fields,
+                        "fields": field_summaries,
+                    }
+                )
+            decoded_logs.append(
+                {
+                    "row": row_index,
+                    "conversation": conversation_index,
+                    "token_count": len(sequence_token_ids),
+                    "decoded_full_sequence": tokenizer.decode(
+                        sequence_token_ids,
+                        skip_special_tokens=False,
+                        clean_up_tokenization_spaces=False,
+                    ),
+                    "messages": messages,
+                }
+            )
+    return decoded_logs
+
+
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, help="NeMo-RL SFT YAML path")
@@ -253,6 +346,28 @@ def main() -> None:
         placement_fingerprint="standalone_energon_iterator",
     )
 
+    if args.decode_loss_tokens:
+        print(
+            json.dumps(
+                {
+                    "diagnostic_config": {
+                        "config_path": args.config,
+                        "overrides": overrides,
+                        "batch_size": args.batch_size,
+                        "logical_rank": args.logical_rank,
+                        "logical_world_size": args.logical_world_size,
+                        "max_sequence_length": max_sequence_length,
+                        "data": config.data,
+                        "tokenizer": config.policy["tokenizer"],
+                    }
+                },
+                default=str,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        print("-----")
+
     iterator = iter(loader)
     samples_seen = 0
     for step in range(args.steps):
@@ -269,6 +384,7 @@ def main() -> None:
         }
         if args.decode_loss_tokens:
             tokenizer = getattr(processor, "tokenizer", processor)
+            summary["decoded_message_logs"] = _decoded_message_logs(batch, tokenizer)
             summary["loss_token_samples"] = _loss_token_spans(batch, tokenizer)
         print(
             json.dumps(
@@ -278,6 +394,8 @@ def main() -> None:
                 sort_keys=True,
             )
         )
+        if args.decode_loss_tokens:
+            print("-----")
 
     print(
         f"Energon iteration passed: batches={args.steps}, "

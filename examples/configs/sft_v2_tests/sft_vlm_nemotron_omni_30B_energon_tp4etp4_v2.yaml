@@ -55,6 +55,7 @@ data:
         thinking_trace_format: ultra
 
 logger:
+  wandb_enabled: false
   log_dir: logs/sft-nemotron-omni-30b-clevr-energon-tp4etp4-v2
   wandb:
     project: sft-dev
