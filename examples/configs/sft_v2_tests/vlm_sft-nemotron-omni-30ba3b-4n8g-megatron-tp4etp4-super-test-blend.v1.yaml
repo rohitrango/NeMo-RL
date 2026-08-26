@@ -18,7 +18,10 @@ policy:
 
 data:
   energon:
-    watchdog_timeout_seconds: 600
+    # Cold-cache fills pull 100MB+ youtube clips from lustre into /tmp; a
+    # 128-sample buffer of those exceeds 600s. The reference has no watchdog at
+    # all and uses a far larger buffer (PBS=5000).
+    watchdog_timeout_seconds: 1800
     model_family: nemotron
     task_encoder:
       options:
