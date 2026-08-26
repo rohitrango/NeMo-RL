@@ -92,7 +92,6 @@ project-includes = [
   "nemo_rl/data/energon/multimodal/task_encoders/media.py",
   "nemo_rl/data/energon/multimodal/task_encoders/nemotron_omni.py",
   "nemo_rl/data/energon/multimodal/task_encoders/nemotron_sft.py",
-  "nemo_rl/data/energon/multimodal/task_encoders/qwen_vl.py",
   "nemo_rl/data/energon/multimodal/types.py",
   "nemo_rl/data/energon/sft_dataloader.py",
   "nemo_rl/data/energon/sft_types.py",

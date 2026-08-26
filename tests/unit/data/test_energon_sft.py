@@ -379,16 +379,10 @@ def test_v1_fingerprint_uses_the_former_loader_fields_only():
 def test_v1_fingerprint_identifies_stage3_component_selection():
     source = EnergonSourceConfig(path="/data/prepared", split="train")
     generic = EnergonLoaderConfig(model_family="qwen")
-    qwen = EnergonLoaderConfig.model_validate(
-        {
-            "model_family": "qwen",
-            "task_encoder": "qwen_vl_sft",
-        }
-    )
     nemotron = EnergonLoaderConfig.model_validate(
         {
             "model_family": "nemotron",
-            "task_encoder": "nemotron_visual_sft",
+            "task_encoder": "nemotron_multimodal",
         }
     )
 
@@ -399,10 +393,10 @@ def test_v1_fingerprint_identifies_stage3_component_selection():
             adapter_fingerprint="same-processor",
             split_role="train",
         )
-        for config in (generic, qwen, nemotron)
+        for config in (generic, nemotron)
     }
 
-    assert len(fingerprints) == 3
+    assert len(fingerprints) == 2
 
 
 def test_config_parses_registry_keys_and_validates_packing_options():
@@ -437,11 +431,11 @@ def test_config_parses_registry_keys_and_validates_packing_options():
 
 
 def test_config_validates_typed_task_encoder_options():
-    omni = _loader_config(
+    nemotron = _loader_config(
         {
             "model_family": "nemotron",
             "task_encoder": {
-                "name": "nemotron_omni_sft",
+                "name": "nemotron_multimodal",
                 "options": {
                     "audio_subsampling_factor": 4,
                     "audio_clip_duration_seconds": 30.0,
@@ -450,26 +444,16 @@ def test_config_validates_typed_task_encoder_options():
             },
         }
     )
-    assert omni.task_encoder.options.audio_subsampling_factor == 4
-    assert omni.task_encoder.options.audio_clip_duration_seconds == 30.0
+    assert nemotron.task_encoder.options.audio_subsampling_factor == 4
+    assert nemotron.task_encoder.options.audio_clip_duration_seconds == 30.0
 
     with pytest.raises(ValueError, match="has no configurable options"):
         _loader_config(
             {
                 "model_family": "qwen",
                 "task_encoder": {
-                    "name": "qwen_vl_sft",
+                    "name": "generic_sft",
                     "options": {"patch_dim": 14},
-                },
-            }
-        )
-    with pytest.raises(ValueError, match="does not use audio options"):
-        _loader_config(
-            {
-                "model_family": "nemotron",
-                "task_encoder": {
-                    "name": "nemotron_visual_sft",
-                    "options": {"audio_clip_duration_seconds": 30.0},
                 },
             }
         )

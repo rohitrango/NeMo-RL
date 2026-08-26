@@ -32,7 +32,6 @@ _EXPORT_MODULES = {
     ),
     "NemotronMultiModalTaskEncoder": ("nemo_rl.data.energon.multimodal.task_encoders"),
     "PackedSFTSample": "nemo_rl.data.energon.multimodal.types",
-    "QwenVLSFTTaskEncoder": "nemo_rl.data.energon.multimodal.task_encoders",
     "SFTProcessorAdapter": "nemo_rl.data.energon.multimodal.task_encoders",
     "build_processor_adapter": "nemo_rl.data.energon.multimodal.task_encoders",
     "cook_conversation": "nemo_rl.data.energon.multimodal.cookers",

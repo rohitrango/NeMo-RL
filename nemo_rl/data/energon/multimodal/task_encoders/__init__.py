@@ -29,7 +29,6 @@ _EXPORT_MODULES = {
     "NemotronMultiModalTaskEncoder": (
         "nemo_rl.data.energon.multimodal.task_encoders.nemotron_multimodal"
     ),
-    "QwenVLSFTTaskEncoder": ("nemo_rl.data.energon.multimodal.task_encoders.qwen_vl"),
     "SFTProcessorAdapter": (
         "nemo_rl.data.energon.multimodal.task_encoders.generic_sft"
     ),

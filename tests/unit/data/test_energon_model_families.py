@@ -56,9 +56,7 @@ def test_builtin_generic_components_support_all_model_families() -> None:
 @pytest.mark.parametrize(
     ("key", "family"),
     [
-        ("qwen_vl_sft", "qwen"),
-        ("nemotron_visual_sft", "nemotron"),
-        ("nemotron_omni_sft", "nemotron"),
+        ("nemotron_multimodal", "nemotron"),
     ],
 )
 def test_model_specific_task_encoders_support_their_selected_family(

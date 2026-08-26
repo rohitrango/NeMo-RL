@@ -235,13 +235,6 @@ TASK_ENCODER_REGISTRY.register(
     version="1",
 )
 TASK_ENCODER_REGISTRY.register(
-    "qwen_vl_sft",
-    import_path=(
-        "nemo_rl.data.energon.multimodal.task_encoders.qwen_vl:QwenVLSFTTaskEncoder"
-    ),
-    version="1",
-)
-TASK_ENCODER_REGISTRY.register(
     "nemotron_multimodal",
     import_path=(
         "nemo_rl.data.energon.multimodal.task_encoders.nemotron_multimodal:"

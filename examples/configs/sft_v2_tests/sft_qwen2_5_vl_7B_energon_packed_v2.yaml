@@ -24,7 +24,7 @@ data:
   energon:
     model_family: qwen
     task_encoder:
-      name: qwen_vl_sft
+      name: generic_sft
       options: {}
       packing:
         name: first_fit_decreasing

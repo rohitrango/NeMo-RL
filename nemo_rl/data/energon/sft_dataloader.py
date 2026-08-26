@@ -187,7 +187,7 @@ def _loader_config(value: Any) -> EnergonLoaderConfig:
             f"Unknown data-loader topology mapper {config.topology_mapper!r}."
         )
     configured_encoder_options = config.task_encoder.options.model_fields_set
-    if config.task_encoder.name in {"generic_sft", "qwen_vl_sft"}:
+    if config.task_encoder.name == "generic_sft":
         if configured_encoder_options:
             raise ValueError(
                 f"Task encoder {config.task_encoder.name!r} has no configurable "
