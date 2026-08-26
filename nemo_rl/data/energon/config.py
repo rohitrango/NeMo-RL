@@ -56,9 +56,11 @@ class EnergonTaskEncoderOptions(BaseModel, extra="forbid"):
 
     patch_dim: Annotated[int, Field(ge=1)] = 16
     # Defaults mirror the Megatron reference argparse values in
-    # examples/multimodal/multimodal_args.py: --video-temporal-patch-size 1,
-    # --thinking-trace-format normalized, --sound-clip-duration 30.
-    temporal_patch_size: Annotated[int, Field(ge=1)] = 1
+    # examples/multimodal/multimodal_args.py (--thinking-trace-format
+    # normalized, --sound-clip-duration 30), except temporal_patch_size: the
+    # Nemotron-Omni production run this encoder targets passes
+    # --video-temporal-patch-size 2, so 2 is the useful default here.
+    temporal_patch_size: Annotated[int, Field(ge=1)] = 2
     prompt_format: Literal["nemotron-h-5p5-reasoning", "nemotron6-moe"] = (
         "nemotron-h-5p5-reasoning"
     )
@@ -77,6 +79,18 @@ class EnergonTaskEncoderOptions(BaseModel, extra="forbid"):
             "Defaults to max_sequence_length when unset."
         ),
     )
+    # Frame selection and tiling augmentation, mirroring the --video-* and
+    # --allow-large-videos reference flags. These were previously fixed at the
+    # adapter's Python defaults and unreachable from YAML.
+    video_min_num_frames: Annotated[int, Field(ge=1)] = 8
+    video_max_num_frames: Annotated[int, Field(ge=1)] = 32
+    video_default_fps: Annotated[int, Field(ge=1)] = 2
+    video_frame_temporal_jitter: bool = False
+    video_aug_scale_frames_up: Annotated[int, Field(ge=1)] | None = None
+    video_aug_scale_resolution_up: Annotated[int, Field(ge=1)] | None = None
+    video_aug_scale_resolution_only: bool = False
+    tiling_augment_prob: Annotated[float, Field(ge=0.0, le=1.0)] = 0.4
+    allow_large_videos: bool = False
     audio_subsampling_factor: Annotated[int, Field(ge=1)] | None = None
     audio_num_mel_bins: Annotated[int, Field(ge=1)] = 128
     audio_clip_duration_seconds: Annotated[float, Field(gt=0)] = 30.0

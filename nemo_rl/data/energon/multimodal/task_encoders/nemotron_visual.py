@@ -535,7 +535,7 @@ class _NemotronVisualProcessorAdapter:
         max_sequence_length: int,
         packing_sequence_length: int | None = None,
         patch_dim: int = 16,
-        temporal_patch_size: int = 1,
+        temporal_patch_size: int = 2,
         prompt_format: str = "nemotron-h-5p5-reasoning",
         thinking_trace_format: str = "normalized",
         relax_thinking_trace_check: bool = False,
@@ -546,6 +546,7 @@ class _NemotronVisualProcessorAdapter:
         video_aug_scale_frames_up: int | None = None,
         video_aug_scale_resolution_up: int | None = None,
         video_aug_scale_resolution_only: bool = False,
+        allow_large_videos: bool = False,
         tiling_augment_prob: float = 0.4,
         add_bos: bool = False,
         add_eos: bool = False,
@@ -612,6 +613,7 @@ class _NemotronVisualProcessorAdapter:
         self.video_aug_scale_frames_up = video_aug_scale_frames_up
         self.video_aug_scale_resolution_up = video_aug_scale_resolution_up
         self.video_aug_scale_resolution_only = video_aug_scale_resolution_only
+        self.allow_large_videos = allow_large_videos
         self.tiling_augment_prob = tiling_augment_prob
         self.add_bos = add_bos
         self.add_eos = add_eos
@@ -631,6 +633,7 @@ class _NemotronVisualProcessorAdapter:
             "video_aug_scale_frames_up": video_aug_scale_frames_up,
             "video_aug_scale_resolution_up": video_aug_scale_resolution_up,
             "video_aug_scale_resolution_only": video_aug_scale_resolution_only,
+            "allow_large_videos": allow_large_videos,
             "tiling_augment_prob": tiling_augment_prob,
             "max_sequence_length": max_sequence_length,
             "packing_sequence_length": self.packing_sequence_length,
@@ -744,7 +747,9 @@ class _NemotronVisualProcessorAdapter:
         self, sample: CanonicalSFTSample
     ) -> dict[int, _VideoSelection]:
         selections: dict[int, _VideoSelection] = {}
-        allow_large_videos = bool(
+        # The reference reads --allow-large-videos off args, not off the sample.
+        # Keep honoring the per-sample subflavor so existing datasets still work.
+        allow_large_videos = self.allow_large_videos or bool(
             sample.__subflavors__.get("allow_large_videos", False)
         )
         for media_index, ref in enumerate(sample.media):
