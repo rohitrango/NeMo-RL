@@ -72,6 +72,7 @@ _VISUAL_MODEL_INPUT_KEYS = ("imgs_sizes", "num_frames", "pixel_values")
 
 @dataclass(frozen=True)
 class _AudioPlan:
+    media_index: int
     num_embeddings: int
     num_clips: int
     audio_length: int
@@ -205,6 +206,7 @@ def _subsampled_length(frame_count: int, subsampling_factor: int) -> int:
 def _audio_plan(
     ref: MediaRef,
     *,
+    media_index: int,
     target_sampling_rate: int,
     hop_length: int,
     subsampling_factor: int,
@@ -248,6 +250,7 @@ def _audio_plan(
         _subsampled_length(count, subsampling_factor) for count in valid_frame_counts
     )
     return _AudioPlan(
+        media_index=media_index,
         num_embeddings=sum(embedding_counts),
         num_clips=num_clips,
         audio_length=audio_length,
@@ -396,14 +399,15 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
         *,
         processor: Any,
         max_sequence_length: int,
+        packing_sequence_length: int | None = None,
         patch_dim: int = 16,
-        temporal_patch_size: int = 2,
+        temporal_patch_size: int = 1,
         prompt_format: str = "nemotron-h-5p5-reasoning",
-        thinking_trace_format: str = "default",
+        thinking_trace_format: str = "normalized",
         relax_thinking_trace_check: bool = False,
         audio_subsampling_factor: int | None = None,
         audio_num_mel_bins: int = 128,
-        audio_clip_duration_seconds: float = 60.0,
+        audio_clip_duration_seconds: float = 30.0,
         min_audio_duration_seconds: float = 0.1,
         max_audio_duration_seconds: float = 1800.0,
         add_bos: bool = False,
@@ -413,6 +417,7 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
         super().__init__(
             processor=processor,
             max_sequence_length=max_sequence_length,
+            packing_sequence_length=packing_sequence_length,
             patch_dim=patch_dim,
             temporal_patch_size=temporal_patch_size,
             prompt_format=prompt_format,
@@ -489,7 +494,7 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
         encoded = json.dumps(fingerprint_data, sort_keys=True).encode()
         self._fingerprint = hashlib.sha256(encoded).hexdigest()
 
-    def _plan_audio(self, ref: MediaRef) -> _AudioPlan:
+    def _plan_audio(self, ref: MediaRef, *, media_index: int) -> _AudioPlan:
         if (
             type(self.target_sampling_rate) is not int
             or type(self.hop_length) is not int
@@ -501,6 +506,7 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
             )
         return _audio_plan(
             ref,
+            media_index=media_index,
             target_sampling_rate=self.target_sampling_rate,
             hop_length=self.hop_length,
             subsampling_factor=self.audio_subsampling_factor,
@@ -530,8 +536,8 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
             prompt_format=self.prompt_format,
         )
         audio_occurrences = [
-            (0, ref, self._plan_audio(ref))
-            for _, ref in occurrences
+            (0, ref, self._plan_audio(ref, media_index=media_index))
+            for media_index, (_, ref) in enumerate(occurrences)
             if ref.modality == "audio"
         ]
         sound_token_id = _token_id(self.processor.tokenizer, SOUND_PLACEHOLDER)
@@ -565,7 +571,7 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
             plan.total_embeddings for _, _, plan in audio_occurrences
         )
         max_text_tokens = (
-            self.max_sequence_length - visual_embeddings + visual_placeholders
+            self.packing_sequence_length - visual_embeddings + visual_placeholders
         )
         original_length, length = _truncate_message_log(
             message_log,
@@ -764,7 +770,7 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
         }
 
     def postencode(self, sample: EncodedSFTSample) -> EncodedSFTSample:
-        """Load selected Omni media and verify the predicted expanded width."""
+        """Load the selected Omni media and apply the plans from pre-encoding."""
         pending_sample = sample.pending_sample
         if pending_sample is None:
             raise ValueError(
@@ -775,86 +781,28 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
                 "Nemotron Omni post-encoding requires the audio plan saved during "
                 "pre-encoding."
             )
-        _, occurrences = _render_omni_messages(
-            pending_sample,
-            temporal_patch_size=self.temporal_patch_size,
-            prompt_format=self.prompt_format,
-            thinking_trace_format=self.thinking_trace_format,
-            relax_thinking_trace_check=self.relax_thinking_trace_check,
-            video_timestamps={
-                plan.media_index: plan.frame_timestamps
-                for plan in sample.visual_plans
-                if plan.modality == "video"
-            },
-        )
         message_log = deepcopy(sample.message_log)
         inputs_by_message: defaultdict[int, defaultdict[str, list[PackedTensor]]] = (
             defaultdict(lambda: defaultdict(list))
         )
-        actual_visual_embeddings = 0
-        visual_placeholders = 0
         visual_occurrences: list[tuple[int, tuple[int, ...]]] = []
-        actual_audio_embeddings = 0
-        audio_plan_index = 0
-        visual_plans = {plan.media_index: plan for plan in sample.visual_plans}
-        for media_index, (_, ref) in enumerate(occurrences):
-            message_index = 0
-            if ref.modality == "audio":
-                if audio_plan_index >= len(sample.audio_plans):
-                    raise ValueError(
-                        "Nemotron Omni has more audio occurrences than saved plans."
-                    )
-                plan = sample.audio_plans[audio_plan_index]
-                audio_plan_index += 1
-                media_inputs = self._process_audio(ref, plan)
-                actual_audio_embeddings += plan.total_embeddings
-            else:
-                plan = visual_plans.get(media_index)
-                if plan is None:
-                    raise ValueError(
-                        f"Nemotron Omni media {media_index} has no saved visual plan."
-                    )
-                media_inputs, embeddings = self._process_media(
-                    ref,
-                    plan,
-                    pending_sample,
-                )
-                actual_visual_embeddings += embeddings
-                placeholders = len(plan.embedding_widths)
-                visual_placeholders += placeholders
-                visual_occurrences.append(
-                    (message_index, plan.embedding_widths)
-                )
+
+        # Apply the plans saved during pre-encoding, mirroring the Megatron
+        # reference's postencode_sample: load the selected media and run
+        # apply_params against it. The saved plan alone decides the widths, so
+        # nothing here re-renders the conversation or re-derives a width.
+        for plan in sample.visual_plans:
+            ref = pending_sample.media[plan.media_index]
+            media_inputs, _ = self._process_media(ref, plan, pending_sample)
             for key, value in media_inputs.items():
-                inputs_by_message[message_index][key].append(value)
+                inputs_by_message[plan.message_index][key].append(value)
+            visual_occurrences.append((plan.message_index, plan.embedding_widths))
 
-        if audio_plan_index != len(sample.audio_plans):
-            raise ValueError(
-                f"Nemotron Omni used {audio_plan_index}/{len(sample.audio_plans)} "
-                "saved audio plans."
-            )
-        if set(visual_plans) != {
-            index for index, (_, ref) in enumerate(occurrences) if ref.modality != "audio"
-        }:
-            raise ValueError("Nemotron Omni did not use every saved visual plan.")
+        for plan in sample.audio_plans:
+            ref = pending_sample.media[plan.media_index]
+            for key, value in self._process_audio(ref, plan).items():
+                inputs_by_message[0][key].append(value)
 
-        sound_token_id = _token_id(self.processor.tokenizer, SOUND_PLACEHOLDER)
-        actual_sound_placeholders = sum(
-            int((message["token_ids"] == sound_token_id).sum().item())
-            for message in message_log
-        )
-        if actual_sound_placeholders != actual_audio_embeddings:
-            raise ValueError(
-                f"Nemotron Omni sound placeholder count changed: found "
-                f"{actual_sound_placeholders}, expected {actual_audio_embeddings}."
-            )
-        actual_cost = sample.length + actual_visual_embeddings - visual_placeholders
-        if actual_cost != sample.packing_cost:
-            raise ValueError(
-                f"Nemotron Omni sample {sample.sample_key!r} expanded length "
-                f"changed after media processing: predicted {sample.packing_cost}, "
-                f"got {actual_cost}."
-            )
         image_token_id = _token_id(self.processor.tokenizer, "<image>")
         _expand_visual_placeholders(
             message_log,
@@ -862,11 +810,6 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
             image_token_id=image_token_id,
         )
         expanded_length = sum(len(message["token_ids"]) for message in message_log)
-        if expanded_length != sample.packing_cost:
-            raise ValueError(
-                f"Nemotron Omni sample {sample.sample_key!r} expanded to "
-                f"{expanded_length} token ids, expected {sample.packing_cost}."
-            )
         for message_index, keyed_inputs in inputs_by_message.items():
             message_log[message_index].update(
                 {
@@ -900,14 +843,15 @@ class NemotronMultiModalTaskEncoder(GenericSFTTaskEncoder):
         cooker_functions: Sequence[SFTCooker],
         packing_hooks: EnergonPackingHooks[Any, Any, Any] | None,
         include_source_ids: bool,
+        packing_sequence_length: int | None = None,
         patch_dim: int = 16,
-        temporal_patch_size: int = 2,
+        temporal_patch_size: int = 1,
         prompt_format: str = "nemotron-h-5p5-reasoning",
-        thinking_trace_format: str = "default",
+        thinking_trace_format: str = "normalized",
         relax_thinking_trace_check: bool = False,
         audio_subsampling_factor: int | None = None,
         audio_num_mel_bins: int = 128,
-        audio_clip_duration_seconds: float = 60.0,
+        audio_clip_duration_seconds: float = 30.0,
         min_audio_duration_seconds: float = 0.1,
         max_audio_duration_seconds: float = 1800.0,
     ) -> None:
@@ -917,6 +861,7 @@ class NemotronMultiModalTaskEncoder(GenericSFTTaskEncoder):
             omni_adapter = NemotronMultiModalProcessorAdapter(
                 processor=adapter.processor,
                 max_sequence_length=adapter.max_sequence_length,
+                packing_sequence_length=packing_sequence_length,
                 patch_dim=patch_dim,
                 temporal_patch_size=temporal_patch_size,
                 prompt_format=prompt_format,

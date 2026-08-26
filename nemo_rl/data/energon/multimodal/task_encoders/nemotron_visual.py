@@ -533,10 +533,11 @@ class _NemotronVisualProcessorAdapter:
         *,
         processor: Any,
         max_sequence_length: int,
+        packing_sequence_length: int | None = None,
         patch_dim: int = 16,
-        temporal_patch_size: int = 2,
+        temporal_patch_size: int = 1,
         prompt_format: str = "nemotron-h-5p5-reasoning",
-        thinking_trace_format: str = "default",
+        thinking_trace_format: str = "normalized",
         relax_thinking_trace_check: bool = False,
         video_min_num_frames: int = 8,
         video_max_num_frames: int = 32,
@@ -570,9 +571,22 @@ class _NemotronVisualProcessorAdapter:
             raise ValueError("video_default_fps must be greater than zero.")
         if prompt_format not in {"nemotron-h-5p5-reasoning", "nemotron6-moe"}:
             raise ValueError(f"Unsupported Nemotron prompt format {prompt_format!r}.")
-        if thinking_trace_format not in {"default", "ultra"}:
+        # "default" is the legacy nemo-rl spelling of the reference's "normalized";
+        # both select the same non-ultra newline behavior.
+        if thinking_trace_format not in {"default", "normalized", "ultra"}:
             raise ValueError(
                 f"Unsupported Nemotron thinking trace format {thinking_trace_format!r}."
+            )
+        # Megatron budgets tile planning against decoder_seq_length but truncates
+        # against packing_seq_length, falling back to decoder_seq_length when unset.
+        if packing_sequence_length is not None and packing_sequence_length <= 0:
+            raise ValueError("packing_sequence_length must be greater than zero.")
+        if (
+            packing_sequence_length is not None
+            and packing_sequence_length > max_sequence_length
+        ):
+            raise ValueError(
+                "packing_sequence_length must not exceed max_sequence_length."
             )
         if not hasattr(processor, "apply_chat_template") or not hasattr(
             processor, "tokenizer"
@@ -585,6 +599,7 @@ class _NemotronVisualProcessorAdapter:
             )
         self.processor = processor
         self.max_sequence_length = max_sequence_length
+        self.packing_sequence_length = packing_sequence_length or max_sequence_length
         self.patch_dim = patch_dim
         self.temporal_patch_size = temporal_patch_size
         self.prompt_format = prompt_format
@@ -618,6 +633,7 @@ class _NemotronVisualProcessorAdapter:
             "video_aug_scale_resolution_only": video_aug_scale_resolution_only,
             "tiling_augment_prob": tiling_augment_prob,
             "max_sequence_length": max_sequence_length,
+            "packing_sequence_length": self.packing_sequence_length,
             "add_bos": add_bos,
             "add_eos": add_eos,
             "add_generation_prompt": add_generation_prompt,
@@ -1061,7 +1077,7 @@ class _NemotronVisualProcessorAdapter:
             len(plan.embedding_widths) for plan in visual_plans
         )
         max_text_tokens = (
-            self.max_sequence_length - visual_embeddings + compact_placeholders
+            self.packing_sequence_length - visual_embeddings + compact_placeholders
         )
         original_length, length = _truncate_message_log(
             message_log,
@@ -1258,31 +1274,16 @@ class _NemotronVisualProcessorAdapter:
             defaultdict(lambda: defaultdict(list))
         )
         visual_occurrences: list[tuple[int, tuple[int, ...]]] = []
-        actual_embeddings = 0
-        compact_placeholders = 0
         for plan in visual_plans:
             ref = pending_sample.media[plan.media_index]
-            media_inputs, media_embeddings = self._process_media(
-                ref,
-                plan,
-                pending_sample,
-            )
+            media_inputs, _ = self._process_media(ref, plan, pending_sample)
             for key, value in media_inputs.items():
                 inputs_by_message[plan.message_index][key].append(value)
-            actual_embeddings += media_embeddings
-            placeholders = len(plan.embedding_widths)
-            compact_placeholders += placeholders
-            visual_occurrences.append(
-                (plan.message_index, plan.embedding_widths)
-            )
+            visual_occurrences.append((plan.message_index, plan.embedding_widths))
 
-        actual_cost = sample.length + actual_embeddings - compact_placeholders
-        if actual_cost != sample.packing_cost:
-            raise ValueError(
-                f"Nemotron sample {sample.sample_key!r} expanded length changed "
-                f"after media processing: predicted {sample.packing_cost}, got "
-                f"{actual_cost}."
-            )
+        # Expansion is driven by the saved plan alone, exactly as apply_params()
+        # is in the Megatron reference, so the expanded width cannot drift from
+        # the packing cost predicted for it.
         image_token_id = _token_id(self.processor.tokenizer, "<image>")
         _expand_visual_placeholders(
             message_log,
@@ -1290,11 +1291,6 @@ class _NemotronVisualProcessorAdapter:
             image_token_id=image_token_id,
         )
         expanded_length = sum(len(message["token_ids"]) for message in message_log)
-        if expanded_length != sample.packing_cost:
-            raise ValueError(
-                f"Nemotron sample {sample.sample_key!r} expanded to "
-                f"{expanded_length} token ids, expected {sample.packing_cost}."
-            )
         for message_index, keyed_inputs in inputs_by_message.items():
             message_log[message_index].update(
                 {

@@ -55,18 +55,31 @@ class EnergonTaskEncoderOptions(BaseModel, extra="forbid"):
     """Typed settings used by the Nemotron Stage 3 task encoders."""
 
     patch_dim: Annotated[int, Field(ge=1)] = 16
-    temporal_patch_size: Annotated[int, Field(ge=1)] = 2
+    # Defaults mirror the Megatron reference argparse values in
+    # examples/multimodal/multimodal_args.py: --video-temporal-patch-size 1,
+    # --thinking-trace-format normalized, --sound-clip-duration 30.
+    temporal_patch_size: Annotated[int, Field(ge=1)] = 1
     prompt_format: Literal["nemotron-h-5p5-reasoning", "nemotron6-moe"] = (
         "nemotron-h-5p5-reasoning"
     )
-    thinking_trace_format: Literal["default", "ultra"] = "default"
+    # "default" is the legacy nemo-rl spelling of the reference's "normalized";
+    # both select the same non-ultra newline behavior.
+    thinking_trace_format: Literal["default", "normalized", "ultra"] = "normalized"
     relax_thinking_trace_check: bool = Field(
         default=False,
         description="Skip validation and normalization of assistant thinking tags.",
     )
+    packing_sequence_length: Annotated[int, Field(ge=1)] | None = Field(
+        default=None,
+        description=(
+            "Truncation budget, matching the reference --packing-seq-length. "
+            "Tile planning always budgets against max_sequence_length. "
+            "Defaults to max_sequence_length when unset."
+        ),
+    )
     audio_subsampling_factor: Annotated[int, Field(ge=1)] | None = None
     audio_num_mel_bins: Annotated[int, Field(ge=1)] = 128
-    audio_clip_duration_seconds: Annotated[float, Field(gt=0)] = 60.0
+    audio_clip_duration_seconds: Annotated[float, Field(gt=0)] = 30.0
     min_audio_duration_seconds: Annotated[float, Field(gt=0)] = 0.1
     max_audio_duration_seconds: Annotated[float, Field(gt=0)] = 1800.0
 
