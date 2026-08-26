@@ -78,6 +78,29 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         if self._sft_processor is None:
             raise ValueError("SFTv2 requires a multimodal processor on policy workers.")
 
+        # Megatron's prepacked CP path requires every padded sub-sequence to be
+        # divisible by 2 * cp_size. Nothing in EnergonPackingOptions ties the pad
+        # multiple to CP, so a mismatch otherwise surfaces as a ValueError deep in
+        # the first forward pass instead of here, where the fix is obvious.
+        cp_size = parallel_state.get_context_parallel_world_size()
+        packing = (
+            ((data_config.get("energon") or {}).get("task_encoder") or {}).get(
+                "packing"
+            )
+            or {}
+        )
+        pad_multiple = (packing.get("options") or {}).get(
+            "sequence_length_pad_multiple"
+        )
+        if cp_size > 1 and pad_multiple is not None:
+            if pad_multiple % (2 * cp_size):
+                raise ValueError(
+                    "Energon packing sequence_length_pad_multiple "
+                    f"({pad_multiple}) must be divisible by 2 * "
+                    f"context_parallel_size ({2 * cp_size}); Megatron slices each "
+                    "padded sub-sequence across CP ranks in two halves."
+                )
+
         logical_rank = parallel_state.get_data_parallel_rank()
         logical_world_size = parallel_state.get_data_parallel_world_size()
         self._sft_loader = build_energon_sft_loader(

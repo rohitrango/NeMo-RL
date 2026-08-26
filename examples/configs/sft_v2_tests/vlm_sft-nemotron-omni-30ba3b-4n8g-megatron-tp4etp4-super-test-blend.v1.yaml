@@ -22,6 +22,12 @@ data:
     # 128-sample buffer of those exceeds 600s. The reference has no watchdog at
     # all and uses a far larger buffer (PBS=5000).
     watchdog_timeout_seconds: 1800
+    # Each dataloader worker keeps its own packing buffer AND its own unbounded
+    # FileStoreCachePool of raw media bytes. With 8 workers x prefetch 2 x a
+    # 128-sample buffer over clips up to 162MB, the worker node OOMs
+    # (slurm: OUT_OF_MEMORY, "DataLoader worker exited unexpectedly").
+    num_workers: 2
+    prefetch_factor: 1
     model_family: nemotron
     task_encoder:
       options:
@@ -31,10 +37,10 @@ data:
       # packing: null
       packing:
         name: greedy_knapsack
-        buffer_size: 128
+        buffer_size: 32
         options:
           max_sequence_length: ${policy.max_total_sequence_length}
-          sequence_length_pad_multiple: 1
+          sequence_length_pad_multiple: 8  # 2 * context_parallel_size(4)
     cookers:
       - name: nemotron_conversation
         has_subflavors:
