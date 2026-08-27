@@ -17,6 +17,9 @@ from nemo_rl.data.packing.concatenative import ConcatenativePacker
 from nemo_rl.data.packing.factory import PackingAlgorithm, get_packer
 from nemo_rl.data.packing.first_fit_decreasing import FirstFitDecreasingPacker
 from nemo_rl.data.packing.first_fit_shuffle import FirstFitShufflePacker
+from nemo_rl.data.packing.balanced_greedy_knapsack import (
+    BalancedGreedyKnapsackPacker,
+)
 from nemo_rl.data.packing.greedy_knapsack import GreedyKnapsackPacker
 from nemo_rl.data.packing.metrics import PackingMetrics
 from nemo_rl.data.packing.modified_first_fit_decreasing import (
@@ -30,6 +33,7 @@ __all__ = [
     "FirstFitDecreasingPacker",
     "FirstFitShufflePacker",
     "GreedyKnapsackPacker",
+    "BalancedGreedyKnapsackPacker",
     "ModifiedFirstFitDecreasingPacker",
     "get_packer",
     "PackingMetrics",

@@ -17,6 +17,9 @@
 import enum
 
 from nemo_rl.data.packing.base import SequencePacker
+from nemo_rl.data.packing.balanced_greedy_knapsack import (
+    BalancedGreedyKnapsackPacker,
+)
 from nemo_rl.data.packing.concatenative import ConcatenativePacker
 from nemo_rl.data.packing.first_fit_decreasing import FirstFitDecreasingPacker
 from nemo_rl.data.packing.first_fit_shuffle import FirstFitShufflePacker
@@ -34,6 +37,7 @@ class PackingAlgorithm(enum.Enum):
     FIRST_FIT_SHUFFLE = "first_fit_shuffle"
     MODIFIED_FIRST_FIT_DECREASING = "modified_first_fit_decreasing"
     GREEDY_KNAPSACK = "greedy_knapsack"
+    BALANCED_GREEDY_KNAPSACK = "balanced_greedy_knapsack"
 
 
 _PACKER_TYPES: dict[PackingAlgorithm, type[SequencePacker]] = {
@@ -42,6 +46,7 @@ _PACKER_TYPES: dict[PackingAlgorithm, type[SequencePacker]] = {
     PackingAlgorithm.FIRST_FIT_SHUFFLE: FirstFitShufflePacker,
     PackingAlgorithm.MODIFIED_FIRST_FIT_DECREASING: ModifiedFirstFitDecreasingPacker,
     PackingAlgorithm.GREEDY_KNAPSACK: GreedyKnapsackPacker,
+    PackingAlgorithm.BALANCED_GREEDY_KNAPSACK: BalancedGreedyKnapsackPacker,
 }
 
 
@@ -51,8 +56,13 @@ def get_packer(
     collect_metrics: bool = False,
     min_bin_count: int | None = None,
     bin_count_multiple: int | None = None,
+    **packer_options: object,
 ) -> SequencePacker:
-    """Build one packer from a stable enum value or algorithm key."""
+    """Build one packer from a stable enum value or algorithm key.
+
+    ``packer_options`` carries algorithm-specific settings, such as
+    ``balanced_knapsack_delta`` for ``balanced_greedy_knapsack``.
+    """
     if isinstance(algorithm, str):
         try:
             algorithm = PackingAlgorithm(algorithm.lower())
@@ -73,6 +83,7 @@ def get_packer(
         collect_metrics=collect_metrics,
         min_bin_count=min_bin_count,
         bin_count_multiple=bin_count_multiple,
+        **packer_options,
     )
 
 

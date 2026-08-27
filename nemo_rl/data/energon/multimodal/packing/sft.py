@@ -130,7 +130,12 @@ def build_packing_hooks(
     packer_type: type[SequencePacker],
 ) -> EnergonPackingHooks[EncodedSFTSample, EncodedSFTSample, PackedSFTSample]:
     """Build Energon callbacks around one shared sequence packer."""
-    packer = packer_type(options.max_sequence_length)
+    # Algorithm-specific settings are passed only when set, so packers that do
+    # not accept them keep their existing signature.
+    packer_options: dict[str, int] = {}
+    if options.balanced_knapsack_delta is not None:
+        packer_options["balanced_knapsack_delta"] = options.balanced_knapsack_delta
+    packer = packer_type(options.max_sequence_length, **packer_options)
     return EnergonPackingHooks(
         key=algorithm,
         version=version,

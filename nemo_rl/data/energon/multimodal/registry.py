@@ -272,6 +272,13 @@ PACKING_REGISTRY.register(
     import_path="nemo_rl.data.packing.greedy_knapsack:GreedyKnapsackPacker",
     version="1",
 )
+PACKING_REGISTRY.register(
+    "balanced_greedy_knapsack",
+    import_path=(
+        "nemo_rl.data.packing.balanced_greedy_knapsack:BalancedGreedyKnapsackPacker"
+    ),
+    version="1",
+)
 
 
 def selected_registry_identity(

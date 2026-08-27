@@ -33,6 +33,10 @@ class EnergonPackingOptions(BaseModel, extra="forbid"):
 
     max_sequence_length: Annotated[int, Field(ge=1)]
     sequence_length_pad_multiple: Annotated[int, Field(ge=1)]
+    # Only meaningful for balanced_greedy_knapsack, which pre-allocates
+    # ceil(total / capacity) + delta bins. The Megatron reference defaults to
+    # 20; the Nemotron production launch script passes 5.
+    balanced_knapsack_delta: Annotated[int, Field(ge=0)] | None = None
 
     @model_validator(mode="after")
     def _validate_alignment(self) -> "EnergonPackingOptions":

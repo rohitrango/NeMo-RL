@@ -36,11 +36,31 @@ data:
         allow_large_videos: true
       # packing: null
       packing:
-        name: greedy_knapsack
+        # Match the reference production run, which selects
+        # balanced_greedy_knapsack with balanced_knapsack_delta=5
+        # (launch script lines 163-164, 186, 264-265; USE_BUCKETING defaults
+        # to 0, so it takes the balanced branch). greedy_knapsack fills one
+        # bin to the brim before opening the next; balanced sorts descending
+        # and always places into the least-full bin, so the fill is spread.
+        name: balanced_greedy_knapsack
+        # The reference passes PBS=5000. Kept at 32 here: each dataloader
+        # worker holds its own packing buffer AND its own unbounded
+        # FileStoreCachePool of raw media bytes, and this blend carries clips
+        # up to 162MB, which OOM'd the worker node at larger buffers.
         buffer_size: 32
         options:
           max_sequence_length: ${policy.max_total_sequence_length}
-          sequence_length_pad_multiple: 8  # 2 * context_parallel_size(4)
+          # 16, not 8. The reference pads with get_padding(), which under
+          # CP + SP uses max(tp_size * cp_size, cp_size * 2) =
+          # max(4 * 4, 4 * 2) = 16 (megatron/core/models/multimodal/
+          # context_parallel.py:46). The earlier "2 * context_parallel_size"
+          # value picks the cp_size * 2 branch, which only applies when
+          # sequence_parallel is off; this recipe sets it true with TP=4, so
+          # the tensor-parallel term wins. Measured: get_padding(n) ==
+          # round_up(n, 16) for all n in 1..4999, and == round_up(n, 8) for
+          # only 2496 of them. See config-divergence.md.
+          sequence_length_pad_multiple: 16
+          balanced_knapsack_delta: 5
     cookers:
       - name: nemotron_conversation
         has_subflavors:
