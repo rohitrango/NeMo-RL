@@ -593,7 +593,7 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
         )
         image_token_id = _token_id(self.processor.tokenizer, "<image>")
         image_tokens_before_truncation = sum(
-            int((message["token_ids"] == image_token_id).sum().item())
+            len(message["visual_placeholder_positions"])
             for message in message_log
         )
         # Separate the two ways the placeholder count can disagree with the plan.
@@ -613,7 +613,7 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
             sample=sample,
         )
         remaining_visual_placeholders = sum(
-            int((message["token_ids"] == image_token_id).sum().item())
+            len(message["visual_placeholder_positions"])
             for message in message_log
         )
         if remaining_visual_placeholders != image_tokens_before_truncation:

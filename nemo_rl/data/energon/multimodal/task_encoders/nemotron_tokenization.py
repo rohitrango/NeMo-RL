@@ -20,6 +20,13 @@ from typing import Any
 
 import torch
 
+# Unicode Private Use Area. Tokenizing prose never produces it, and text parts
+# containing it are rejected, so a media placeholder cannot be forged by source
+# text. Mirrors the reference's _MM_MARKER (multimodal_tokenizer.py:514).
+# Defined here rather than in nemotron_visual because that module imports this
+# one.
+MM_MARKER = "\uE000"
+
 IGNORE_INDEX = -100
 
 _MESSAGE_START_TOKEN_ID = 10
@@ -220,6 +227,28 @@ def _raw_tokens_and_mask(
     return tokens, mask
 
 
+def _encode_with_marker_splices(
+    text: str, tokenizer: Any, *, image_token_id: int
+) -> tuple[torch.Tensor, list[int]]:
+    """Encode segment-wise, splicing the image token at each marker.
+
+    Placeholder positions are known by construction, so a literal "<image>" --
+    or even "<img><image></img>" -- written in prose is never mistaken for a
+    media placeholder. Mirrors the reference's _encode_with_markers
+    (multimodal_tokenizer.py:560).
+    """
+    segments = text.split(MM_MARKER)
+    ids: list[int] = []
+    positions: list[int] = []
+    for index, segment in enumerate(segments):
+        if segment:
+            ids.extend(tokenizer.encode(segment, add_special_tokens=False))
+        if index < len(segments) - 1:
+            positions.append(len(ids))
+            ids.append(image_token_id)
+    return torch.tensor(ids, dtype=torch.long), positions
+
+
 def tokenize_nemotron_conversation(
     messages: list[dict[str, Any]],
     *,
@@ -267,6 +296,18 @@ def tokenize_nemotron_conversation(
             raise ValueError("Explicit assistant loss requires one selected turn.")
 
     if skip_chat_template:
+        # This path bypasses the chat template and never splices markers. The
+        # leaves that use it are text-only, so a marker here means a media
+        # placeholder reached a path that cannot expand it.
+        if any(
+            MM_MARKER in str(message.get("content", ""))
+            for message in rendered_messages
+        ):
+            raise ValueError(
+                "Nemotron skip_chat_template does not support media "
+                "placeholders; found the multimodal marker in the conversation."
+            )
+        placeholder_positions = []
         tokens, token_loss_mask = _raw_tokens_and_mask(rendered_messages, tokenizer)
     else:
         template = (
@@ -289,9 +330,10 @@ def tokenize_nemotron_conversation(
             if len(rendered_text) != 1:
                 raise ValueError("Nemotron chat template returned several conversations.")
             rendered_text = rendered_text[0]
-        tokens = torch.tensor(
-            tokenizer.encode(rendered_text, add_special_tokens=False),
-            dtype=torch.long,
+        tokens, placeholder_positions = _encode_with_marker_splices(
+            rendered_text,
+            tokenizer,
+            image_token_id=tokenizer.convert_tokens_to_ids("<image>"),
         )
 
         if prompt_format == "nemotron-h-5p5-reasoning":
@@ -376,12 +418,14 @@ def tokenize_nemotron_conversation(
             "content": "",
             "token_ids": tokens,
             "token_loss_mask": token_loss_mask,
+            "visual_placeholder_positions": placeholder_positions,
         }
     ]
 
 
 __all__ = [
     "IGNORE_INDEX",
+    "MM_MARKER",
     "NoTrainableTokensError",
     "tokenize_nemotron_conversation",
 ]

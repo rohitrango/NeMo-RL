@@ -38,6 +38,7 @@ from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (
     _normalize_messages,
 )
 from nemo_rl.data.energon.multimodal.task_encoders.nemotron_tokenization import (
+    MM_MARKER,
     NoTrainableTokensError,
     tokenize_nemotron_conversation,
 )
@@ -51,7 +52,9 @@ from nemo_rl.data.multimodal_utils import (
     resolve_to_image,
 )
 
-COMPACT_IMAGE_PLACEHOLDER = "<img><image></img>"
+# The marker sits between two special tokens, so encoding segment-by-segment
+# cannot merge across the splice boundary.
+COMPACT_IMAGE_PLACEHOLDER = f"<img>{MM_MARKER}</img>"
 _VISUAL_MODEL_INPUT_KEYS = ("imgs_sizes", "num_frames", "pixel_values")
 
 logger = logging.getLogger(__name__)
@@ -306,9 +309,13 @@ def _render_compact_messages(
         for part in content:
             part_type = part["type"]
             if part_type == "text":
-                rendered_content.append(
-                    {"type": "text", "text": str(part.get("text", ""))}
-                )
+                text = str(part.get("text", ""))
+                if MM_MARKER in text:
+                    raise ValueError(
+                        f"Nemotron sample {sample.__key__!r} contains the "
+                        "reserved multimodal marker in text content."
+                    )
+                rendered_content.append({"type": "text", "text": text})
                 continue
             if part_type not in {"image", "video", "video_frame"}:
                 raise ValueError(
@@ -435,7 +442,11 @@ def _expand_visual_placeholders(
                 "Nemotron tokenized messages require token_loss_mask aligned "
                 "with token_ids."
             )
-        placeholder_positions = torch.where(token_ids == image_token_id)[0].tolist()
+        # Positions are recorded at splice time, so a literal "<image>" or even
+        # "<img><image></img>" written in prose is never mistaken for one.
+        placeholder_positions = list(
+            message_log[message_index]["visual_placeholder_positions"]
+        )
         if len(placeholder_positions) != len(widths):
             raise ValueError(
                 f"Nemotron message {message_index} has "
@@ -503,6 +514,13 @@ def _truncate_message_log(
         kept = min(len(token_ids), remaining)
         message["token_ids"] = token_ids[:kept]
         message["token_loss_mask"] = token_loss_mask[:kept]
+        positions = message.get("visual_placeholder_positions")
+        if positions is not None:
+            # Truncation keeps a prefix, so a surviving position keeps its
+            # index; only placeholders past the cut are dropped.
+            message["visual_placeholder_positions"] = [
+                position for position in positions if position < kept
+            ]
         remaining -= kept
 
     truncated_length = max_text_tokens - remaining
@@ -1086,7 +1104,7 @@ class _NemotronVisualProcessorAdapter:
         )
         image_token_id = _token_id(self.processor.tokenizer, "<image>")
         image_tokens_before_truncation = sum(
-            int((message["token_ids"] == image_token_id).sum().item())
+            len(message["visual_placeholder_positions"])
             for message in message_log
         )
         # Separate the two ways the placeholder count can disagree with the plan.
@@ -1106,7 +1124,7 @@ class _NemotronVisualProcessorAdapter:
             sample=sample,
         )
         remaining_placeholders = sum(
-            int((message["token_ids"] == image_token_id).sum().item())
+            len(message["visual_placeholder_positions"])
             for message in message_log
         )
         if remaining_placeholders != image_tokens_before_truncation:
