@@ -57,11 +57,9 @@ from nemo_rl.data.energon.multimodal.types import (
 )
 from nemo_rl.data.multimodal_utils import PackedTensor
 
-SOUND_PLACEHOLDER = "<so_embedding>"
+SOUND_TOKEN = SOUND_PLACEHOLDER = "<so_embedding>"
 SOUND_START = "<so_start>"
 SOUND_END = "<so_end>"
-_SOUND_MODEL_INPUT_KEYS = ("sound_clips", "sound_length")
-_VISUAL_MODEL_INPUT_KEYS = ("imgs_sizes", "num_frames", "pixel_values")
 
 # Audio frame and subsampling math follows Megatron-Bridge revision
 # 8c46dc4259080c510b7455f43e836fdff222c5d3,
@@ -636,20 +634,17 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
                 f"{original_length}; max text/audio tokens: {max_text_tokens}."
             )
         packing_cost = length + visual_embeddings - visual_placeholders
-        model_input_keys = (
-            *(_VISUAL_MODEL_INPUT_KEYS if visual_placeholders else ()),
-        ) + (*(_SOUND_MODEL_INPUT_KEYS if audio_occurrences else ()),)
-        media_embeddings = visual_embeddings + audio_embeddings
-        cost_bucket = (
-            0 if media_embeddings <= 256 else 1 if media_embeddings <= 2_048 else 2
-        )
+        # The fingerprint alone; see nemotron_visual.py for the measurement.
+        # Here the model-input names made up to four partitions -- visual,
+        # sound, both, neither -- so the fragmentation was worse than on the
+        # visual-only path.
         return NemotronOmniEncodedSFTSample.derive_from(
             sample,
             message_log=message_log,
             length=length,
             packing_cost=packing_cost,
             loss_multiplier=1.0,
-            group_key=(self.fingerprint, model_input_keys, cost_bucket),
+            group_key=(self.fingerprint,),
             sample_key=sample.__key__,
             pending_sample=sample,
             visual_plans=visual_plans,

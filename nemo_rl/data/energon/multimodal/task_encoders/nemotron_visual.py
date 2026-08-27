@@ -55,7 +55,6 @@ from nemo_rl.data.multimodal_utils import (
 # The marker sits between two special tokens, so encoding segment-by-segment
 # cannot merge across the splice boundary.
 COMPACT_IMAGE_PLACEHOLDER = f"<img>{MM_MARKER}</img>"
-_VISUAL_MODEL_INPUT_KEYS = ("imgs_sizes", "num_frames", "pixel_values")
 
 logger = logging.getLogger(__name__)
 
@@ -1135,17 +1134,30 @@ class _NemotronVisualProcessorAdapter:
                 f"{original_length}; max text tokens: {max_text_tokens}."
             )
         packing_cost = length + visual_embeddings - compact_placeholders
-        cost_bucket = (
-            0 if visual_embeddings <= 256 else 1 if visual_embeddings <= 2_048 else 2
-        )
-        model_input_keys = _VISUAL_MODEL_INPUT_KEYS if flat_occurrences else ()
+        # The fingerprint alone. The Megatron reference packs its whole buffer
+        # with one knapsack call and no grouping (task_encoder.py:1365), so any
+        # extra key here only fragments packs.
+        #
+        # This used to add the model-input tensor names, which put samples WITH
+        # media and samples WITHOUT media in separate partitions. Each
+        # partition then got its own balanced_greedy_knapsack `+delta`
+        # allocation. Measured on 19 video rows: 18 media samples gave 6 bins
+        # and 1 text-only row gave a 7th, against the reference's 6.
+        #
+        # Dropping the names is safe because batch() never stacks media into a
+        # batch tensor -- pixel_values/imgs_sizes/num_frames stay inside the
+        # per-message dicts of message_log, so a pack that mixes media and
+        # non-media sources is the ragged list it already was.
+        #
+        # The fingerprint stays. It hashes the encoder settings, so samples
+        # encoded under different settings still cannot share a pack.
         return NemotronEncodedSFTSample.derive_from(
             sample,
             message_log=message_log,
             length=length,
             packing_cost=packing_cost,
             loss_multiplier=1.0,
-            group_key=(self.fingerprint, model_input_keys, cost_bucket),
+            group_key=(self.fingerprint,),
             sample_key=sample.__key__,
             pending_sample=sample,
             visual_plans=visual_plans,

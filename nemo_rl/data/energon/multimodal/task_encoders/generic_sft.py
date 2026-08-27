@@ -45,7 +45,6 @@ from nemo_rl.data.energon.multimodal.types import (
 )
 from nemo_rl.data.interfaces import TaskDataSpec
 from nemo_rl.data.llm_message_utils import get_formatted_message_log
-from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 
@@ -203,35 +202,18 @@ class HFMultimodalSFTProcessorAdapter:
                 ]
             loss_multiplier = 0.0
 
-        model_input_keys = tuple(
-            sorted(
-                {
-                    key
-                    for message in message_log
-                    for key, value in message.items()
-                    if key != "token_ids"
-                    and isinstance(value, (PackedTensor, torch.Tensor))
-                }
-            )
-        )
-        media_cost = sum(
-            tensor.numel()
-            for message in message_log
-            for value in message.values()
-            if isinstance(value, PackedTensor)
-            for tensor in value.tensors
-            if tensor is not None
-        )
-        media_cost_bucket = (
-            0 if media_cost <= 8_000_000 else 1 if media_cost <= 64_000_000 else 2
-        )
+        # The fingerprint alone; see nemotron_visual.py for the measurement.
+        # This path derived the key from the tensor names actually present in
+        # message_log, so it split on any difference in model inputs, not only
+        # on media. batch() puts those tensors in the per-message dicts rather
+        # than in a stacked batch tensor, so the split bought nothing.
         return EncodedSFTSample.derive_from(
             sample,
             message_log=message_log,
             length=length,
             packing_cost=length,
             loss_multiplier=loss_multiplier,
-            group_key=(self.fingerprint, model_input_keys, media_cost_bucket),
+            group_key=(self.fingerprint,),
             sample_key=sample.__key__,
         )
 
