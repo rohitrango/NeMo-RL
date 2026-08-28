@@ -57,7 +57,26 @@ class SFTProcessorAdapter(Protocol):
     def encode(self, sample: CanonicalSFTSample) -> EncodedSFTSample: ...
 
 
-def _normalize_messages(sample: CanonicalSFTSample) -> list[dict[str, Any]]:
+def _normalize_messages(
+    sample: CanonicalSFTSample, *, materialize: bool = True
+) -> list[dict[str, Any]]:
+    """Validate the message structure and attach each part's media.
+
+    Args:
+        sample: The cooked conversation.
+        materialize: Decode each media value and attach the payload. Set False
+            to attach the ``MediaRef`` instead.
+
+    The Nemotron renderers replace every media part with text built from
+    metadata and then overwrite ``message["content"]`` wholesale, so decoding
+    for them is pure waste. It is also waste paid at the wrong time: this runs
+    in pre-encode, before ``select_samples_to_pack``, so rows that selection
+    discards are decoded too. Measured on video rows at 2771 ms against the
+    Megatron reference's 4.7 ms, which defers all frame work to post-encode.
+
+    Only ``GenericSFTTaskEncoder.encode`` consumes the payload, via
+    ``get_formatted_message_log``, so it keeps the default.
+    """
     messages = deepcopy(sample.messages)
     used_media: list[int] = []
     tool_call_ids: set[str] = set()
@@ -106,10 +125,14 @@ def _normalize_messages(sample: CanonicalSFTSample) -> list[dict[str, Any]]:
                         f"to {media_ref.modality!r} media."
                     )
                 part["type"] = media_ref.modality
-                part[media_ref.modality] = materialize_media_value(
-                    media_ref.value,
-                    modality=media_ref.modality,
-                    sample=sample,
+                part[media_ref.modality] = (
+                    materialize_media_value(
+                        media_ref.value,
+                        modality=media_ref.modality,
+                        sample=sample,
+                    )
+                    if materialize
+                    else media_ref
                 )
                 used_media.append(media_index)
             normalized_content.append(part)

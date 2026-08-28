@@ -291,7 +291,9 @@ def _render_compact_messages(
     relax_thinking_trace_check: bool,
     video_timestamps: dict[int, tuple[float, ...]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[tuple[int, MediaRef]]]:
-    messages = _normalize_messages(sample)
+    # materialize=False; see _render_omni_messages. This renderer discards the
+    # payload the same way.
+    messages = _normalize_messages(sample, materialize=False)
     occurrences: list[tuple[int, MediaRef]] = []
     media_index = 0
     for message_index, message in enumerate(messages):

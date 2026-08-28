@@ -269,7 +269,10 @@ def _render_omni_messages(
     relax_thinking_trace_check: bool,
     video_timestamps: dict[int, tuple[float, ...]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[tuple[int, MediaRef]]]:
-    messages = _normalize_messages(sample)
+    # materialize=False: every media part below is replaced by text built from
+    # metadata, and message["content"] is overwritten wholesale, so decoding
+    # the payload here would be discarded immediately.
+    messages = _normalize_messages(sample, materialize=False)
     occurrences: list[tuple[int, MediaRef]] = []
     media_index = 0
     for message_index, message in enumerate(messages):
