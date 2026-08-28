@@ -920,6 +920,14 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
         "moe_router_bias_update_rate"
     ]
 
+    # Coefficient on the MoE load-balancing (aux) loss. Deliberately applied
+    # only when the recipe sets it: model providers supply their own default
+    # (e.g. nemotron_omni_provider.py:62 = 1e-4), and an unconditional
+    # setdefault(0.0) here would silently zero the aux loss for every model
+    # that relies on that provider value.
+    if "moe_aux_loss_coeff" in config["megatron_cfg"]:
+        model_cfg.moe_aux_loss_coeff = config["megatron_cfg"]["moe_aux_loss_coeff"]
+
     model_cfg.moe_enable_deepep = config["megatron_cfg"]["moe_enable_deepep"]
     model_cfg.moe_token_dispatcher_type = config["megatron_cfg"][
         "moe_token_dispatcher_type"

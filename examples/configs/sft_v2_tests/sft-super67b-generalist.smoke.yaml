@@ -1,0 +1,144 @@
+# SMOKE variant of sft-super67b-generalist.v1.yaml.
+# Keeps the production TP=8/CP=8/PP=1 so the parallel config is genuinely
+# exercised - that needs TP*CP*PP = 64 GPUs = 16 GB300 nodes MINIMUM.
+# An 8-node (32 GPU) run cannot hold TP8xCP8 at all; see submit-sft.sh --tiny.
+#
+# EP is 8, not 64: EP must divide world/(TP*PP) = 64/8 = 8.
+# SFT: Nemotron-3.5-Super-67B vision-pretrained, full generalist blend.
+#
+# Derived from vlm_sft-nemotron-omni-30ba3b-4n8g-megatron-tp4etp4-super-test-blend.v1.yaml,
+# with parallelism taken from the production Megatron launcher:
+#   ADLR/megatron-lm @ tpoon/vlm2_rebase_super_vlm
+#   examples/multimodal/v3p5_super_prod_run/
+#     sft_from_super35_dualds_4k_1of8_recover_iter366_radio_v4_h_full_generalist.sh
+#
+# NODE ARITHMETIC - READ BEFORE CHANGING num_nodes.
+# The reference SBATCH header is 256 nodes, --gpus-per-node=4 (and
+# --ntasks-per-node=4) = 1024 GPUs. GB300 here is also 4 GPUs/node, so the
+# per-node shape matches; only the node count differs.
+#   reference: 256 nodes -> 1024 GPUs -> DP = 1024/64 = 16
+#   here:      128 nodes ->  512 GPUs -> DP =  512/64 =  8
+# Per-GPU memory is set by TP/CP/PP/EP, which are identical to the reference,
+# so the footprint should match; the halved DP means 4 gradient-accumulation
+# micro-steps per global batch instead of 2, not more memory pressure.
+# Set num_nodes: 256 to reproduce the reference scale exactly.
+#
+# One model replica needs TP*CP*PP = 8*8*1 = 64 GPUs = 16 nodes, so num_nodes
+# must be a multiple of 16.
+# EP=64 requires world/(TP*PP) = 512/8 = 64 to be divisible by EP. 64/64 = 1. OK.
+# Other reference SBATCH settings not expressible here: --segment=2 (topology),
+# --time=04:00:00, --dependency=singleton, --exclusive.
+defaults: sft_vlm_nemotron_omni_30B_energon_tp4etp4_v2.yaml
+
+sft:
+  max_num_epochs: 1
+  max_num_steps: 5
+
+policy:
+  # Symlink -> hf-cache/hub/models--nvidia--.../snapshots/2a6837af...
+  model_name: /mnt/rl-workspace/rohitkumarj/data/models/NVIDIA-Nemotron-3.5-Super-midtrain-67B-vision-pretrained
+  # generalist.sh:187  BZ=32.  Must be divisible by DP (=8 at 128 nodes).
+  train_global_batch_size: 4   # DP=1 at 16 nodes
+  # generalist.sh:142  MBZ=1
+  train_micro_batch_size: 1
+  # generalist.sh:184  PACKING_SEQ_LEN = DECODER_SEQ_LEN = 524288
+  max_total_sequence_length: 524288
+  megatron_cfg:
+    # generalist.sh:136-138, 430-431
+    tensor_model_parallel_size: 8
+    context_parallel_size: 8
+    expert_model_parallel_size: 8    # 64 would exceed world/(TP*PP)=8
+    expert_tensor_parallel_size: 1
+    pipeline_model_parallel_size: 1
+    sequence_parallel: true
+    # --- MTP (Multi-Token Prediction) ---------------------------------------
+    # generalist.sh:157 USE_MTP=1 (default) -> lines 247-250:
+    #   --mtp-num-layers 2
+    #   --mtp-loss-scaling-factor ${MTP_LOSS_SCALING_FACTOR}   (:180 = 0.3)
+    #   --mtp-use-repeated-layer
+    #   --keep-mtp-spec-in-bf16    <-- NO NeMo-RL equivalent; see below.
+    # Wired by nemo_rl/models/megatron/setup.py:1033 _apply_mtp_config, called
+    # from setup.py:686. Per-layer mtp_{i}_loss and mtp_{i}_acceptance_rate are
+    # logged via MTPLossLoggingHelper (models/megatron/common.py:188).
+    #
+    # NOT PORTED: --keep-mtp-spec-in-bf16 has no key in _apply_mtp_config, so
+    # the MTP layers follow the run's global precision rather than being pinned
+    # to bf16 as in the reference.
+    mtp_num_layers: 2
+    mtp_loss_scaling_factor: 0.3
+    mtp_use_repeated_layer: true
+    # --- MoE load balancing --------------------------------------------------
+    # generalist.sh:399  --moe-router-load-balancing-type seq_aux_loss
+    # generalist.sh:395  --moe-aux-loss-coeff ${MOE_AUX_LOSS_COEFF}  (:202 = 1e-4)
+    # NeMo-RL's setdefault is "none" (setup.py:2283) because seq_aux_loss
+    # diverges logprobs during GRPO (see examples/configs/distillation_math.yaml:135);
+    # that is an RL concern, and the stock SFT recipe uses aux_loss
+    # (examples/configs/sft.yaml:159). SFT wants the reference behaviour.
+    #
+    # The coefficient is set explicitly even though nemotron_omni_provider.py:62
+    # already defaults to 1e-4 -- pinning it here means the value is visible in
+    # the recipe and cannot drift with the provider.
+    moe_router_load_balancing_type: seq_aux_loss
+    moe_aux_loss_coeff: 1.0e-4
+    activation_checkpointing: true
+    # generalist.sh:312
+    recompute_granularity: selective
+    recompute_modules: [ "moe" ]
+    optimizer:
+      lr: 1.0e-5        # generalist.sh:188
+      min_lr: 2.0e-6    # generalist.sh:189
+    scheduler:
+      lr_warmup_iters: 10
+  sequence_packing:
+    enabled: true
+    fuse_loss: true
+  tokenizer:
+    chat_template: default
+
+data:
+  energon:
+    watchdog_timeout_seconds: 1800
+    num_workers: 4
+    prefetch_factor: 2
+    model_family: nemotron
+    task_encoder:
+      options:
+        allow_large_videos: true
+        video_max_num_frames: 64
+        video_aug_scale_frames_up: 4
+        video_aug_scale_resolution_only: true
+      packing:
+        name: balanced_greedy_knapsack
+        buffer_size: 32   # smaller buffer: faster first batch, less worker RAM
+        options:
+          max_sequence_length: ${policy.max_total_sequence_length}
+          # get_padding() = max(tp_size*cp_size, cp_size*2) with sequence_parallel on
+          # (megatron/core/models/multimodal/context_parallel.py:46).
+          # TP=8, CP=8 -> max(64, 16) = 64.  The 30B recipe's 16 came from TP=4,CP=4.
+          # THIS MUST TRACK TP/CP - it is 16 in the smoke config, not 64.
+          sequence_length_pad_multiple: 64
+          balanced_knapsack_delta: 5
+    cookers:
+      - {name: nemotron_conversation,                       has_subflavors: {cook: conversation}}
+      - {name: nemotron_general_conversations_jsonl,        has_subflavors: {cook: general_conversations_jsonl}}
+      - {name: nemotron_general_conversations_webdataset,   has_subflavors: {cook: general_conversations_webdataset}}
+      - {name: nemotron_nano_openai_messages_jsonl,         has_subflavors: {cook: openai_messages_jsonl}}
+  train:
+    path: /mnt/rl-workspace/rohitkumarj/data/subset_cook_v2/subset.yaml
+    split: train
+    virtual_epoch_length: 487
+  validation: null
+
+logger:
+  wandb_enabled: false
+  log_dir: /mnt/rl-workspace/rohitkumarj/logs/sft-super67b-generalist-smoke
+  wandb:
+    project: nemotron-super-sft
+    name: sft-super67b-generalist-smoke-smoke
+  tensorboard:
+    log_dir: /mnt/rl-workspace/rohitkumarj/logs/tb-sft-super67b-generalist-smoke
+
+cluster:
+  # GB300 = 4 GPUs/node (NOT 8 as in the reference SLURM environment).
+  gpus_per_node: 4
+  num_nodes: 16

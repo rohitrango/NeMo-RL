@@ -379,6 +379,10 @@ class MegatronConfig(TypedDict):
     # https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/transformer/enums.py#L60
     attention_backend: NotRequired[str]
     moe_per_layer_logging: bool
+    # Coefficient on the MoE load-balancing (aux) loss. Optional: when unset,
+    # the model provider's own default applies (nemotron_omni = 1e-4).
+    # mcore accepts a list when moe_router_load_balancing_type is a list.
+    moe_aux_loss_coeff: NotRequired[float | list[float]]
     # Set to true to enable DeepEP for expert parallel communication
     # Must set moe_token_dispatcher_type to 'flex'
     # Must set moe_shared_expert_overlap to False
