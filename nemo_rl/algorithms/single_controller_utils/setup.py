@@ -746,6 +746,24 @@ def setup_single_controller(
     generation_config = policy_config["generation"]
     data_config = master_config.data
 
+    # Every nccl_reshard precondition, checked once, here, before any GPU work.
+    #
+    # This guard existed but had exactly one production caller -- grpo.setup -- which the
+    # single-controller path does not go through: run_grpo_single_controller goes straight
+    # to setup_single_controller. So on SC none of it was enforced, and a config violating
+    # e.g. colocated.enabled or enable_eplb got as far as the first refit before anything
+    # noticed. This PR makes that worse rather than better: recovery rebuilds the reshard
+    # communicators, so a bad config now has a second, later chance to fail.
+    #
+    # Deliberately after validate_single_controller_config, so the SC-specific errors a
+    # reader is more likely to have caused come first.
+    if generation_config.get("refit_transport") == "nccl_reshard":
+        from nemo_rl.weight_sync.nccl_reshard_utils import (
+            check_nccl_reshard_refit_support,
+        )
+
+        check_nccl_reshard_refit_support(master_config)
+
     if algo_cfg.val_period > 0 or algo_cfg.val_at_start or algo_cfg.val_at_end:
         raise NotImplementedError(
             "SingleController doesn't support validation now, will support "
@@ -1084,6 +1102,8 @@ def setup_single_controller(
         train_cluster=train_cluster,
         inference_cluster=inference_cluster,
         refit_buffer_size_gb=policy_config.get("refit_buffer_size_gb"),
+        # Only armed when configured; None leaves the refit path unchanged.
+        refit_timeout_s=master_config.async_rl.generation_fleet_health.refit_timeout_s,
     )
     weight_synchronizer.init_communicator()
     setup_timing_metrics.collective_init_time_s = time.perf_counter() - t0
