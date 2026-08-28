@@ -100,7 +100,10 @@ from nemo_rl.models.megatron.router_replay import (
 )
 from nemo_rl.models.policy.tq_policy import TQPolicy
 from nemo_rl.models.value.tq_value import TQValue
-from nemo_rl.utils.checkpoint import CheckpointManager
+from nemo_rl.utils.checkpoint import (
+    CheckpointManager,
+    validate_warm_start_checkpoint,
+)
 from nemo_rl.weight_sync import WeightSynchronizer, create_weight_synchronizer
 
 
@@ -560,7 +563,7 @@ def _clamp_max_num_steps(
     """Clamp max_num_steps to max_num_epochs * len(dataloader)."""
     algo_cfg = algo_config(master_config)
     max_num_epochs = algo_cfg.max_num_epochs
-    if max_num_epochs is None or max_num_epochs <= 0:
+    if max_num_epochs is None:
         return
     algo_cfg.max_num_steps = min(
         algo_cfg.max_num_steps,
@@ -807,10 +810,17 @@ def setup_single_controller(
     )
     save_state = _get_grpo_save_state(loaded_state)
     weights_path, optimizer_path = checkpointer.get_resume_paths(last_checkpoint_path)
-    value_weights_path, value_optimizer_path = checkpointer.get_resume_paths(
-        last_checkpoint_path,
-        model_component="value",
-    )
+    if is_ppo_run(master_config):
+        # Only a fresh run reads this; a resume ignores it and restores the critic
+        # from its own checkpoint, so the key can stay in the config.
+        warm_start = master_config.ppo.warm_start_value_checkpoint
+        if last_checkpoint_path is None and warm_start is not None:
+            validate_warm_start_checkpoint(warm_start)
+            print(f"🔥 Warm-starting the value model from {warm_start}")
+        value_weights_path, value_optimizer_path = checkpointer.get_resume_paths(
+            last_checkpoint_path or warm_start,
+            model_component="value",
+        )
 
     # ==========================
     # Setup Dataset & Environments
