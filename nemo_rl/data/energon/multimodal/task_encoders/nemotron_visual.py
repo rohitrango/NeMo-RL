@@ -41,6 +41,7 @@ from nemo_rl.data.energon.multimodal.task_encoders.nemotron_tokenization import 
     MM_MARKER,
     NoTrainableTokensError,
     tokenize_nemotron_conversation,
+    validate_text_content,
 )
 from nemo_rl.data.energon.multimodal.types import (
     CanonicalSFTSample,
@@ -311,11 +312,7 @@ def _render_compact_messages(
             part_type = part["type"]
             if part_type == "text":
                 text = str(part.get("text", ""))
-                if MM_MARKER in text:
-                    raise ValueError(
-                        f"Nemotron sample {sample.__key__!r} contains the "
-                        "reserved multimodal marker in text content."
-                    )
+                validate_text_content(text, sample_key=sample.__key__)
                 rendered_content.append({"type": "text", "text": text})
                 continue
             if part_type not in {"image", "video", "video_frame"}:
@@ -1103,21 +1100,22 @@ class _NemotronVisualProcessorAdapter:
         max_text_tokens = (
             self.packing_sequence_length - visual_embeddings + compact_placeholders
         )
-        image_token_id = _token_id(self.processor.tokenizer, "<image>")
         image_tokens_before_truncation = sum(
             len(message["visual_placeholder_positions"])
             for message in message_log
         )
         # Separate the two ways the placeholder count can disagree with the plan.
         # Conflating them blames truncation for samples that were never truncated.
+        #
+        # A literal "<image>" in prose no longer reaches here: placeholders are
+        # counted by splice position, and validate_text_content rejects the row
+        # at render time. So this fires only on a renderer/planner disagreement.
         if image_tokens_before_truncation != compact_placeholders:
             raise ValueError(
-                f"Nemotron sample {sample.__key__!r} tokenizes to "
-                f"{image_tokens_before_truncation} image tokens but pre-encoding "
-                f"planned {compact_placeholders} from {len(visual_plans)} visual "
-                "media items. The conversation text most likely contains a literal "
-                "'<image>' substring that is not backed by a media entry; the "
-                "tokenizer maps it to the image token."
+                f"Nemotron sample {sample.__key__!r} rendered "
+                f"{image_tokens_before_truncation} visual placeholders but "
+                f"pre-encoding planned {compact_placeholders} from "
+                f"{len(visual_plans)} visual media items."
             )
         original_length, length = _truncate_message_log(
             message_log,

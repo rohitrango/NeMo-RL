@@ -27,6 +27,27 @@ import torch
 # one.
 MM_MARKER = "\uE000"
 
+# Media tags that must never appear verbatim in source text.
+#
+# "<image>" is a real vocabulary token (id 18 for Nemotron), so prose
+# containing it tokenizes to exactly the id visual expansion emits. The row
+# then reaches the model carrying a visual placeholder with no pixels behind
+# it, and packing concatenates it into a sequence whose image-token count no
+# longer matches its image features. "<so_embedding>" is the same hazard on
+# the audio side: _expand_audio_placeholders locates sound slots by scanning
+# for its positive vocabulary id. "<video>" is not a vocabulary token, but it
+# is the placeholder convention upstream, so it marks a malformed row.
+#
+# The Megatron reference guards exactly the tag that maps to a positive id and
+# no others, which is the same rule stated the other way round. It asserts
+# SOUND_TOKEN == "<so_embedding>" is absent from every text fragment
+# (task_encoder.py:848, llava_model.py:63), but never checks "<image>",
+# because images splice DEFAULT_IMAGE_TOKEN_INDEX = -200 (llava_model.py:59) --
+# a negative sentinel that tokenizing prose cannot produce, so its value scans
+# cannot collide. NeMo-RL splices the positive vocabulary id for images too,
+# so it must reject where the reference is immune by construction.
+RESERVED_MEDIA_TAGS = ("<image>", "<video>", "<so_embedding>")
+
 IGNORE_INDEX = -100
 
 _MESSAGE_START_TOKEN_ID = 10
@@ -165,6 +186,31 @@ def _validate_nemotron6_tokenizer(tokenizer: Any) -> None:
             raise ValueError(
                 f"Nemotron 6 tokenizer IDs {list(token_ids)} decode to "
                 f"{actual!r}, expected {expected!r}."
+            )
+
+
+def validate_text_content(text: str, *, sample_key: Any) -> None:
+    """Reject source text that would be mistaken for a media placeholder.
+
+    Called on every text content part before rendering, so it sees what the
+    conversation actually said rather than the placeholders the renderer
+    substitutes for attached media.
+
+    Raises:
+        ValueError: The text carries the reserved marker or a literal media tag.
+    """
+    if MM_MARKER in text:
+        raise ValueError(
+            f"Nemotron sample {sample_key!r} contains the reserved multimodal "
+            "marker in text content."
+        )
+    for tag in RESERVED_MEDIA_TAGS:
+        if tag in text:
+            raise ValueError(
+                f"Nemotron sample {sample_key!r} contains a literal {tag!r} in "
+                "text content. Media placeholders may only come from attached "
+                "media, because packing cannot reconcile a placeholder that "
+                "has no media behind it."
             )
 
 
@@ -426,6 +472,8 @@ def tokenize_nemotron_conversation(
 __all__ = [
     "IGNORE_INDEX",
     "MM_MARKER",
+    "RESERVED_MEDIA_TAGS",
     "NoTrainableTokensError",
     "tokenize_nemotron_conversation",
+    "validate_text_content",
 ]
