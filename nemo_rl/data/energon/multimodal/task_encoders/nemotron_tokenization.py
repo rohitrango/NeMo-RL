@@ -29,14 +29,20 @@ MM_MARKER = "\uE000"
 
 # Media tags that must never appear verbatim in source text.
 #
-# "<image>" is a real vocabulary token (id 18 for Nemotron), so prose
-# containing it tokenizes to exactly the id visual expansion emits. The row
-# then reaches the model carrying a visual placeholder with no pixels behind
-# it, and packing concatenates it into a sequence whose image-token count no
-# longer matches its image features. "<so_embedding>" is the same hazard on
-# the audio side: _expand_audio_placeholders locates sound slots by scanning
-# for its positive vocabulary id. "<video>" is not a vocabulary token, but it
-# is the placeholder convention upstream, so it marks a malformed row.
+# The rule is "tags that tokenize to a single positive vocabulary id", because
+# only those can forge a placeholder. Measured on the Nemotron tokenizer:
+# "<image>" -> [18] and "<so_embedding>" -> [27], but "<video>" -> [1060,
+# 24073, 1062].
+#
+# "<image>" is a real vocabulary token, so prose containing it tokenizes to
+# exactly the id visual expansion emits. The row then reaches the model
+# carrying a visual placeholder with no pixels behind it, and packing
+# concatenates it into a sequence whose image-token count no longer matches its
+# image features. "<so_embedding>" is the same hazard on the audio side:
+# _expand_audio_placeholders locates sound slots by scanning for its positive
+# vocabulary id. "<video>" is deliberately absent: three ordinary tokens cannot
+# collide with a placeholder scan, so rejecting it would only discard rows that
+# mention the HTML tag in prose.
 #
 # The Megatron reference guards exactly the tag that maps to a positive id and
 # no others, which is the same rule stated the other way round. It asserts
@@ -46,7 +52,7 @@ MM_MARKER = "\uE000"
 # a negative sentinel that tokenizing prose cannot produce, so its value scans
 # cannot collide. NeMo-RL splices the positive vocabulary id for images too,
 # so it must reject where the reference is immune by construction.
-RESERVED_MEDIA_TAGS = ("<image>", "<video>", "<so_embedding>")
+RESERVED_MEDIA_TAGS = ("<image>", "<so_embedding>")
 
 IGNORE_INDEX = -100
 
