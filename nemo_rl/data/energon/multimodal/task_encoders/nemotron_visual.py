@@ -50,6 +50,7 @@ from nemo_rl.data.energon.multimodal.types import (
 )
 from nemo_rl.data.multimodal_utils import (
     PackedTensor,
+    configured_media_preprocessing_mode,
     resolve_to_image,
 )
 
@@ -1291,10 +1292,13 @@ class _NemotronVisualProcessorAdapter:
 
         pixel_values = torch.stack(pixels)
         packed_inputs = {
+            # This is where the model's images actually enter the packing
+            # pipeline, so the configured mode has to be applied here -- not
+            # only on the processor path in nemo_rl/data/processors.py.
             "pixel_values": PackedTensor(
                 pixel_values,
                 dim_to_pack=0,
-                pad_to_max_shape=True,
+                preprocessing_mode=configured_media_preprocessing_mode(),
             ),
             "imgs_sizes": PackedTensor(
                 torch.tensor(sizes, dtype=torch.int32),

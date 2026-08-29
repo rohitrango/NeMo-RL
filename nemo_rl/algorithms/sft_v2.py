@@ -316,6 +316,13 @@ class SFTSingleControllerActor:
                 metrics[key] = np.sum(values).item()
         for key, value in train_results.get("moe_metrics", {}).items():
             metrics[f"moe/{key}"] = value
+        # MTP metrics are collected by the worker (_collect_mtp_metrics) and
+        # aggregated by lm_policy, but SFTv2 was the only algorithm that never
+        # drained them here, so mtp_{i}_loss / mtp_{i}_acceptance_rate never
+        # reached the logger. Mirrors grpo.py and
+        # single_controller_utils.utils, which namespace both moe/ and mtp/.
+        for key, value in train_results.get("mtp_metrics", {}).items():
+            metrics[f"mtp/{key}"] = value
         for key in ("total_flops", "num_ranks", "theoretical_tflops"):
             if key in train_results:
                 metrics[key] = train_results[key]
@@ -533,7 +540,15 @@ def setup_sft_v2(
         cluster=cluster,
         config=master_config.policy,
         tokenizer=tokenizer,
-        processor=processor,
+        # Do NOT pass the processor object: it is a Ray actor constructor kwarg,
+        # so it gets pickled into every worker. For trust_remote_code models its
+        # class lives in transformers_modules.<repo>.<mod>, generated at runtime,
+        # and workers cannot resolve that name at unpickle time:
+        #   ModuleNotFoundError: No module named 'transformers_modules...'
+        # SFTMegatronPolicyWorker rebuilds it from self.cfg["tokenizer"] instead
+        # (see sft_worker.setup_sft_dataloader), which is what every SLURM/SPMD
+        # rank does anyway. The config dict pickles fine; the processor does not.
+        processor=None,
         weights_path=weights_path,
         optimizer_path=optimizer_path,
         init_optimizer=True,

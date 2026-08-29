@@ -482,8 +482,28 @@ def _build_energon_sft_loader(
             task_encoder=task_encoder,
         )
 
+    # FileStoreCachePool defaults to max_cache_size_gbytes=1024 (1 TB) and
+    # num_workers=8. On a node whose whole memory cgroup is 900Gi that default
+    # is effectively unbounded, and the cache-worker IPC shows up as Shmem
+    # charged to the cgroup. The reference bounds it explicitly
+    # (energon-megatron-lm examples/multimodal/iter_data.py:
+    #  FileStoreCachePool(num_workers=8, max_cache_size_gbytes=8, method="raw")).
+    # Let the recipe set both, and bound the default instead of inheriting 1 TB.
+    def _loader_opt(name, default=None):
+        if isinstance(loader_config, dict):
+            return loader_config.get(name, default)
+        return getattr(loader_config, name, default)
+
+    _cache_kwargs = {"method": "raw"}
+    _cache_gb = _loader_opt("cache_pool_max_gbytes", None)
+    if _cache_gb is not None:
+        _cache_kwargs["max_cache_size_gbytes"] = _cache_gb
+    _cache_workers = _loader_opt("cache_pool_num_workers", 8)
+    if _cache_workers is not None:
+        _cache_kwargs["num_workers"] = _cache_workers
+
     cache_pool = (
-        FileStoreCachePool(method="raw")
+        FileStoreCachePool(**_cache_kwargs)
         if any(cooker.need_cache for cooker in task_encoder.cookers)
         else None
     )

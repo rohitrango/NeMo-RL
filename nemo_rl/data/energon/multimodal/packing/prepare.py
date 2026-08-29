@@ -273,7 +273,7 @@ def prepare_energon_packed_batch(
                 PackedTensor(
                     [materialized],
                     merged.dim_to_pack,
-                    pad_to_max_shape=merged.pad_to_max_shape,
+                    preprocessing_mode=merged.preprocessing_mode,
                 )
             )
         for key in media_rows.keys() - media_keys:

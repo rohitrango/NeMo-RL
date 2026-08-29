@@ -460,6 +460,7 @@ def vlm_hf_data_processor(
     from nemo_rl.data.datasets.response_datasets.refcoco import format_refcoco_dataset
     from nemo_rl.data.multimodal_utils import (
         PackedTensor,
+        get_preprocessing_mode,
         get_dim_to_pack_along,
         get_multimodal_default_settings_from_processor,
         get_multimodal_keys_from_processor,
@@ -641,7 +642,7 @@ def vlm_hf_data_processor(
             user_message[key] = PackedTensor(
                 message[key],
                 dim_to_pack=get_dim_to_pack_along(processor, key),
-                pad_to_max_shape=uses_placeholder and key == "pixel_values",
+                preprocessing_mode=get_preprocessing_mode(processor, key),
             )
 
     # specifically for gemma, we need to add token_type_ids to the user message as a sequence-type value

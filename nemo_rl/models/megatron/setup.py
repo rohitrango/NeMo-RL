@@ -1105,6 +1105,45 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
                 "Valid options are 'full' or 'selective'."
             )
 
+    # Vision-backbone recomputation. Only multimodal providers (e.g.
+    # NemotronOmniProvider) define these fields, so each key is applied only
+    # when the recipe sets it -- same rule as moe_aux_loss_coeff above: an
+    # unconditional default here would override provider defaults for every
+    # model that never asked for vision recompute.
+    # Reference (generalist.sh:313):
+    #   --recompute-vision --recompute-method-vision block
+    #   --recompute-granularity-vision full --recompute-vision-num-layers 30
+    for _key in (
+        "recompute_vision",
+        "vision_recompute_granularity",
+        "vision_recompute_modules",
+        "vision_recompute_method",
+        "vision_recompute_num_layers",
+    ):
+        if _key in config["megatron_cfg"]:
+            if not hasattr(model_cfg, _key):
+                raise ValueError(
+                    f"megatron_cfg.{_key} is set but provider "
+                    f"{type(model_cfg).__name__} has no such field; vision "
+                    "recompute is only available on multimodal providers."
+                )
+            setattr(model_cfg, _key, config["megatron_cfg"][_key])
+
+    # RADIO backbone train/eval mode. The provider forces eval by default
+    # (nemotron_omni_provider.py:88) and _build_vision_config raises
+    # "Vision recompute requires radio_force_eval_mode=False." -- so enabling
+    # recompute_vision requires putting the backbone into train mode.
+    # The reference passes --radio-force-cpe-eval-mode but NOT
+    # --radio-force-eval-mode: backbone trains, CPE stays in eval.
+    for _key in ("radio_force_eval_mode", "radio_force_cpe_eval_mode"):
+        if _key in config["megatron_cfg"]:
+            if not hasattr(model_cfg, _key):
+                raise ValueError(
+                    f"megatron_cfg.{_key} is set but provider "
+                    f"{type(model_cfg).__name__} has no such field."
+                )
+            setattr(model_cfg, _key, config["megatron_cfg"][_key])
+
     # Activation function validation
     if not model_cfg.gated_linear_unit:
         assert model_cfg.activation_func is not None, (

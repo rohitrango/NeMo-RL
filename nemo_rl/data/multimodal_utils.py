@@ -140,6 +140,7 @@ class PackedTensor:
         dim_to_pack: int,
         *,
         pad_to_max_shape: bool = False,
+        preprocessing_mode: Optional[str] = None,
         _row_offsets: Optional[list[int]] = None,
         _segment_indices: Optional[list[int]] = None,
         _segment_provenance: Optional[list[bytes]] = None,
@@ -168,7 +169,22 @@ class PackedTensor:
                 f"Unsupported type for input tensors to PackedTensor: {type(tensors)}"
             )
         self.dim_to_pack = dim_to_pack
-        self.pad_to_max_shape = pad_to_max_shape
+        # ``pad_to_max_shape`` is the legacy boolean spelling of
+        # ``preprocessing_mode="pad_to_max_shape"``; keep accepting it so
+        # external callers and checkpoints do not break.
+        if preprocessing_mode is None and pad_to_max_shape:
+            preprocessing_mode = "pad_to_max_shape"
+        if preprocessing_mode not in (
+            None,
+            "pad_to_max_shape",
+            "patchify",
+        ):
+            raise ValueError(f"Unknown preprocessing_mode: {preprocessing_mode!r}")
+        self.preprocessing_mode = preprocessing_mode
+        self.pad_to_max_shape = preprocessing_mode in (
+            "pad_to_max_shape",
+            "patchify",
+        )
         if (_row_offsets is None) != (_segment_indices is None):
             raise ValueError(
                 "_row_offsets and _segment_indices must either both be set or both be None"
@@ -259,7 +275,7 @@ class PackedTensor:
             copied = PackedTensor(
                 [deepcopy(item, memo) for item in self.tensors],
                 self.dim_to_pack,
-                pad_to_max_shape=self.pad_to_max_shape,
+                preprocessing_mode=self.preprocessing_mode,
             )
         else:
             copied = PackedTensor(
@@ -269,7 +285,7 @@ class PackedTensor:
                     else [deepcopy(item, memo) for item in self.tensors]
                 ),
                 self.dim_to_pack,
-                pad_to_max_shape=self.pad_to_max_shape,
+                preprocessing_mode=self.preprocessing_mode,
                 _row_offsets=(
                     list(self._row_offsets) if self._row_offsets is not None else None
                 ),
@@ -307,6 +323,48 @@ class PackedTensor:
         # feature sequences. Concatenation already permits the packing
         # dimension to vary; when explicitly requested, pad every other
         # dimension to the largest size in the batch.
+        mode = self.preprocessing_mode
+        if self.pad_to_max_shape and configured_media_preprocessing_mode() == (
+            "patchify"
+        ):
+            mode = "patchify"
+
+        # patchify: convert each entry at its NATIVE size to RADIO's packed
+        # patch layout. Every entry yields the same feature width (C*P*P), so
+        # blocks concatenate along dim 0 with no padding. The model's
+        # _patchify_dynamic_images accepts this [total_patches, C*P*P] form
+        # directly (and would otherwise crop the padding back off anyway).
+        if mode == "patchify":
+            _pf_dim = _media_patch_dim()
+            _pf_feat = 3 * _pf_dim * _pf_dim
+            if all(
+                _t.ndim == 2 and _t.shape[-1] == _pf_feat for _t in non_none_tensors
+            ):
+                # Already patchified by an earlier as_tensor() call: prepare.py
+                # materializes, re-wraps, then concatenates again.
+                return torch.cat(non_none_tensors, dim=0).to(device)
+            _pf_out = []
+            for _pf_t in non_none_tensors:
+                if _pf_t.ndim == 3:
+                    _pf_t = _pf_t.unsqueeze(0)
+                if _pf_t.ndim != 4:
+                    raise ValueError(
+                        "patchify expects [n,C,H,W] or [C,H,W]; got shape "
+                        f"{tuple(_pf_t.shape)}"
+                    )
+                _n, _c, _h, _w = _pf_t.shape
+                if _h % _pf_dim or _w % _pf_dim:
+                    raise ValueError(
+                        f"image {(_h, _w)} not divisible by patch_dim={_pf_dim}"
+                    )
+                _r, _col = _h // _pf_dim, _w // _pf_dim
+                _pf_out.append(
+                    _pf_t.reshape(_n, _c, _r, _pf_dim, _col, _pf_dim)
+                    .permute(0, 2, 4, 1, 3, 5)
+                    .reshape(_n * _r * _col, _c * _pf_dim * _pf_dim)
+                )
+            return torch.cat(_pf_out, dim=0).to(device)
+
         if self.pad_to_max_shape:
             ranks = {tensor.ndim for tensor in non_none_tensors}
             if len(ranks) != 1:
@@ -405,7 +463,7 @@ class PackedTensor:
                 else list(self.tensors)
             ),
             self.dim_to_pack,
-            pad_to_max_shape=self.pad_to_max_shape,
+            preprocessing_mode=self.preprocessing_mode,
             _row_offsets=(
                 list(self._row_offsets) if self._row_offsets is not None else None
             ),
@@ -432,7 +490,7 @@ class PackedTensor:
             return PackedTensor(
                 tensors,
                 self.dim_to_pack,
-                pad_to_max_shape=self.pad_to_max_shape,
+                preprocessing_mode=self.preprocessing_mode,
             )
 
         physical_remap: dict[int, int] = {}
@@ -456,7 +514,7 @@ class PackedTensor:
         return PackedTensor(
             tensors,
             self.dim_to_pack,
-            pad_to_max_shape=self.pad_to_max_shape,
+            preprocessing_mode=self.preprocessing_mode,
             _row_offsets=row_offsets,
             _segment_indices=segment_indices,
             _segment_provenance=(
@@ -478,7 +536,7 @@ class PackedTensor:
             return cls(
                 [],
                 other.dim_to_pack,
-                pad_to_max_shape=other.pad_to_max_shape,
+                preprocessing_mode=other.preprocessing_mode,
                 _row_offsets=[0] * (num_rows + 1),
                 _segment_indices=[],
                 _segment_provenance=[],
@@ -487,7 +545,7 @@ class PackedTensor:
             return cls(
                 [],
                 other.dim_to_pack,
-                pad_to_max_shape=other.pad_to_max_shape,
+                preprocessing_mode=other.preprocessing_mode,
                 _row_offsets=[0],
                 _segment_indices=[],
                 _segment_provenance=None,
@@ -495,7 +553,7 @@ class PackedTensor:
         return cls(
             [None] * num_rows,
             other.dim_to_pack,
-            pad_to_max_shape=other.pad_to_max_shape,
+            preprocessing_mode=other.preprocessing_mode,
         )
 
     @classmethod
@@ -740,6 +798,50 @@ def get_dim_to_pack_along(processor, key: str) -> int:
     return 0
 
 
+def _media_patch_dim() -> int:
+    """Patch size for patchify mode (config.patch_size for RADIO)."""
+    import os
+
+    return int(os.environ.get("NRL_MEDIA_PATCH_DIM", "16"))
+
+
+def configured_media_preprocessing_mode() -> Optional[str]:
+    """Return the globally configured image preprocessing mode.
+
+    Config-driven via ``NRL_MEDIA_PREPROCESSING_MODE`` (set it under
+    ``policy.megatron_cfg.env_vars`` in the recipe).
+
+    Values: unset/``pad_to_max_shape`` (default, legacy behaviour),
+    ``patchify``, or ``none`` to disable.
+
+    The energon task encoders build their ``pixel_values`` PackedTensor without
+    a processor in hand, so they read the mode directly through this helper
+    rather than through :func:`get_preprocessing_mode`.
+    """
+    import os
+
+    mode = os.environ.get("NRL_MEDIA_PREPROCESSING_MODE", "pad_to_max_shape").strip()
+    if mode in ("", "none", "None"):
+        return None
+    if mode not in ("pad_to_max_shape", "patchify"):
+        raise ValueError(
+            f"NRL_MEDIA_PREPROCESSING_MODE={mode!r} is not one of "
+            "pad_to_max_shape | patchify | none"
+        )
+    return mode
+
+
+def get_preprocessing_mode(processor: Any, key: str) -> Optional[str]:
+    """Return the media preprocessing mode for one processor input key.
+
+    Only ``pixel_values`` on placeholder-style processors is affected; every
+    other key concatenates plainly, exactly as before.
+    """
+    if not (uses_image_placeholder(processor) and key == "pixel_values"):
+        return None
+    return configured_media_preprocessing_mode()
+
+
 def get_pad_to_max_shape(processor: Any, key: str) -> bool:
     """Return whether a processor input must pad non-packing dimensions."""
     return uses_image_placeholder(processor) and key == "pixel_values"
@@ -801,7 +903,7 @@ def extract_multimodal_model_inputs(
         extracted[key] = PackedTensor(
             value,
             dim_to_pack=get_dim_to_pack_along(processor, key),
-            pad_to_max_shape=get_pad_to_max_shape(processor, key),
+            preprocessing_mode=get_preprocessing_mode(processor, key),
         )
 
     for key in ("token_type_ids", "mm_token_type_ids"):
