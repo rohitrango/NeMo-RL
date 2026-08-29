@@ -1550,40 +1550,6 @@ class MegatronPolicyWorkerImpl(
                 state["mb_losses"].append(m["loss"])
 
     @wrap_with_nvtx_name("megatron_policy_worker/finish_train_step")
-    def _rankmem_log(self) -> None:
-        """Per-iteration anon/shmem/RSS on EVERY rank (not just the DP leader)."""
-        import os as _rm_os
-
-        if _rm_os.environ.get("NRL_RANKMEM") != "1":
-            return
-        try:
-            self._rm_step = getattr(self, "_rm_step", 0) + 1
-            _pg = _rm_os.sysconf("SC_PAGE_SIZE")
-            _rss = int(open("/proc/self/statm").read().split()[1]) * _pg / 2**30
-            _anon = _shm = _file = 0.0
-            with open("/sys/fs/cgroup/memory.stat") as _f:
-                for _l in _f:
-                    _k, _, _v = _l.partition(" ")
-                    if _k == "anon":
-                        _anon = int(_v) / 2**30
-                    elif _k == "shmem":
-                        _shm = int(_v) / 2**30
-                    elif _k == "file":
-                        _file = int(_v) / 2**30
-            import torch as _rm_t
-
-            _dev = _rm_t.cuda.memory_allocated() / 2**30
-            _rank = _rm_t.distributed.get_rank() if _rm_t.distributed.is_initialized() else -1
-            print(
-                f"[RANKMEM] step={self._rm_step} rank={_rank} "
-                f"host={_rm_os.uname().nodename[-5:]} rss={_rss:.2f}Gi "
-                f"dev={_dev:.2f}Gi node_anon={_anon:.0f}Gi node_shmem={_shm:.0f}Gi "
-                f"node_file={_file:.0f}Gi",
-                flush=True,
-            )
-        except Exception as _e:  # noqa: BLE001
-            print(f"[RANKMEM] failed: {_e}", flush=True)
-
     def finish_train_step(self) -> dict[str, Any]:
         state = self._assert_step_open()
         try:
@@ -1843,7 +1809,6 @@ class MegatronPolicyWorkerImpl(
         # rank-conditional block, exactly like the moe_metrics call above.
         self._collect_mtp_metrics(metrics, state["total_num_microbatches"], None)
 
-        self._rankmem_log()
         self._train_step_state = None
         return metrics
 
@@ -2217,28 +2182,6 @@ class MegatronPolicyWorkerImpl(
                 mtp_detach_heads=False). Logged under "mtp_metrics" as "grad_norm".
         """
         mtp_num_layers = getattr(self.model.config, "mtp_num_layers", None)
-        # --- MTPDIAG: which link in the chain is empty? ---
-        try:
-            import os as _md_os
-
-            if _md_os.environ.get("NRL_MTPDIAG") == "1":
-                from megatron.core.transformer.multi_token_prediction import (
-                    MTPLossLoggingHelper as _md_H,
-                )
-
-                _md_t = getattr(_md_H, "tracker", None)
-                _md_keys = sorted(_md_t.keys()) if _md_t else None
-                _md_has = bool(_md_t) and ("loss_values" in _md_t)
-                _md_lv = _md_t.get("loss_values") if _md_has else None
-                print(
-                    "[MTPDIAG] mtp_num_layers=%s tracker_keys=%s has_loss_values=%s loss=%s"
-                    % (mtp_num_layers, _md_keys, _md_has,
-                       (_md_lv.tolist() if _md_lv is not None else None)),
-                    flush=True,
-                )
-        except Exception as _md_e:  # noqa: BLE001
-            print(f"[MTPDIAG] failed: {_md_e}", flush=True)
-        # --- end MTPDIAG ---
         if mtp_num_layers is not None and mtp_num_layers > 0:
             from nemo_rl.models.megatron.common import get_mtp_metrics
 

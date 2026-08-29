@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import hashlib
+import os as _ls_os
 import time
 from dataclasses import replace
 from typing import Any, Mapping, Optional
@@ -41,11 +42,8 @@ from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.models.policy.packing import ENERGON_PACKING_META_KEY
 from nemo_rl.models.policy.utils import get_runtime_env_for_policy_worker
 from nemo_rl.models.policy.workers.megatron_policy_worker import (
-
     MegatronPolicyWorkerImpl,
 )
-
-
 
 
 @ray.remote(
@@ -55,49 +53,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
     """Megatron policy worker with an Energon loader on each DP owner."""
 
     def __init__(self, *args: Any, processor: Any = None, **kwargs: Any) -> None:
-        # --- BEGIN MEMRAY_ALL (diagnostic: tracks EVERY rank) ---
-        import os as _mr_os
-
-        self._mr_tracker = None
-        self._mr_stopped = False
-        self._mr_steps = 0
-        if _mr_os.environ.get("NRL_MEMRAY") == "1":
-            try:
-                import memray as _mr
-
-                _mr_dir = "/mnt/rl-workspace/rohitkumarj/rssprof/allranks"
-                _mr_os.makedirs(_mr_dir, exist_ok=True)
-                _mr_path = f"{_mr_dir}/memray_pid{_mr_os.getpid()}_{_mr_os.uname().nodename[-5:]}.bin"
-                self._mr_tracker = _mr.Tracker(
-                    _mr_path, native_traces=False, follow_fork=False
-                )
-                self._mr_tracker.__enter__()
-                print(f"[MEMRAY_ALL] started -> {_mr_path}", flush=True)
-
-                # Stop on a timer: non-leader ranks never call commit_sft_batch,
-                # so a per-step hook would only fire on the DP leader. A timer
-                # gives every rank a clean __exit__ and a flushed file.
-                import threading as _mr_th
-
-                def _mr_timer_stop() -> None:
-                    import time as _mr_time
-
-                    _mr_time.sleep(
-                        float(_mr_os.environ.get("NRL_MEMRAY_SECONDS", "600"))
-                    )
-                    try:
-                        if self._mr_tracker is not None and not self._mr_stopped:
-                            self._mr_tracker.__exit__(None, None, None)
-                            self._mr_stopped = True
-                            self._mr_tracker = None
-                            print("[MEMRAY_ALL] STOPPED (timer); flushed", flush=True)
-                    except Exception as _e:  # noqa: BLE001
-                        print(f"[MEMRAY_ALL] timer stop failed: {_e}", flush=True)
-
-                _mr_th.Thread(target=_mr_timer_stop, daemon=True).start()
-            except Exception as _mr_e:  # noqa: BLE001
-                print(f"[MEMRAY_ALL] start failed: {_mr_e}", flush=True)
-                self._mr_tracker = None
         self._sft_processor = processor
         self._sft_loader: Optional[EnergonSFTDataLoader] = None
         self._sft_loader_iterator: Any = None
@@ -215,6 +170,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
 
         started = time.monotonic()
         batch = next(self._sft_loader_iterator)
+        _ls_iter = time.monotonic()
         packed_schema_version = batch.get("packed_schema_version")
         energon_packed = packed_schema_version is not None
         if (
@@ -242,6 +198,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
                 ),
             )
         load_seconds = time.monotonic() - started
+        _ls_prep = time.monotonic()
         batch_size = prepared.size
         source_ids = self._source_ids(prepared, batch_size=batch_size)
         partition_id = (
@@ -249,28 +206,8 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         )
         sample_ids = [f"{partition_id}_row{row}" for row in range(batch_size)]
         fields = local_batch_to_tensordict(prepared, batch_size=batch_size)
+        _ls_td = time.monotonic()
 
-        # --- BEGIN LEAKPROBE (diagnostic; remove after investigation) ---
-        import weakref as _lp_wr
-
-        self._lp_fields_ref = None
-        self._lp_tensor_ref = None
-        self._lp_tensor_gib = 0.0
-        try:
-            self._lp_fields_ref = _lp_wr.ref(fields)
-            _lp_big = None
-            for _lp_k in list(fields.keys()):
-                _lp_v = fields.get(_lp_k)
-                if hasattr(_lp_v, "nelement") and hasattr(_lp_v, "element_size"):
-                    _lp_nb = _lp_v.element_size() * _lp_v.nelement()
-                    if _lp_big is None or _lp_nb > _lp_big[1]:
-                        _lp_big = (_lp_v, _lp_nb)
-            if _lp_big is not None:
-                self._lp_tensor_ref = _lp_wr.ref(_lp_big[0])
-                self._lp_tensor_gib = _lp_big[1] / 2**30
-        except Exception as _lp_e:  # noqa: BLE001
-            print(f"[LEAKPROBE] weakref setup failed: {_lp_e}", flush=True)
-        # --- END LEAKPROBE ---
         field_names = list(fields.keys())
         client = self._require_dp_client()
         client.register_partition(
@@ -286,6 +223,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             fields=fields,
             tags=tags,
         )
+        _ls_pub = time.monotonic()
 
         lengths_tensor = prepared["input_lengths"]
         lengths = tuple(int(value) for value in lengths_tensor.tolist())
@@ -320,25 +258,32 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             load_seconds=load_seconds,
             valid_tokens=valid_tokens,
         )
+        # --- LOADSPLIT: where does the per-step loader latency actually go? ---
+        # loader_wait is the controller's blocking ray.get over this whole
+        # method, but load_seconds above stops after prepare -- so the publish
+        # and envelope-construction cost is invisible in the current metrics.
+        # Opt in with NRL_LOADSPLIT=1.
+        if _ls_os.environ.get("NRL_LOADSPLIT") == "1":
+            _ls_end = time.monotonic()
+            print(
+                "[LOADSPLIT] batch=%d total=%.3f iter=%.3f prepare=%.3f "
+                "tensordict=%.3f publish=%.3f tail=%.3f rows=%d"
+                % (
+                    self._sft_next_batch_index,
+                    _ls_end - started,
+                    _ls_iter - started,
+                    _ls_prep - _ls_iter,
+                    _ls_td - _ls_prep,
+                    _ls_pub - _ls_td,
+                    _ls_end - _ls_pub,
+                    batch_size,
+                ),
+                flush=True,
+            )
+
         self._sft_active_envelope = envelope
         self._sft_next_batch_index += 1
         return envelope
-
-    def _mr_maybe_stop(self) -> None:
-        """Stop the all-rank memray tracker after NRL_MEMRAY_STEPS steps."""
-        import os as _mr_os2
-
-        if getattr(self, "_mr_tracker", None) is None or self._mr_stopped:
-            return
-        self._mr_steps += 1
-        if self._mr_steps >= int(_mr_os2.environ.get("NRL_MEMRAY_STEPS", "10")):
-            try:
-                self._mr_tracker.__exit__(None, None, None)
-                self._mr_stopped = True
-                self._mr_tracker = None
-                print(f"[MEMRAY_ALL] STOPPED after {self._mr_steps} steps", flush=True)
-            except Exception as _e:  # noqa: BLE001
-                print(f"[MEMRAY_ALL] stop failed: {_e}", flush=True)
 
     def commit_sft_batch(self) -> None:
         """Release the active process-local batch after a successful step."""
@@ -348,135 +293,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             partition_id=envelope.meta.partition_id,
         )
         self._sft_active_envelope = None
-
-        # --- BEGIN MEMRAY stop ---
-        try:
-            import os as _mr_os2
-
-            _mr_n = int(_mr_os2.environ.get("NRL_MEMRAY_STEPS", "10"))
-            if (
-                getattr(self, "_mr_tracker", None) is not None
-                and not self._mr_stopped
-                and self._sft_next_batch_index >= _mr_n
-            ):
-                self._mr_tracker.__exit__(None, None, None)
-                self._mr_stopped = True
-                self._mr_tracker = None
-                print(
-                    f"[MEMRAY] tracking STOPPED after {self._sft_next_batch_index} "
-                    "batches; file flushed",
-                    flush=True,
-                )
-        except Exception as _mr_e2:  # noqa: BLE001
-            print(f"[MEMRAY] stop failed: {_mr_e2}", flush=True)
-        # --- END MEMRAY stop ---
-
-        # --- BEGIN LEAKPROBE ---
-        try:
-            import gc as _lp_gc
-            import os as _lp_os
-
-            _lp_pg = _lp_os.sysconf("SC_PAGE_SIZE")
-
-            def _lp_rss():
-                return int(open("/proc/self/statm").read().split()[1]) * _lp_pg / 2**30
-
-            _lp_r0 = _lp_rss()
-            _lp_n = _lp_gc.collect()
-            _lp_r1 = _lp_rss()
-            _lp_fa = (
-                self._lp_fields_ref() is not None if self._lp_fields_ref else None
-            )
-            _lp_ta = (
-                self._lp_tensor_ref() is not None if self._lp_tensor_ref else None
-            )
-            # --- MALLOCTRIM: is the growth glibc arena fragmentation? ---
-            # If RSS drops after malloc_trim(0), the memory was already free()d
-            # but retained in glibc's per-thread arenas rather than returned to
-            # the OS. That is fragmentation, not a leak, and the fix is
-            # MALLOC_ARENA_MAX / periodic trim -- not chasing references.
-            try:
-                import ctypes as _mt_ctypes
-
-                _mt_libc = _mt_ctypes.CDLL("libc.so.6")
-                _mt_pg = _lp_os.sysconf("SC_PAGE_SIZE")
-
-                def _mt_rss():
-                    return (
-                        int(open("/proc/self/statm").read().split()[1]) * _mt_pg / 2**30
-                    )
-
-                _mt_before = _mt_rss()
-                _mt_rc = _mt_libc.malloc_trim(0)
-                _mt_after = _mt_rss()
-                _mt_thr = len(_lp_os.listdir("/proc/self/task"))
-                print(
-                    f"[MALLOCTRIM] batch={self._sft_next_batch_index} "
-                    f"rss_before={_mt_before:.2f}Gi rss_after={_mt_after:.2f}Gi "
-                    f"RECLAIMED={_mt_before - _mt_after:.2f}Gi rc={_mt_rc} "
-                    f"threads={_mt_thr} "
-                    f"arena_max={_lp_os.environ.get('MALLOC_ARENA_MAX', 'unset')}",
-                    flush=True,
-                )
-            except Exception as _mt_e:  # noqa: BLE001
-                print(f"[MALLOCTRIM] failed: {_mt_e}", flush=True)
-
-            print(
-                f"[LEAKPROBE] batch={self._sft_next_batch_index} "
-                f"gc_collected={_lp_n} fields_alive={_lp_fa} tensor_alive={_lp_ta} "
-                f"probe_tensor={self._lp_tensor_gib:.2f}Gi "
-                f"rss_before={_lp_r0:.1f}Gi rss_after={_lp_r1:.1f}Gi "
-                f"freed={_lp_r0 - _lp_r1:.2f}Gi",
-                flush=True,
-            )
-            # --- Probe A: torch device + PINNED-HOST allocator accounting ---
-            import torch as _lp_t
-
-            _lp_dev_a = _lp_t.cuda.memory_allocated() / 2**30
-            _lp_dev_r = _lp_t.cuda.memory_reserved() / 2**30
-            try:
-                _lp_hs = _lp_t.cuda.host_memory_stats()
-                _lp_ha = _lp_hs.get("allocated_bytes.all.current", 0) / 2**30
-                _lp_hr = _lp_hs.get("reserved_bytes.all.current", 0) / 2**30
-                _lp_hp = _lp_hs.get("reserved_bytes.all.peak", 0) / 2**30
-                _lp_hn = _lp_hs.get("num_host_alloc", -1)
-            except Exception as _lp_he:  # noqa: BLE001
-                _lp_ha = _lp_hr = _lp_hp = -1.0
-                _lp_hn = -1
-                print(f"[TORCHMEM] host_memory_stats failed: {_lp_he}", flush=True)
-            print(
-                f"[TORCHMEM] batch={self._sft_next_batch_index} "
-                f"dev_alloc={_lp_dev_a:.2f}Gi dev_resv={_lp_dev_r:.2f}Gi "
-                f"host_alloc={_lp_ha:.2f}Gi host_resv={_lp_hr:.2f}Gi "
-                f"host_peak={_lp_hp:.2f}Gi host_nalloc={_lp_hn}",
-                flush=True,
-            )
-
-            # --- Probe B: device allocation history + periodic snapshot ---
-            _lp_snapdir = "/mnt/rl-workspace/rohitkumarj/rssprof"
-            _lp_bi = self._sft_next_batch_index
-            try:
-                if _lp_bi == 1:
-                    _lp_t.cuda.memory._record_memory_history(max_entries=100_000)
-                    print("[TORCHMEM] _record_memory_history STARTED", flush=True)
-                elif _lp_bi % 5 == 0:
-                    _lp_f = f"{_lp_snapdir}/rank0_batch{_lp_bi}.pickle"
-                    _lp_t.cuda.memory._dump_snapshot(_lp_f)
-                    print(f"[TORCHMEM] snapshot -> {_lp_f}", flush=True)
-            except Exception as _lp_se:  # noqa: BLE001
-                print(f"[TORCHMEM] snapshot failed: {_lp_se}", flush=True)
-
-            if _lp_fa:
-                _lp_obj = self._lp_fields_ref()
-                for _lp_ref in _lp_gc.get_referrers(_lp_obj)[:5]:
-                    print(
-                        f"[LEAKPROBE]   holder: {type(_lp_ref).__name__} "
-                        f"{str(_lp_ref)[:150]}",
-                        flush=True,
-                    )
-        except Exception as _lp_e:  # noqa: BLE001
-            print(f"[LEAKPROBE] failed: {_lp_e}", flush=True)
-        # --- END LEAKPROBE ---
 
     def abort_sft_batch(self) -> None:
         """Release the active batch after a failed policy step."""
