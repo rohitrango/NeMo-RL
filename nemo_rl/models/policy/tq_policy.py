@@ -51,12 +51,6 @@ from nemo_rl.data_plane.schema import (
     fields_with_optional_routed_experts,
 )
 from nemo_rl.models.policy.lm_policy import Policy
-from nemo_rl.models.policy.packing import (
-    GlobalPackingInput,
-    Packer,
-    PlacedPackingInput,
-    resolve_packer,
-)
 from nemo_rl.utils.flops_tracker import get_theoretical_tflops
 from nemo_rl.utils.timer import Timer
 
@@ -109,7 +103,6 @@ class TQPolicy(TQDriverMixin, Policy):
         *args: Any,
         dp_cfg: DataPlaneRuntimeConfig,
         tq_partition_id: str = "train",
-        packer: Optional[Packer] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -130,7 +123,6 @@ class TQPolicy(TQDriverMixin, Policy):
         self._router_replay_enabled = bool(
             (self.cfg.get("router_replay") or {}).get("enabled", False)
         )
-        self.packer = packer if packer is not None else self._make_default_packer()
 
         # Forward to workers (replaces ``Policy.setup_data_plane`` call
         # site in the trainer — TQPolicy bundles bootstrap + worker
@@ -215,33 +207,6 @@ class TQPolicy(TQDriverMixin, Policy):
 
     # ── 1-hop entrypoints (KVBatchMeta in, no re-fan-out) ──────────────────
 
-    def _make_default_packer(self) -> Packer:
-        """Build the NeMo-RL packer from the initialized Policy state."""
-        return resolve_packer(
-            "nemo_rl",
-            cfg=self.cfg,
-            use_dynamic_batches=getattr(self, "use_dynamic_batches", False),
-            dynamic_batching_args=getattr(self, "dynamic_batching_args", None),
-            use_sequence_packing=getattr(self, "use_sequence_packing", False),
-            sequence_packing_args=getattr(self, "sequence_packing_args", None),
-            shard_meta=shard_meta_for_dp,
-        )
-
-    def _get_packer(self) -> Packer:
-        """Return the configured packer, including for bare unit-test objects."""
-        packer = getattr(self, "packer", None)
-        if packer is None:
-            packer = self._make_default_packer()
-            self.packer = packer
-        return packer
-
-    def _packing_args(
-        self,
-        mb_tokens_key: str,
-    ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
-        """Return packer arguments for padding calculations."""
-        return self._get_packer().packing_args(mb_tokens_key)
-
     def _logprob_dispatch(
         self,
         meta: KVBatchMeta,
@@ -262,6 +227,7 @@ class TQPolicy(TQDriverMixin, Policy):
         leader-rank ``_write_back_result_field``; the Ray return is
         always None, so this dispatcher just waits for completion.
         """
+        spa, dba = self._packing_args("logprob_mb_tokens")
         lp_meta = self._isolated_meta(
             meta,
             fields=fields_with_optional_routed_experts(
@@ -271,15 +237,13 @@ class TQPolicy(TQDriverMixin, Policy):
             task_name=task_name,
         )
         with timer.time(f"{timer_prefix}/shard_meta") if timer else nullcontext():
-            packing_result = self._get_packer().pack(
-                GlobalPackingInput(
-                    meta=lp_meta,
-                    dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
-                    batch_size=None,
-                    mb_tokens_key="logprob_mb_tokens",
-                )
+            metas, _ = shard_meta_for_dp(
+                lp_meta,
+                dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
+                batch_size=None,
+                sequence_packing_args=spa,
+                dynamic_batching_args=dba,
             )
-            metas = packing_result.dp_metas
         with timer.time(f"{timer_prefix}/submit_futures") if timer else nullcontext():
             futures = self.worker_group.run_all_workers_sharded_data(
                 worker_method,
@@ -366,6 +330,7 @@ class TQPolicy(TQDriverMixin, Policy):
         batch_size = gbs or self.cfg["train_global_batch_size"]
         micro_batch_size = mbs or self.cfg["train_micro_batch_size"]
 
+        spa, dba = self._packing_args("train_mb_tokens")
         # ``train_fields`` (rollout + logprob deltas + advantages + sample_mask;
         # default ``DP_TRAIN_FIELDS``) must be in TQ before this call — written
         # by workers + driver delta-writes. Caller may narrow to drop columns
@@ -378,15 +343,13 @@ class TQPolicy(TQDriverMixin, Policy):
             task_name="train",
         )
         with timer.time("policy_training/shard_meta") if timer else nullcontext():
-            packing_result = self._get_packer().pack(
-                GlobalPackingInput(
-                    meta=train_meta,
-                    dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
-                    batch_size=batch_size,
-                    mb_tokens_key="train_mb_tokens",
-                )
+            dp_metas, _ = shard_meta_for_dp(
+                train_meta,
+                dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
+                batch_size=batch_size,
+                sequence_packing_args=spa,
+                dynamic_batching_args=dba,
             )
-            dp_metas = packing_result.dp_metas
 
         if self.flops_tracker is not None:
             self.flops_tracker.reset()
@@ -494,6 +457,7 @@ class TQPolicy(TQDriverMixin, Policy):
         the workers' open-step state and surface once via
         :meth:`finish_train_step`.
         """
+        spa, dba = self._packing_args("train_mb_tokens")
         train_meta = self._isolated_meta(
             meta,
             fields=fields_with_optional_routed_experts(
@@ -502,15 +466,13 @@ class TQPolicy(TQDriverMixin, Policy):
             task_name="train",
         )
         with timer.time("policy_training/shard_meta") if timer else nullcontext():
-            packing_result = self._get_packer().pack(
-                GlobalPackingInput(
-                    meta=train_meta,
-                    dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
-                    batch_size=None,
-                    mb_tokens_key="train_mb_tokens",
-                )
+            dp_metas, _ = shard_meta_for_dp(
+                train_meta,
+                dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
+                batch_size=None,
+                sequence_packing_args=spa,
+                dynamic_batching_args=dba,
             )
-            dp_metas = packing_result.dp_metas
 
         self._dispatch_train_microbatches(dp_metas, timer=timer)
 
@@ -525,17 +487,21 @@ class TQPolicy(TQDriverMixin, Policy):
         remain unchanged because an SFT loader can provide a narrower schema
         than the rollout training path.
         """
+        dp_world = self.sharding_annotations.get_axis_size("data_parallel")
+        if len(dp_metas) != dp_world:
+            raise ValueError(
+                "Placed metadata must contain exactly one batch per DP rank: "
+                f"got {len(dp_metas)} batches for dp_world={dp_world}."
+            )
+        spa, dba = self._packing_args("train_mb_tokens")
+        if spa is not None or dba is not None:
+            raise ValueError(
+                "Placed metadata supports fixed batches only. Disable NeMo-RL "
+                "sequence packing and dynamic batching."
+            )
         self._stamp_placed_pad_seqlen(dp_metas)
         train_metas = [replace(meta, task_name="train") for meta in dp_metas]
-        with timer.time("policy_training/pack_placed_meta") if timer else nullcontext():
-            packing_result = self._get_packer().pack(
-                PlacedPackingInput(
-                    dp_metas=train_metas,
-                    dp_world=self.sharding_annotations.get_axis_size("data_parallel"),
-                    mb_tokens_key="train_mb_tokens",
-                )
-            )
-        self._dispatch_train_microbatches(packing_result.dp_metas, timer=timer)
+        self._dispatch_train_microbatches(train_metas, timer=timer)
 
     def _stamp_placed_pad_seqlen(self, dp_metas: list[KVBatchMeta]) -> None:
         """Set one forward padding target across all placed DP batches."""

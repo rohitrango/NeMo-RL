@@ -344,7 +344,6 @@ def setup_sft_v2(
     dynamic_batching = master_config.policy.get("dynamic_batching", {})
     if sequence_packing.get("enabled", False) or dynamic_batching.get("enabled", False):
         raise ValueError("SFTv2 Stage 1 requires fixed NeMo-RL batching.")
-    policy_packer = None
     max_sequence_length = master_config.data["max_input_seq_length"]
     if max_sequence_length is None:
         raise ValueError("SFTv2 requires data.max_input_seq_length.")
@@ -393,7 +392,6 @@ def setup_sft_v2(
             "nemo_rl.data.energon.sft_worker.SFTMegatronPolicyWorker"
         ),
         dp_cfg=master_config.data_plane,
-        packer=policy_packer,
     )
     mapper_name = master_config.data["energon"].topology_mapper
     placement_plan = resolve_topology_mapper(mapper_name).map(
