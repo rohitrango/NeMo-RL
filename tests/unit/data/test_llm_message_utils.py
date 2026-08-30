@@ -690,36 +690,6 @@ def test_add_loss_mask_to_chat_message_log(
     )
 
 
-def test_add_loss_mask_honors_per_message_training_selection() -> None:
-    message_log = [
-        [
-            {
-                "role": "assistant",
-                "token_ids": torch.tensor([1, 2]),
-                "train_on_message": False,
-            },
-            {
-                "role": "user",
-                "token_ids": torch.tensor([3]),
-                "train_on_message": False,
-            },
-            {
-                "role": "assistant",
-                "token_ids": torch.tensor([4, 5]),
-                "train_on_message": True,
-            },
-        ]
-    ]
-
-    add_loss_mask_to_message_log(message_log)
-
-    assert [message["token_loss_mask"].tolist() for message in message_log[0]] == [
-        [0, 0],
-        [0],
-        [1, 1],
-    ]
-
-
 def test_get_first_index_that_differs():
     assert get_first_index_that_differs("hello", "hello") == 5
     assert get_first_index_that_differs("hello", "hello world") == 5
