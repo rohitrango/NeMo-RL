@@ -174,7 +174,7 @@ The optional Energon SFT backend reads prepared WebDataset shards while the exis
 
 ```bash
 uv run examples/run_sft_v2.py \
-  --config examples/configs/sft_v2_tests/sft_vlm_3B_energon_v2.yaml
+  --config examples/configs/recipes/vlm/vlm_sft-qwen2.5-vl-3b-instruct-clevr-1n2g-megatrontp1-energon.v1.yaml
 ```
 
 Each shard sample contains a JSON payload and its media members. The JSON payload uses one complete conversation as the sampling unit:

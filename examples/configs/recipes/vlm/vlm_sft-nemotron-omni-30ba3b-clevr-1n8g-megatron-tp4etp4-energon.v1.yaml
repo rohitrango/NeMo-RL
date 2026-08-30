@@ -1,14 +1,8 @@
-defaults:
-  - sft_vlm_3B_energon_v2.yaml
-
+defaults: vlm_sft-qwen2.5-vl-3b-instruct-clevr-1n2g-megatrontp1-energon.v1.yaml
 sft:
   max_num_steps: 100
-
 policy:
   model_name: /data/models/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16
-  train_global_batch_size: 16
-  train_micro_batch_size: 1
-  max_total_sequence_length: 1024
   megatron_cfg:
     env_vars:
       HF_MODULES_CACHE: /root/.cache/huggingface/modules
@@ -19,8 +13,6 @@ policy:
     tensor_model_parallel_size: 4
     expert_tensor_parallel_size: 4
     expert_model_parallel_size: 2
-    pipeline_model_parallel_size: 1
-    context_parallel_size: 1
     sequence_parallel: true
     freeze_vision_model: true
     freeze_vision_projection: false
@@ -35,28 +27,19 @@ policy:
     optimizer:
       optimizer_cpu_offload: true
       optimizer_offload_fraction: 1.0
-      overlap_cpu_optimizer_d2h_h2d: false
     distributed_data_parallel_config:
       overlap_param_gather: false
-
 checkpointing:
   enabled: false
-
 data:
   add_bos: false
   add_eos: false
-  add_generation_prompt: false
   energon:
     model_family: nemotron
-    task_encoder:
-      name: generic_sft
-      options: {}
-
 logger:
   wandb_enabled: false
   log_dir: logs/sft-nemotron-omni-30b-clevr-energon-tp4etp4-v2
   wandb:
-    project: sft-dev
     name: sft-nemotron-omni-30b-clevr-energon-tp4etp4-v2
   tensorboard:
     log_dir: tb_logs-sft-nemotron-omni-30b-clevr-energon-tp4etp4-v2
@@ -64,7 +47,5 @@ logger:
     name: sft-nemotron-omni-30b-clevr-energon-tp4etp4-v2
   mlflow:
     run_name: sft-nemotron-omni-30b-clevr-energon-tp4etp4-v2
-
 cluster:
   gpus_per_node: 8
-  num_nodes: 1

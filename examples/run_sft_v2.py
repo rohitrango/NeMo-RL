@@ -48,8 +48,9 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         default=os.path.join(
             os.path.dirname(__file__),
             "configs",
-            "sft_v2_tests",
-            "sft_vlm_3B_energon_v2.yaml",
+            "recipes",
+            "vlm",
+            "vlm_sft-qwen2.5-vl-3b-instruct-clevr-1n2g-megatrontp1-energon.v1.yaml",
         ),
     )
     return parser.parse_known_args()
