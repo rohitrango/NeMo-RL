@@ -11,23 +11,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-from importlib import import_module
-from typing import Any
-
-_EXPORT_MODULES = {
-    "cook_conversation": "nemo_rl.data.energon.multimodal.cookers.generic",
-}
-
-
-def __getattr__(name: str) -> Any:
-    """Load optional cooker modules only when a caller requests them."""
-    module_name = _EXPORT_MODULES.get(name)
-    if module_name is None:
-        raise AttributeError(name)
-    value = getattr(import_module(module_name), name)
-    globals()[name] = value
-    return value
-
-
-__all__ = list(_EXPORT_MODULES)

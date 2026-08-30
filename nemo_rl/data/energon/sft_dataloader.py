@@ -40,8 +40,8 @@ from nemo_rl.data.energon.multimodal.registry import (
     TASK_ENCODER_REGISTRY,
     selected_registry_identity,
 )
-from nemo_rl.data.energon.multimodal.task_encoders import (
-    BaseSFTTaskEncoder,
+from nemo_rl.data.energon.multimodal.task_encoders.base import BaseSFTTaskEncoder
+from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (
     build_processor_adapter,
 )
 from nemo_rl.data.energon.multimodal.types import CanonicalSFTSample

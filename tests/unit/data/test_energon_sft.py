@@ -11,13 +11,12 @@ from nemo_rl.data.energon.config import (
     EnergonLoaderConfig,
     EnergonSourceConfig,
 )
-from nemo_rl.data.energon.multimodal import (
-    CanonicalSFTSample,
+from nemo_rl.data.energon.multimodal.cookers.generic import cook_conversation
+from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (
     GenericSFTTaskEncoder,
     HFMultimodalSFTProcessorAdapter,
-    MediaRef,
-    cook_conversation,
 )
+from nemo_rl.data.energon.multimodal.types import CanonicalSFTSample, MediaRef
 from nemo_rl.data.energon.sft_dataloader import (
     EnergonSFTDataLoader,
     _loader_config,

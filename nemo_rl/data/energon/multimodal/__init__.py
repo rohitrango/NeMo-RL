@@ -12,37 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from importlib import import_module
-from typing import Any
-
-_EXPORT_MODULES = {
-    "ALL_MODEL_FAMILIES": "nemo_rl.data.energon.multimodal.model_families",
-    "BaseSFTTaskEncoder": "nemo_rl.data.energon.multimodal.task_encoders",
-    "CanonicalSFTSample": "nemo_rl.data.energon.multimodal.types",
-    "EncodedSFTSample": "nemo_rl.data.energon.multimodal.types",
-    "GenericSFTTaskEncoder": "nemo_rl.data.energon.multimodal.task_encoders",
-    "HFMultimodalSFTProcessorAdapter": (
-        "nemo_rl.data.energon.multimodal.task_encoders"
-    ),
-    "MediaRef": "nemo_rl.data.energon.multimodal.types",
-    "ModelFamily": "nemo_rl.data.energon.multimodal.model_families",
-    "SFTProcessorAdapter": "nemo_rl.data.energon.multimodal.task_encoders",
-    "build_processor_adapter": "nemo_rl.data.energon.multimodal.task_encoders",
-    "cook_conversation": "nemo_rl.data.energon.multimodal.cookers",
-    "get_supported_model_families": ("nemo_rl.data.energon.multimodal.model_families"),
-    "supports_model_families": "nemo_rl.data.energon.multimodal.model_families",
-    "supports_model_family": "nemo_rl.data.energon.multimodal.model_families",
-}
-
-
-def __getattr__(name: str) -> Any:
-    """Load optional Energon components only when a caller requests them."""
-    module_name = _EXPORT_MODULES.get(name)
-    if module_name is None:
-        raise AttributeError(name)
-    value = getattr(import_module(module_name), name)
-    globals()[name] = value
-    return value
-
-
-__all__ = list(_EXPORT_MODULES)
+# Import the submodules directly. This package stays empty so that
+# nemo_rl.data.energon.config, which needs only model_families, does not pull
+# megatron.energon into the default Hugging Face SFT path.
