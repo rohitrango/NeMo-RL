@@ -13,12 +13,6 @@ sft:
   seed: 42
   only_unmask_final: false
 
-sft_v2:
-  loader_only: false
-  loader_warmup_steps: 2
-  loader_measurement_steps: 10
-  measurement_output: results/sft_v2_loader_metrics.pt
-
 policy:
   sequence_packing:
     enabled: false

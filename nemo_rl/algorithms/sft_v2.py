@@ -27,7 +27,7 @@ from typing import Any, Optional, cast
 import ray
 import numpy as np
 import torch
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.loss.loss_functions import NLLLossFn
@@ -53,22 +53,12 @@ from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
 from nemo_rl.utils.logger import Logger, LoggerConfig
 
 
-class SFTV2Config(BaseModel, extra="allow"):
-    """SFTv2 controller and loader measurement settings."""
-
-    loader_only: bool = False
-    loader_warmup_steps: int = Field(default=2, ge=0)
-    loader_measurement_steps: int = Field(default=10, ge=1)
-    measurement_output: str = "results/sft_v2_loader_metrics.pt"
-
-
 class MasterConfig(BaseModel, extra="allow"):
     """Standalone SFTv2 configuration."""
 
     policy: PolicyConfig
     data: DataConfig
     sft: SFTConfig
-    sft_v2: SFTV2Config
     data_plane: LocalDataPlaneConfig
     logger: LoggerConfig
     cluster: ClusterConfig
@@ -150,10 +140,8 @@ class SFTSingleControllerActor:
         self._setup_loaders()
 
     def run(self) -> dict[str, Any]:
-        """Run loader measurement or SFT training."""
+        """Run SFT training."""
         try:
-            if self._master_config.sft_v2.loader_only:
-                return self._run_loader_measurement()
             self._trainer.prepare_for_training()
             while self._save_state.total_steps < self._max_steps:
                 metrics = self._run_train_step()
@@ -295,91 +283,6 @@ class SFTSingleControllerActor:
             if key in train_results:
                 metrics[key] = train_results[key]
         return metrics
-
-    def _run_loader_measurement(self) -> dict[str, Any]:
-        config = self._master_config.sft_v2
-        measured: list[dict[str, Any]] = []
-        total = config.loader_warmup_steps + config.loader_measurement_steps
-        for step in range(total):
-            started = time.monotonic()
-            envelopes = self._load_envelopes()
-            self._owner_call("commit_sft_batch")
-            if step < config.loader_warmup_steps:
-                continue
-            elapsed = time.monotonic() - started
-            rows = sum(len(envelope.source_ids) for envelope in envelopes)
-            valid_tokens = sum(envelope.valid_tokens for envelope in envelopes)
-            measured.append(
-                {
-                    "rows_per_second": rows / max(elapsed, 1e-12),
-                    "valid_tokens_per_second": valid_tokens / max(elapsed, 1e-12),
-                    "envelope_seconds": elapsed,
-                    "slowest_copy_seconds": max(
-                        envelope.load_seconds for envelope in envelopes
-                    ),
-                    "loader_wait_seconds": max(
-                        envelope.load_seconds for envelope in envelopes
-                    ),
-                    "gpu_idle_seconds": max(
-                        envelope.load_seconds for envelope in envelopes
-                    ),
-                    "queue_depth": 1,
-                    "copy_imbalance_seconds": max(
-                        envelope.load_seconds for envelope in envelopes
-                    )
-                    - min(envelope.load_seconds for envelope in envelopes),
-                    "source_ids": [
-                        source_id
-                        for envelope in envelopes
-                        for source_id in envelope.source_ids
-                    ],
-                    "copies": [
-                        {
-                            "logical_rank": envelope.logical_rank,
-                            "source_ids": list(envelope.source_ids),
-                            "fields": list(envelope.field_names),
-                            "sequence_lengths": list(envelope.sequence_lengths),
-                            "values": envelope.field_fingerprints,
-                            "valid_tokens": envelope.valid_tokens,
-                        }
-                        for envelope in envelopes
-                    ],
-                }
-            )
-        output = Path(config.measurement_output)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(measured, output)
-        summary = {
-            "logical_dp_size": self._placement_plan.logical_world_size,
-            "measurement_steps": len(measured),
-            "rows_per_second": statistics.fmean(
-                item["rows_per_second"] for item in measured
-            ),
-            "valid_tokens_per_second": statistics.fmean(
-                item["valid_tokens_per_second"] for item in measured
-            ),
-            "envelope_p50_seconds": float(
-                np.percentile([item["envelope_seconds"] for item in measured], 50)
-            ),
-            "envelope_p95_seconds": float(
-                np.percentile([item["envelope_seconds"] for item in measured], 95)
-            ),
-            "slowest_copy_seconds": max(
-                item["slowest_copy_seconds"] for item in measured
-            ),
-            "loader_wait_seconds": statistics.fmean(
-                item["loader_wait_seconds"] for item in measured
-            ),
-            "gpu_idle_seconds": statistics.fmean(
-                item["gpu_idle_seconds"] for item in measured
-            ),
-            "source_coverage": len(
-                {source_id for item in measured for source_id in item["source_ids"]}
-            ),
-            "measurement_output": str(output),
-        }
-        self._logger.log_metrics(summary, self._save_state.total_steps)
-        return summary
 
     def _owner_call(self, method_name: str) -> list[Any]:
         futures = self._trainer.worker_group.run_all_workers_single_data(
@@ -529,7 +432,6 @@ __all__ = [
     "MasterConfig",
     "SFTSingleControllerActor",
     "SFTV2ActorArgs",
-    "SFTV2Config",
     "SFTV2SaveState",
     "setup_sft_v2",
 ]
