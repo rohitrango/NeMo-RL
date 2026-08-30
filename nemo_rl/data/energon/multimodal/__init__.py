@@ -1,0 +1,50 @@
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from importlib import import_module
+from typing import Any
+
+_EXPORT_MODULES = {
+    "ALL_MODEL_FAMILIES": "nemo_rl.data.energon.multimodal.model_families",
+    "BaseSFTTaskEncoder": "nemo_rl.data.energon.multimodal.task_encoders",
+    "CanonicalSFTSample": "nemo_rl.data.energon.multimodal.types",
+    "EncodedSFTSample": "nemo_rl.data.energon.multimodal.types",
+    "EnergonPackingHooks": "nemo_rl.data.energon.multimodal.packing",
+    "GenericSFTTaskEncoder": "nemo_rl.data.energon.multimodal.task_encoders",
+    "HFMultimodalSFTProcessorAdapter": (
+        "nemo_rl.data.energon.multimodal.task_encoders"
+    ),
+    "MediaRef": "nemo_rl.data.energon.multimodal.types",
+    "ModelFamily": "nemo_rl.data.energon.multimodal.model_families",
+    "PackedSFTSample": "nemo_rl.data.energon.multimodal.types",
+    "SFTProcessorAdapter": "nemo_rl.data.energon.multimodal.task_encoders",
+    "build_processor_adapter": "nemo_rl.data.energon.multimodal.task_encoders",
+    "cook_conversation": "nemo_rl.data.energon.multimodal.cookers",
+    "get_supported_model_families": ("nemo_rl.data.energon.multimodal.model_families"),
+    "supports_model_families": "nemo_rl.data.energon.multimodal.model_families",
+    "supports_model_family": "nemo_rl.data.energon.multimodal.model_families",
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Load optional Energon components only when a caller requests them."""
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(name)
+    value = getattr(import_module(module_name), name)
+    globals()[name] = value
+    return value
+
+
+__all__ = list(_EXPORT_MODULES)

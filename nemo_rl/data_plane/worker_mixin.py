@@ -47,8 +47,11 @@ from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.r3_trace import trace_tq_fetch_payload
 
 if TYPE_CHECKING:
-    from nemo_rl.data_plane import DataPlaneConfig, KVBatchMeta
-    from nemo_rl.data_plane.interfaces import DataPlaneClient
+    from nemo_rl.data_plane import KVBatchMeta
+    from nemo_rl.data_plane.interfaces import (
+        DataPlaneClient,
+        DataPlaneRuntimeConfig,
+    )
 
 
 def _broadcast_batched_data_dict(
@@ -130,17 +133,17 @@ class TQWorkerMixin:
 
     _dp_client: Optional[DataPlaneClient] = None
 
-    def setup_data_plane(self, cfg: DataPlaneConfig) -> None:
-        """Connect this worker process's client to the existing TQ controller.
+    def setup_data_plane(self, cfg: DataPlaneRuntimeConfig) -> None:
+        """Create this worker process's configured data-plane client.
 
         Called once by the driver after worker construction. Idempotent.
         """
-        if getattr(self, "model_slices_context_parallel_inputs", False):
-            raise NotImplementedError(
-                "TransferQueue/SingleController does not yet support models that "
-                "insert media before context-parallel input selection. Use the "
-                "synchronous NeMo-RL policy path for Nemotron Omni."
-            )
+        # if getattr(self, "model_slices_context_parallel_inputs", False):
+        #     raise NotImplementedError(
+        #         "TransferQueue/SingleController does not yet support models that "
+        #         "insert media before context-parallel input selection. Use the "
+        #         "synchronous NeMo-RL policy path for Nemotron Omni."
+        #     )
         if self._dp_client is not None:
             return
         from nemo_rl.data_plane import build_data_plane_client
@@ -218,6 +221,10 @@ class TQWorkerMixin:
             raise ValueError(f"unknown fetch_policy: {fetch_policy!r}")
 
         from nemo_rl.data_plane import materialize
+        from nemo_rl.data_plane.adapters.local import (
+            is_local_batch_meta,
+            materialize_local,
+        )
 
         pad_value_dict = self._pad_value_dict()
         replica_group = (
@@ -232,17 +239,26 @@ class TQWorkerMixin:
             )
 
         pad_to_seqlen = self._forward_pad_seqlen(meta) if dp_aligned_seq_len else 0
+        local_batch = is_local_batch_meta(meta)
 
         if replica_group is not None and replica_group.size() > 1:
             is_leader = self._is_replica_leader()
             leader = torch.distributed.get_global_rank(replica_group, 0)
             if is_leader:
-                td = self._require_dp_client().get_samples(
-                    sample_ids=meta.sample_ids,
-                    partition_id=meta.partition_id,
-                    select_fields=list(meta.fields),  # type: ignore[no-matching-overload]
-                )
-                data = materialize(
+                dp_client = self._require_dp_client()
+                if local_batch:
+                    td = dp_client.get_data(
+                        meta,
+                        select_fields=list(meta.fields),  # type: ignore[no-matching-overload]
+                    )
+                else:
+                    td = dp_client.get_samples(
+                        sample_ids=meta.sample_ids,
+                        partition_id=meta.partition_id,
+                        select_fields=list(meta.fields),  # type: ignore[no-matching-overload]
+                    )
+                materialize_fn = materialize_local if local_batch else materialize
+                data = materialize_fn(
                     td,
                     layout=layout,
                     pad_value_dict=pad_value_dict,
@@ -268,12 +284,20 @@ class TQWorkerMixin:
                 data = preprocess(self, data)
             return data
 
-        td = self._require_dp_client().get_samples(
-            sample_ids=meta.sample_ids,
-            partition_id=meta.partition_id,
-            select_fields=list(meta.fields),  # type: ignore[no-matching-overload]
-        )
-        data = materialize(
+        dp_client = self._require_dp_client()
+        if local_batch:
+            td = dp_client.get_data(
+                meta,
+                select_fields=list(meta.fields),  # type: ignore[no-matching-overload]
+            )
+        else:
+            td = dp_client.get_samples(
+                sample_ids=meta.sample_ids,
+                partition_id=meta.partition_id,
+                select_fields=list(meta.fields),  # type: ignore[no-matching-overload]
+            )
+        materialize_fn = materialize_local if local_batch else materialize
+        data = materialize_fn(
             td,
             layout=layout,
             pad_value_dict=pad_value_dict,

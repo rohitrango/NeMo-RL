@@ -727,6 +727,20 @@ class MegatronPolicyWorkerImpl(
         model_config.param_sync_func = None
         self._first_train_step_forward_pre_hook_disabled = True
 
+    def _restore_first_train_step_param_sync(self, update_successful: bool) -> None:
+        if (
+            not self._first_train_step_forward_pre_hook_disabled
+            or not update_successful
+        ):
+            return
+
+        self.enable_forward_pre_hook()
+        get_model_config(
+            self.model
+        ).param_sync_func = self._first_train_step_param_sync_func
+        self._first_train_step_param_sync_func = None
+        self._first_train_step_forward_pre_hook_disabled = False
+
     def _copy_main_params_to_param_buffer(self, zero_grad_buffer: bool = False) -> None:
         if not isinstance(self.model, DistributedDataParallel):
             return
@@ -1011,17 +1025,8 @@ class MegatronPolicyWorkerImpl(
                 draft_grad_norm = reduce_max_stat_across_model_parallel_group(
                     draft_grad_norm, mp_group=pg_collection.mp
                 )
-                if (
-                    not eval_mode
-                    and self._first_train_step_forward_pre_hook_disabled
-                    and update_successful
-                ):
-                    self.enable_forward_pre_hook()
-                    get_model_config(
-                        self.model
-                    ).param_sync_func = self._first_train_step_param_sync_func
-                    self._first_train_step_param_sync_func = None
-                    self._first_train_step_forward_pre_hook_disabled = False
+                if not eval_mode:
+                    self._restore_first_train_step_param_sync(update_successful)
 
                 warn_if_inf_grad_norm(grad_norm)
 
@@ -1479,6 +1484,7 @@ class MegatronPolicyWorkerImpl(
         # Build the per-call iterator. Each ``train_microbatches_from_meta``
         # call carries one DP slice; the iterator subdivides into pipeline
         # microbatches.
+        attach_media_token_validity_mask(data, self.media_placeholder_token_id)
         (
             data_iterator,
             num_microbatches,
@@ -1490,6 +1496,9 @@ class MegatronPolicyWorkerImpl(
             self.cfg,
             state["mbs"],
             straggler_timer=self.mcore_state.straggler_timer,
+            delegate_pack_to_model=self.delegate_pack_to_model,
+            delegate_mtp_loss_mask_to_model=self.delegate_mtp_loss_mask_to_model,
+            model_slices_context_parallel_inputs=self.model_slices_context_parallel_inputs,
         )
         state["total_num_microbatches"] += int(num_microbatches)
 
@@ -1682,13 +1691,7 @@ class MegatronPolicyWorkerImpl(
 
         # Mirrors train(): without re-enabling the pre-hook __init__ removed, the
         # param all-gather never runs and each forward sees only its own shard.
-        if self._first_train_step_forward_pre_hook_disabled and update_successful:
-            self.enable_forward_pre_hook()
-            get_model_config(
-                self.model
-            ).param_sync_func = self._first_train_step_param_sync_func
-            self._first_train_step_param_sync_func = None
-            self._first_train_step_forward_pre_hook_disabled = False
+        self._restore_first_train_step_param_sync(update_successful)
 
         if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 2:
             torch.cuda.empty_cache()

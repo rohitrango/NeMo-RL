@@ -241,6 +241,9 @@ nvrx = [
   "nvidia-resiliency-ext==0.6.0",
 ] # for ft_launcher (fault-tolerant training launcher)
 nemo_gym = ["nemo_gym"]
+energon = [
+    "megatron-energon[av-decode]~=7.0",
+]
 
 [dependency-groups]
 
@@ -444,7 +447,7 @@ override-dependencies = [
   # av (PyAV) carries CVE-bundled codec libs (libx264, libx265, libopenh264, libmp3lame).
   # It is only needed by megatron-bridge's optional WAN diffusion path, which installs it
   # at test time via scripts/install_diffusion_deps.sh. Exclude from the shipped container.
-  "av; sys_platform == 'never'",
+  # "av; sys_platform == 'never'", # need it for energon
   # decord2 is pulled transitively by sglang → qwen-vl-utils[decord] on aarch64 Linux.
   # NeMo-RL no longer calls any decord API (replaced by torchvision/torchaudio).
   "decord2; sys_platform == 'never'",

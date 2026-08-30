@@ -683,6 +683,40 @@ def test_disable_forward_pre_hook_until_next_step_uses_worker_override(
     assert worker._first_train_step_forward_pre_hook_disabled is True
 
 
+@pytest.mark.parametrize("update_successful", [False, True])
+def test_restore_first_train_step_param_sync(
+    monkeypatch: pytest.MonkeyPatch, update_successful: bool
+) -> None:
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    worker = object.__new__(megatron_policy_worker.MegatronPolicyWorkerImpl)
+    worker.model = object()
+    worker.enable_forward_pre_hook = MagicMock()
+    saved_param_sync = MagicMock(name="saved_param_sync")
+    worker._first_train_step_forward_pre_hook_disabled = True
+    worker._first_train_step_param_sync_func = saved_param_sync
+    model_config = SimpleNamespace(param_sync_func=None)
+    monkeypatch.setattr(
+        megatron_policy_worker, "get_model_config", lambda _: model_config
+    )
+
+    worker._restore_first_train_step_param_sync(update_successful)
+
+    if update_successful:
+        worker.enable_forward_pre_hook.assert_called_once_with()
+        assert model_config.param_sync_func is saved_param_sync
+        assert worker._first_train_step_param_sync_func is None
+        assert worker._first_train_step_forward_pre_hook_disabled is False
+
+        worker._restore_first_train_step_param_sync(True)
+        worker.enable_forward_pre_hook.assert_called_once_with()
+    else:
+        worker.enable_forward_pre_hook.assert_not_called()
+        assert model_config.param_sync_func is None
+        assert worker._first_train_step_param_sync_func is saved_param_sync
+        assert worker._first_train_step_forward_pre_hook_disabled is True
+
+
 def test_prepare_for_generation_disables_param_gather_hook_before_wake(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
