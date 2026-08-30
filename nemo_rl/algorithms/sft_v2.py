@@ -263,6 +263,7 @@ class SFTSingleControllerActor:
             "valid_tokens_per_second": valid_tokens
             / max(time.monotonic() - started, 1e-12),
         }
+        metrics.update(self._policy_metrics(train_results))
         return metrics
 
     @staticmethod
