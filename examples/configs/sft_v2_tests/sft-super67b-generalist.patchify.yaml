@@ -20,7 +20,7 @@ policy:
     moe_router_load_balancing_type: seq_aux_loss
     moe_aux_loss_coeff: 0.0001
     activation_checkpointing: true
-    recompute_granularity: full
+    recompute_granularity: selective
     optimizer:
       lr: 1.0e-05
       min_lr: 2.0e-06
@@ -31,14 +31,8 @@ policy:
     moe_token_dispatcher_type: alltoall
     moe_permute_fusion: true
     env_vars:
-      NRL_MEMRAY: '0'
-      NRL_MEMRAY_STEPS: '10'
-      PYTHONPATH: /mnt/rl-workspace/rohitkumarj/pylibs-memray:/root/.cache/huggingface/modules
+      PYTHONPATH: /root/.cache/huggingface/modules
       HF_MODULES_CACHE: /root/.cache/huggingface/modules
-      NRL_MEMRAY_SECONDS: '1500'
-      NRL_MEMRAY_RANKS: '0'
-      NRL_RANKMEM: '1'
-      NRL_MTPDIAG: '1'
       NRL_MEDIA_PATCH_DIM: '16'
       NRL_MEDIA_PREPROCESSING_MODE: patchify
     recompute_vision: false
@@ -47,6 +41,8 @@ policy:
     vision_recompute_num_layers: 30
     radio_force_eval_mode: false
     radio_force_cpe_eval_mode: true
+    recompute_modules:
+    - moe
   sequence_packing:
     enabled: true
     fuse_loss: true
@@ -92,12 +88,12 @@ data:
   validation: null
 logger:
   wandb_enabled: true
-  log_dir: /mnt/rl-workspace/rohitkumarj/logs/sft-super67b-generalist-patchify
+  log_dir: /mnt/rl-workspace/rohitkumarj/logs/sft-super67b-generalist-patchify-selective
   wandb:
     project: nemotron-super-sft
-    name: sft-super67b-generalist-patchify
+    name: sft-super67b-generalist-patchify-selective
   tensorboard:
-    log_dir: /mnt/rl-workspace/rohitkumarj/logs/tb-sft-super67b-generalist-patchify
+    log_dir: /mnt/rl-workspace/rohitkumarj/logs/tb-sft-super67b-generalist-patchify-selective
 cluster:
   gpus_per_node: 4
   num_nodes: 16

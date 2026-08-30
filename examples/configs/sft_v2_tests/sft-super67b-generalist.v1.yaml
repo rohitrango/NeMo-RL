@@ -26,8 +26,27 @@ policy:
     optimizer:
       lr: 1.0e-05
       min_lr: 2.0e-06
+      optimizer_cpu_offload: false
+      optimizer_offload_fraction: 0.0
+      weight_decay: 0.1
+      clip_grad: 1.0
+      adam_beta1: 0.9
+      adam_beta2: 0.95
     scheduler:
       lr_warmup_iters: 10
+    recompute_vision: false
+    vision_recompute_granularity: full
+    vision_recompute_method: block
+    vision_recompute_num_layers: 30
+    radio_force_eval_mode: false
+    radio_force_cpe_eval_mode: true
+    moe_token_dispatcher_type: alltoall
+    moe_permute_fusion: true
+    env_vars:
+      PYTHONPATH: /root/.cache/huggingface/modules
+      HF_MODULES_CACHE: /root/.cache/huggingface/modules
+      NRL_MEDIA_PATCH_DIM: '16'
+      NRL_MEDIA_PREPROCESSING_MODE: patchify
   sequence_packing:
     enabled: true
     fuse_loss: true
@@ -68,7 +87,7 @@ data:
   train:
     path: /mnt/rl-workspace/rohitkumarj/data/subset_cook_v2/subset.yaml
     split: train
-    virtual_epoch_length: 487
+    virtual_epoch_length: 10000000
   validation: null
 logger:
   wandb_enabled: true
@@ -81,3 +100,7 @@ logger:
 cluster:
   gpus_per_node: 4
   num_nodes: 128
+data_plane:
+  enabled: true
+  impl: local
+  max_partitions: 2

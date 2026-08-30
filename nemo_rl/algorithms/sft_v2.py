@@ -203,10 +203,14 @@ class SFTSingleControllerActor:
         if results != [True] * self._placement_plan.logical_world_size:
             raise RuntimeError(f"Unexpected SFT loader setup results: {results!r}.")
 
+    # Per-tensor fingerprints are only consumed by _run_loader_measurement.
+    _collect_fingerprints = False
+
     def _load_envelopes(self) -> list[StepEnvelope]:
         futures = self._trainer.worker_group.run_all_workers_single_data(
             "load_next_sft_batch",
             run_rank_0_only_axes=list(REPLICATED_AXES),
+            collect_fingerprints=self._collect_fingerprints,
             only_unmask_final=self._master_config.sft.only_unmask_final,
             make_sequence_length_divisible_by=self._master_config.policy[
                 "make_sequence_length_divisible_by"
@@ -330,6 +334,7 @@ class SFTSingleControllerActor:
 
     def _run_loader_measurement(self) -> dict[str, Any]:
         config = self._master_config.sft_v2
+        self._collect_fingerprints = True
         measured: list[dict[str, Any]] = []
         total = config.loader_warmup_steps + config.loader_measurement_steps
         for step in range(total):

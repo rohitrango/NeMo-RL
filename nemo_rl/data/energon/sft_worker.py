@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import hashlib
-import os as _ls_os
 import time
 from dataclasses import replace
 from typing import Any, Mapping, Optional
@@ -157,6 +156,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         *,
         only_unmask_final: bool,
         make_sequence_length_divisible_by: int,
+        collect_fingerprints: bool = False,
     ) -> StepEnvelope:
         """Load, prepare, and publish one batch into this process's local store."""
         if self._sft_loader is None or self._sft_loader_iterator is None:
@@ -170,7 +170,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
 
         started = time.monotonic()
         batch = next(self._sft_loader_iterator)
-        _ls_iter = time.monotonic()
         packed_schema_version = batch.get("packed_schema_version")
         energon_packed = packed_schema_version is not None
         if (
@@ -198,7 +197,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
                 ),
             )
         load_seconds = time.monotonic() - started
-        _ls_prep = time.monotonic()
         batch_size = prepared.size
         source_ids = self._source_ids(prepared, batch_size=batch_size)
         partition_id = (
@@ -206,7 +204,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         )
         sample_ids = [f"{partition_id}_row{row}" for row in range(batch_size)]
         fields = local_batch_to_tensordict(prepared, batch_size=batch_size)
-        _ls_td = time.monotonic()
 
         field_names = list(fields.keys())
         client = self._require_dp_client()
@@ -223,7 +220,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             fields=fields,
             tags=tags,
         )
-        _ls_pub = time.monotonic()
 
         lengths_tensor = prepared["input_lengths"]
         lengths = tuple(int(value) for value in lengths_tensor.tolist())
@@ -254,32 +250,20 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             source_ids=source_ids,
             field_names=tuple(field_names),
             sequence_lengths=lengths,
-            field_fingerprints=self._field_fingerprints(prepared),
+            # SHA-256 over every tensor in the batch: hundreds of MB at
+            # seq 524288, and only _run_loader_measurement ever reads it.
+            # Measured at 1.9-5.2s per step before this was gated.
+            field_fingerprints=(
+                self._field_fingerprints(prepared) if collect_fingerprints else {}
+            ),
             load_seconds=load_seconds,
             valid_tokens=valid_tokens,
         )
-        # --- LOADSPLIT: where does the per-step loader latency actually go? ---
-        # loader_wait is the controller's blocking ray.get over this whole
-        # method, but load_seconds above stops after prepare -- so the publish
-        # and envelope-construction cost is invisible in the current metrics.
-        # Opt in with NRL_LOADSPLIT=1.
-        if _ls_os.environ.get("NRL_LOADSPLIT") == "1":
-            _ls_end = time.monotonic()
-            print(
-                "[LOADSPLIT] batch=%d total=%.3f iter=%.3f prepare=%.3f "
-                "tensordict=%.3f publish=%.3f tail=%.3f rows=%d"
-                % (
-                    self._sft_next_batch_index,
-                    _ls_end - started,
-                    _ls_iter - started,
-                    _ls_prep - _ls_iter,
-                    _ls_td - _ls_prep,
-                    _ls_pub - _ls_td,
-                    _ls_end - _ls_pub,
-                    batch_size,
-                ),
-                flush=True,
-            )
+        # The controller blocks on this entire call, so load_seconds -- which
+        # surfaces as loader_wait and gpu_idle_time -- has to span all of it.
+        # Measured after prepare() alone it missed publish and envelope
+        # construction, under-reporting real GPU idle by about half.
+        envelope = replace(envelope, load_seconds=time.monotonic() - started)
 
         self._sft_active_envelope = envelope
         self._sft_next_batch_index += 1
