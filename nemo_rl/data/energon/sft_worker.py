@@ -17,6 +17,9 @@
 from __future__ import annotations
 
 import hashlib
+import gc
+import os as _ld_os
+import threading as _ld_threading
 import time
 from dataclasses import replace
 from typing import Any, Mapping, Optional
@@ -151,6 +154,64 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         self._sft_logical_world_size = logical_world_size
         return True
 
+    def _ld_mark(self, phase: str) -> None:
+        """Record the phase now being entered, for the stall watchdog."""
+        if getattr(self, "_ld_on", None) is None:
+            self._ld_on = _ld_os.environ.get("NRL_LOADDIAG") == "1"
+        if not self._ld_on:
+            return
+        now = time.monotonic()
+        previous = getattr(self, "_ld_phase", None)
+        if previous is not None:
+            print(
+                "[LOADDIAG] batch=%d %s done in %.3fs -> %s"
+                % (
+                    getattr(self, "_sft_next_batch_index", -1),
+                    previous,
+                    now - getattr(self, "_ld_t0", now),
+                    phase,
+                ),
+                flush=True,
+            )
+        self._ld_phase = None if phase == "idle" else phase
+        self._ld_t0 = now
+        if getattr(self, "_ld_watchdog", None) is None:
+            self._ld_watchdog = _ld_threading.Thread(
+                target=self._ld_watch, name="sft-loaddiag", daemon=True
+            )
+            self._ld_watchdog.start()
+
+    def _ld_watch(self) -> None:
+        """Print the in-flight phase every 30s so a stall names itself."""
+        while True:
+            time.sleep(15)
+            phase = getattr(self, "_ld_phase", None)
+            if phase is None:
+                continue
+            elapsed = time.monotonic() - getattr(self, "_ld_t0", time.monotonic())
+            if elapsed < 30:
+                continue
+            try:
+                workers = sum(
+                    1
+                    for pid in _ld_os.listdir("/proc")
+                    if pid.isdigit()
+                    and "pt_data_worker"
+                    in open("/proc/%s/comm" % pid, errors="ignore").read()
+                )
+            except Exception:  # noqa: BLE001
+                workers = -1
+            print(
+                "[LOADDIAG] STUCK batch=%d phase=%s elapsed=%.0fs data_workers=%d"
+                % (
+                    getattr(self, "_sft_next_batch_index", -1),
+                    phase,
+                    elapsed,
+                    workers,
+                ),
+                flush=True,
+            )
+
     def load_next_sft_batch(
         self,
         *,
@@ -169,7 +230,9 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             raise RuntimeError("The SFT logical loader identity is missing.")
 
         started = time.monotonic()
+        self._ld_mark("iter")
         batch = next(self._sft_loader_iterator)
+        self._ld_mark("prepare")
         packed_schema_version = batch.get("packed_schema_version")
         energon_packed = packed_schema_version is not None
         if (
@@ -196,6 +259,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
                     make_sequence_length_divisible_by
                 ),
             )
+        self._ld_mark("post-prepare")
         load_seconds = time.monotonic() - started
         batch_size = prepared.size
         source_ids = self._source_ids(prepared, batch_size=batch_size)
@@ -203,8 +267,10 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             f"sft_v2_dp{self._sft_logical_rank}_batch{self._sft_next_batch_index}"
         )
         sample_ids = [f"{partition_id}_row{row}" for row in range(batch_size)]
+        self._ld_mark("tensordict")
         fields = local_batch_to_tensordict(prepared, batch_size=batch_size)
 
+        self._ld_mark("publish")
         field_names = list(fields.keys())
         client = self._require_dp_client()
         client.register_partition(
@@ -265,6 +331,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         # construction, under-reporting real GPU idle by about half.
         envelope = replace(envelope, load_seconds=time.monotonic() - started)
 
+        self._ld_mark("idle")
         self._sft_active_envelope = envelope
         self._sft_next_batch_index += 1
         return envelope
@@ -277,6 +344,13 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             partition_id=envelope.meta.partition_id,
         )
         self._sft_active_envelope = None
+
+        # Reclaim the batch we just released before the loader produces the
+        # next one. Without this the run stalls inside next() on the energon
+        # iterator within a handful of steps -- the data workers stay alive but
+        # stop yielding. This was previously happening only as a side effect of
+        # the LEAKPROBE diagnostics; it is load-bearing, so it is explicit now.
+        gc.collect()
 
     def abort_sft_batch(self) -> None:
         """Release the active batch after a failed policy step."""

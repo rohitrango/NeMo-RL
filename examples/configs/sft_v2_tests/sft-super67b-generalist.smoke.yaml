@@ -1,7 +1,7 @@
 defaults: sft_vlm_nemotron_omni_30B_energon_tp4etp4_v2.yaml
 sft:
   max_num_epochs: 1
-  max_num_steps: 6
+  max_num_steps: 20
 policy:
   model_name: /mnt/rl-workspace/rohitkumarj/data/models/NVIDIA-Nemotron-3.5-Super-midtrain-67B-vision-pretrained
   train_global_batch_size: 2

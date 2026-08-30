@@ -35,6 +35,7 @@ policy:
       HF_MODULES_CACHE: /root/.cache/huggingface/modules
       NRL_MEDIA_PATCH_DIM: '16'
       NRL_MEDIA_PREPROCESSING_MODE: patchify
+      NRL_LOADDIAG: '1'
     recompute_vision: false
     vision_recompute_granularity: full
     vision_recompute_method: block
