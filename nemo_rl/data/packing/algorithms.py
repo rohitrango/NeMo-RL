@@ -18,7 +18,7 @@ import enum
 import math
 import random
 from abc import ABC, abstractmethod
-from bisect import bisect, bisect_right
+from bisect import bisect
 from typing import Dict, List, Optional, Tuple, Type, Union
 
 
@@ -29,8 +29,6 @@ class PackingAlgorithm(enum.Enum):
     FIRST_FIT_DECREASING = "first_fit_decreasing"
     FIRST_FIT_SHUFFLE = "first_fit_shuffle"
     MODIFIED_FIRST_FIT_DECREASING = "modified_first_fit_decreasing"
-    GREEDY_KNAPSACK = "greedy_knapsack"
-    BALANCED_GREEDY_KNAPSACK = "balanced_greedy_knapsack"
 
 
 class SequencePacker(ABC):
@@ -654,141 +652,6 @@ class ModifiedFirstFitDecreasingPacker(SequencePacker):
         return [[idx for idx, _ in b] for b in bins if b]
 
 
-class GreedyKnapsackPacker(SequencePacker):
-    """Megatron-LM-style greedy knapsack packing.
-
-    Repeatedly selects the largest remaining sequence that fits the active bin,
-    filling one bin to the brim before opening the next.
-
-    Adapted from ``examples/multimodal/data_loading/knapsacks.py`` in Megatron-LM
-    at commit 6822175d92a40e0528be905aee50f5930cfa0c98.
-    """
-
-    def _pack_implementation(self, sequence_lengths: List[int]) -> List[List[int]]:
-        self._validate_sequence_lengths(sequence_lengths)
-
-        # A descending source index in the ascending list makes removal from the
-        # right preserve original source order when multiple items have equal cost.
-        remaining = sorted(
-            (
-                (length, -source_index, source_index)
-                for source_index, length in enumerate(sequence_lengths)
-            )
-        )
-        bins: List[List[int]] = []
-        while remaining:
-            current_bin: List[int] = []
-            remaining_capacity = self.bin_capacity
-            while True:
-                fit_index = bisect_right(
-                    remaining,
-                    (remaining_capacity, 1, len(sequence_lengths)),
-                )
-                if fit_index == 0:
-                    break
-                length, _, source_index = remaining.pop(fit_index - 1)
-                remaining_capacity -= length
-                current_bin.append(source_index)
-            bins.append(current_bin)
-        return bins
-
-
-class BalancedGreedyKnapsackPacker(SequencePacker):
-    """Megatron-LM-style balanced greedy knapsack packing.
-
-    Unlike :class:`GreedyKnapsackPacker`, which fills one bin to the brim before
-    opening the next, this sorts descending and always places into the least-full
-    bin, so the fill is spread evenly. It also pre-allocates
-    ``ceil(total / capacity) + balanced_knapsack_delta`` bins, which is why empty
-    bins are a normal part of its output.
-
-    Adapted from ``balanced_greedy_knapsack`` in
-    ``examples/multimodal/data_loading/knapsacks.py`` in Megatron-LM at commit
-    6822175d92a40e0528be905aee50f5930cfa0c98. This is the algorithm the Nemotron
-    production launch script selects (``--packing-knapsack-algorithm
-    balanced_greedy_knapsack --packing-algorithm-parameters
-    balanced_knapsack_delta=5``).
-
-    Two deliberate deviations from the reference, noted here so the difference is
-    not mistaken for a port error:
-
-      * Oversized items. The reference prints a warning and silently drops any
-        item larger than the capacity; this raises instead, matching the other
-        packers in this module.
-      * Empty bins. The reference returns them; they are preserved here so bin
-        counts match, and ``_adjust_bin_count`` may append more.
-    """
-
-    def __init__(
-        self,
-        bin_capacity: int,
-        collect_metrics: bool = False,
-        min_bin_count: Optional[int] = None,
-        bin_count_multiple: Optional[int] = None,
-        balanced_knapsack_delta: int = 20,
-    ):
-        """Initialize the packer.
-
-        Args:
-            bin_capacity: The maximum capacity of each bin.
-            collect_metrics: Whether to collect metrics across multiple packing operations.
-            min_bin_count: Minimum number of bins to create, even if fewer would suffice.
-            bin_count_multiple: The total number of bins must be a multiple of this value.
-            balanced_knapsack_delta: Extra bins pre-allocated beyond the minimum
-                needed to hold the total cost. The reference default is 20; the
-                production launch script passes 5.
-
-        Raises:
-            ValueError: If balanced_knapsack_delta is negative.
-        """
-        super().__init__(
-            bin_capacity=bin_capacity,
-            collect_metrics=collect_metrics,
-            min_bin_count=min_bin_count,
-            bin_count_multiple=bin_count_multiple,
-        )
-        if balanced_knapsack_delta < 0:
-            raise ValueError("balanced_knapsack_delta must be nonnegative")
-        self.balanced_knapsack_delta = balanced_knapsack_delta
-
-    def _pack_implementation(self, sequence_lengths: List[int]) -> List[List[int]]:
-        self._validate_sequence_lengths(sequence_lengths)
-
-        # Descending by cost, keeping the source index so bins report positions.
-        # A stable sort leaves equal costs in source order, matching the
-        # reference's sort on cost alone.
-        order = sorted(
-            range(len(sequence_lengths)),
-            key=lambda index: sequence_lengths[index],
-            reverse=True,
-        )
-
-        total_length = sum(sequence_lengths)
-        bin_count = (
-            total_length + self.bin_capacity - 1
-        ) // self.bin_capacity + self.balanced_knapsack_delta
-        bins: List[List[int]] = [[] for _ in range(bin_count)]
-        bin_lengths: List[int] = [0] * bin_count
-
-        bin_index = 0
-        position = 0
-        while position < len(order):
-            source_index = order[position]
-            length = sequence_lengths[source_index]
-            if bin_lengths[bin_index] + length <= self.bin_capacity:
-                bins[bin_index].append(source_index)
-                bin_lengths[bin_index] += length
-                position += 1
-            else:
-                # Nothing fits the emptiest bin, so open another.
-                bins.append([])
-                bin_lengths.append(0)
-            # min() ties resolve to the lowest index, as in the reference.
-            bin_index = bin_lengths.index(min(bin_lengths))
-
-        return bins
-
-
 def get_packer(
     algorithm: Union[PackingAlgorithm, str],
     bin_capacity: int,
@@ -819,8 +682,6 @@ def get_packer(
         PackingAlgorithm.FIRST_FIT_DECREASING: FirstFitDecreasingPacker,
         PackingAlgorithm.FIRST_FIT_SHUFFLE: FirstFitShufflePacker,
         PackingAlgorithm.MODIFIED_FIRST_FIT_DECREASING: ModifiedFirstFitDecreasingPacker,
-        PackingAlgorithm.GREEDY_KNAPSACK: GreedyKnapsackPacker,
-        PackingAlgorithm.BALANCED_GREEDY_KNAPSACK: BalancedGreedyKnapsackPacker,
     }
 
     # Convert string to enum if needed

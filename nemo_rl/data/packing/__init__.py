@@ -13,11 +13,9 @@
 # limitations under the License.
 
 from nemo_rl.data.packing.algorithms import (
-    BalancedGreedyKnapsackPacker,
     ConcatenativePacker,
     FirstFitDecreasingPacker,
     FirstFitShufflePacker,
-    GreedyKnapsackPacker,
     ModifiedFirstFitDecreasingPacker,
     PackingAlgorithm,
     SequencePacker,
@@ -31,8 +29,6 @@ __all__ = [
     "ConcatenativePacker",
     "FirstFitDecreasingPacker",
     "FirstFitShufflePacker",
-    "GreedyKnapsackPacker",
-    "BalancedGreedyKnapsackPacker",
     "ModifiedFirstFitDecreasingPacker",
     "get_packer",
     "PackingMetrics",

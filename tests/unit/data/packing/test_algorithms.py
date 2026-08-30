@@ -101,8 +101,6 @@ class TestSequencePacker:
             PackingAlgorithm.FIRST_FIT_DECREASING,
             PackingAlgorithm.FIRST_FIT_SHUFFLE,
             PackingAlgorithm.MODIFIED_FIRST_FIT_DECREASING,
-            PackingAlgorithm.GREEDY_KNAPSACK,
-            PackingAlgorithm.BALANCED_GREEDY_KNAPSACK,
         ]
 
     def test_get_packer(self, bin_capacity: int, algorithms: List[PackingAlgorithm]):
