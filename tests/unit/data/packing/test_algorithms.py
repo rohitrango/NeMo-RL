@@ -19,7 +19,7 @@ from typing import Dict, List
 
 import pytest
 
-from nemo_rl.data.packing import (
+from nemo_rl.data.packing.algorithms import (
     PackingAlgorithm,
     SequencePacker,
     get_packer,
@@ -102,6 +102,7 @@ class TestSequencePacker:
             PackingAlgorithm.FIRST_FIT_SHUFFLE,
             PackingAlgorithm.MODIFIED_FIRST_FIT_DECREASING,
             PackingAlgorithm.GREEDY_KNAPSACK,
+            PackingAlgorithm.BALANCED_GREEDY_KNAPSACK,
         ]
 
     def test_get_packer(self, bin_capacity: int, algorithms: List[PackingAlgorithm]):

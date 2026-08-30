@@ -12,19 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from nemo_rl.data.packing.base import SequencePacker
-from nemo_rl.data.packing.concatenative import ConcatenativePacker
-from nemo_rl.data.packing.factory import PackingAlgorithm, get_packer
-from nemo_rl.data.packing.first_fit_decreasing import FirstFitDecreasingPacker
-from nemo_rl.data.packing.first_fit_shuffle import FirstFitShufflePacker
-from nemo_rl.data.packing.balanced_greedy_knapsack import (
+from nemo_rl.data.packing.algorithms import (
     BalancedGreedyKnapsackPacker,
-)
-from nemo_rl.data.packing.greedy_knapsack import GreedyKnapsackPacker
-from nemo_rl.data.packing.metrics import PackingMetrics
-from nemo_rl.data.packing.modified_first_fit_decreasing import (
+    ConcatenativePacker,
+    FirstFitDecreasingPacker,
+    FirstFitShufflePacker,
+    GreedyKnapsackPacker,
     ModifiedFirstFitDecreasingPacker,
+    PackingAlgorithm,
+    SequencePacker,
+    get_packer,
 )
+from nemo_rl.data.packing.metrics import PackingMetrics
 
 __all__ = [
     "PackingAlgorithm",

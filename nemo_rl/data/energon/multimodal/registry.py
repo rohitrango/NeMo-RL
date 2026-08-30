@@ -159,37 +159,32 @@ TASK_ENCODER_REGISTRY.register(
 PACKING_REGISTRY = LazyRegistry("packing")
 PACKING_REGISTRY.register(
     "concatenative",
-    import_path="nemo_rl.data.packing.concatenative:ConcatenativePacker",
+    import_path="nemo_rl.data.packing.algorithms:ConcatenativePacker",
     version="1",
 )
 PACKING_REGISTRY.register(
     "first_fit_decreasing",
-    import_path=("nemo_rl.data.packing.first_fit_decreasing:FirstFitDecreasingPacker"),
+    import_path="nemo_rl.data.packing.algorithms:FirstFitDecreasingPacker",
     version="1",
 )
 PACKING_REGISTRY.register(
     "first_fit_shuffle",
-    import_path="nemo_rl.data.packing.first_fit_shuffle:FirstFitShufflePacker",
+    import_path="nemo_rl.data.packing.algorithms:FirstFitShufflePacker",
     version="1",
 )
 PACKING_REGISTRY.register(
     "modified_first_fit_decreasing",
-    import_path=(
-        "nemo_rl.data.packing.modified_first_fit_decreasing:"
-        "ModifiedFirstFitDecreasingPacker"
-    ),
+    import_path="nemo_rl.data.packing.algorithms:ModifiedFirstFitDecreasingPacker",
     version="1",
 )
 PACKING_REGISTRY.register(
     "greedy_knapsack",
-    import_path="nemo_rl.data.packing.greedy_knapsack:GreedyKnapsackPacker",
+    import_path="nemo_rl.data.packing.algorithms:GreedyKnapsackPacker",
     version="1",
 )
 PACKING_REGISTRY.register(
     "balanced_greedy_knapsack",
-    import_path=(
-        "nemo_rl.data.packing.balanced_greedy_knapsack:BalancedGreedyKnapsackPacker"
-    ),
+    import_path="nemo_rl.data.packing.algorithms:BalancedGreedyKnapsackPacker",
     version="1",
 )
 
