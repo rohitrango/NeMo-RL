@@ -48,7 +48,6 @@ from nemo_rl.distributed.virtual_cluster import (
     prepare_segment_topology,
 )
 from nemo_rl.models.policy import PolicyConfig
-from nemo_rl.models.policy.packing import ENERGON_PACKING_META_KEY, NoOpPacker
 from nemo_rl.models.policy.tq_policy import TQPolicy
 from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
 from nemo_rl.utils.logger import Logger, LoggerConfig
@@ -276,30 +275,6 @@ class SFTSingleControllerActor:
             "valid_tokens_per_second": valid_tokens
             / max(time.monotonic() - started, 1e-12),
         }
-        packing_metadata = [
-            envelope.meta.extra_info.get(ENERGON_PACKING_META_KEY)
-            for envelope in envelopes
-        ]
-        if all(isinstance(value, dict) for value in packing_metadata):
-            packed_values = cast(list[dict[str, Any]], packing_metadata)
-            physical_packs = sum(value["pack_count"] for value in packed_values)
-            source_samples = sum(value["source_count"] for value in packed_values)
-            used_tokens = sum(
-                boundary["cu_seqlens"][-1]
-                for value in packed_values
-                for boundary in value["boundaries"]
-            )
-            capacity_tokens = sum(
-                value["pack_count"] * value["pack_capacity"]
-                for value in packed_values
-            )
-            metrics.update(
-                {
-                    "sources_per_pack": source_samples / physical_packs,
-                    "pack_token_fill": used_tokens / capacity_tokens,
-                }
-            )
-        metrics.update(self._policy_metrics(train_results))
         return metrics
 
     @staticmethod
@@ -462,38 +437,11 @@ def setup_sft_v2(
         raise ValueError("SFTv2 Stage 1 requires data_plane.impl=local.")
     if not master_config.policy.get("megatron_cfg", {}).get("enabled", False):
         raise ValueError("SFTv2 Stage 1 supports only the Megatron policy backend.")
-    energon_packing = master_config.data["energon"].task_encoder.packing
     sequence_packing = master_config.policy.get("sequence_packing", {})
     dynamic_batching = master_config.policy.get("dynamic_batching", {})
-    if energon_packing is None:
-        if sequence_packing.get("enabled", False) or dynamic_batching.get(
-            "enabled", False
-        ):
-            raise ValueError(
-                "SFTv2 without Energon packing requires fixed NeMo-RL batching."
-            )
-        policy_packer = None
-    else:
-        if not sequence_packing.get("enabled", False):
-            raise ValueError(
-                "Energon-packed SFTv2 requires policy.sequence_packing.enabled=true."
-            )
-        if not sequence_packing.get("fuse_loss", False):
-            raise ValueError(
-                "Energon-packed SFTv2 requires policy.sequence_packing.fuse_loss=true."
-            )
-        if dynamic_batching.get("enabled", False):
-            raise ValueError(
-                "Energon-packed SFTv2 does not support policy dynamic batching."
-            )
-        if master_config.policy["megatron_cfg"].get(
-            "use_fused_linear_logprobs", False
-        ):
-            raise ValueError(
-                "Energon-packed SFTv2 does not support "
-                "megatron_cfg.use_fused_linear_logprobs=true."
-            )
-        policy_packer = NoOpPacker()
+    if sequence_packing.get("enabled", False) or dynamic_batching.get("enabled", False):
+        raise ValueError("SFTv2 Stage 1 requires fixed NeMo-RL batching.")
+    policy_packer = None
     max_sequence_length = master_config.data["max_input_seq_length"]
     if max_sequence_length is None:
         raise ValueError("SFTv2 requires data.max_input_seq_length.")

@@ -28,39 +28,11 @@ class EnergonSourceConfig(BaseModel, extra="allow"):
     limit: Annotated[int, Field(ge=1)] | None = None
 
 
-class EnergonPackingOptions(BaseModel, extra="forbid"):
-    """Options shared by the Stage 2 Energon SFT packing algorithms."""
-
-    max_sequence_length: Annotated[int, Field(ge=1)]
-    sequence_length_pad_multiple: Annotated[int, Field(ge=1)]
-    # Only meaningful for balanced_greedy_knapsack, which pre-allocates
-    # ceil(total / capacity) + delta bins. The Megatron reference defaults to
-    # 20; the Nemotron production launch script passes 5.
-    balanced_knapsack_delta: Annotated[int, Field(ge=0)] | None = None
-
-    @model_validator(mode="after")
-    def _validate_alignment(self) -> "EnergonPackingOptions":
-        if self.max_sequence_length % self.sequence_length_pad_multiple:
-            raise ValueError(
-                "Energon pack capacity must be divisible by its padding multiple."
-            )
-        return self
-
-
-class EnergonPackingConfig(BaseModel, extra="allow"):
-    """One Energon-owned packing implementation selected by registry key."""
-
-    name: str
-    buffer_size: Annotated[int, Field(ge=1)]
-    options: EnergonPackingOptions
-
-
 class EnergonTaskEncoderConfig(BaseModel, extra="allow"):
-    """One task encoder and its optional Energon packing implementation."""
+    """One task encoder selected by registry key."""
 
     name: str = "generic_sft"
     options: dict[str, Any] = Field(default_factory=dict)
-    packing: EnergonPackingConfig | None = None
 
     @model_validator(mode="before")
     @classmethod

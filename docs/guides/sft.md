@@ -173,8 +173,8 @@ self.split_train_validation(split_validation_size, seed)
 The optional Energon SFT backend reads prepared WebDataset shards while the existing Hugging Face backend remains the default. Use an environment containing Megatron-Energon at the pinned integration revision, then run the VLM entry point:
 
 ```bash
-uv run examples/run_vlm_sft.py \
-  --config examples/configs/recipes/vlm/sft-qwen3-vl-8b-energon.yaml
+uv run examples/run_sft_v2.py \
+  --config examples/configs/sft_v2_tests/sft_vlm_3B_energon_v2.yaml
 ```
 
 Each shard sample contains a JSON payload and its media members. The JSON payload uses one complete conversation as the sampling unit:

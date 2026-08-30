@@ -5,7 +5,6 @@ import pytest
 
 from nemo_rl.data.energon.multimodal.registry import (
     COOKER_REGISTRY,
-    PACKING_REGISTRY,
     TASK_ENCODER_REGISTRY,
     LazyRegistry,
     selected_registry_identity,
@@ -21,18 +20,12 @@ def test_builtin_registries_resolve_lazily_with_stable_versions():
         "key": "generic_sft",
         "version": "1",
     }
-    assert PACKING_REGISTRY.identity("first_fit_decreasing") == {
-        "key": "first_fit_decreasing",
-        "version": "1",
-    }
     assert selected_registry_identity(
         task_encoder="generic_sft",
         cookers=["generic_conversation"],
-        packing=None,
     ) == {
         "task_encoder": {"key": "generic_sft", "version": "1"},
         "cookers": [{"key": "generic_conversation", "version": "1"}],
-        "packing": None,
     }
 
 
@@ -52,14 +45,14 @@ def test_registry_rejects_invalid_resolved_type(monkeypatch):
     module = ModuleType("_test_energon_registry_module")
     module.invalid = object()
     monkeypatch.setitem(sys.modules, module.__name__, module)
-    registry = LazyRegistry("packing")
+    registry = LazyRegistry("task_encoder")
     registry.register(
         "invalid",
         import_path=f"{module.__name__}:invalid",
         version="1",
     )
 
-    with pytest.raises(TypeError, match="SequencePacker subclass"):
+    with pytest.raises(TypeError, match="BaseSFTTaskEncoder subclass"):
         registry.resolve("invalid")
 
 

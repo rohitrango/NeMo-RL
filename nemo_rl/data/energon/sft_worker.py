@@ -26,19 +26,13 @@ import torch
 from megatron.core import parallel_state
 
 from nemo_rl.algorithms.sft import prepare_sft_batch
-from nemo_rl.data.energon.multimodal.packing import ENERGON_PACKED_SCHEMA_VERSION
-from nemo_rl.data.energon.multimodal.packing.prepare import (
-    prepare_energon_packed_batch,
-)
 from nemo_rl.data.energon.sft_dataloader import (
     EnergonSFTDataLoader,
     build_energon_sft_loader,
 )
 from nemo_rl.data.energon.sft_types import StepEnvelope
 from nemo_rl.data_plane.adapters.local import local_batch_to_tensordict
-from nemo_rl.data_plane.schema import MICRO_BATCH_INDICES, MICRO_BATCH_LENGTHS
 from nemo_rl.data.multimodal_utils import PackedTensor
-from nemo_rl.models.policy.packing import ENERGON_PACKING_META_KEY
 from nemo_rl.models.policy.utils import get_runtime_env_for_policy_worker
 from nemo_rl.models.policy.workers.megatron_policy_worker import (
     MegatronPolicyWorkerImpl,
@@ -78,36 +72,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         if self._sft_processor is None:
             raise ValueError("SFTv2 requires a multimodal processor on policy workers.")
 
-        # Megatron's prepacked CP path requires every padded sub-sequence to be
-        # divisible by 2 * cp_size. Nothing in EnergonPackingOptions ties the pad
-        # multiple to CP, so a mismatch otherwise surfaces as a ValueError deep in
-        # the first forward pass instead of here, where the fix is obvious.
-        cp_size = parallel_state.get_context_parallel_world_size()
-        # data_config["energon"] is a parsed EnergonLoaderConfig here but a plain
-        # dict on other call paths, so walk it without assuming either shape.
-        def _field(obj: Any, key: str) -> Any:
-            if obj is None:
-                return None
-            if isinstance(obj, Mapping):
-                return obj.get(key)
-            return getattr(obj, key, None)
-
-        pad_multiple = _field(
-            _field(
-                _field(_field(data_config, "energon"), "task_encoder"), "packing"
-            ),
-            "options",
-        )
-        pad_multiple = _field(pad_multiple, "sequence_length_pad_multiple")
-        if cp_size > 1 and pad_multiple is not None:
-            if pad_multiple % (2 * cp_size):
-                raise ValueError(
-                    "Energon packing sequence_length_pad_multiple "
-                    f"({pad_multiple}) must be divisible by 2 * "
-                    f"context_parallel_size ({2 * cp_size}); Megatron slices each "
-                    "padded sub-sequence across CP ranks in two halves."
-                )
-
         logical_rank = parallel_state.get_data_parallel_rank()
         logical_world_size = parallel_state.get_data_parallel_world_size()
         self._sft_loader = build_energon_sft_loader(
@@ -146,32 +110,12 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
 
         started = time.monotonic()
         batch = next(self._sft_loader_iterator)
-        packed_schema_version = batch.get("packed_schema_version")
-        energon_packed = packed_schema_version is not None
-        if (
-            energon_packed
-            and packed_schema_version != ENERGON_PACKED_SCHEMA_VERSION
-        ):
-            raise ValueError(
-                "Unsupported Energon packed SFT schema version "
-                f"{packed_schema_version!r}; expected "
-                f"{ENERGON_PACKED_SCHEMA_VERSION}."
-            )
-        if energon_packed:
-            prepared = prepare_energon_packed_batch(
-                batch,
-                tokenizer=self.tokenizer,
-                only_unmask_final=only_unmask_final,
-            )
-        else:
-            prepared = prepare_sft_batch(
-                batch,
-                tokenizer=self.tokenizer,
-                only_unmask_final=only_unmask_final,
-                make_sequence_length_divisible_by=(
-                    make_sequence_length_divisible_by
-                ),
-            )
+        prepared = prepare_sft_batch(
+            batch,
+            tokenizer=self.tokenizer,
+            only_unmask_final=only_unmask_final,
+            make_sequence_length_divisible_by=make_sequence_length_divisible_by,
+        )
         load_seconds = time.monotonic() - started
         batch_size = prepared.size
         source_ids = self._source_ids(prepared, batch_size=batch_size)
@@ -205,15 +149,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         extra_info = dict(published_meta.extra_info)
         if make_sequence_length_divisible_by > 1:
             extra_info["pad_to_multiple"] = int(make_sequence_length_divisible_by)
-        if energon_packed:
-            extra_info[ENERGON_PACKING_META_KEY] = self._packing_metadata(prepared)
-            # The local fetch path trusts these producer-supplied boundaries
-            # and skips its NeMo-RL bin planner. The Megatron prepacked path
-            # then consumes one physical pack per microbatch.
-            extra_info[MICRO_BATCH_INDICES] = [
-                [[index, index + 1] for index in range(batch_size)]
-            ]
-            extra_info[MICRO_BATCH_LENGTHS] = [list(lengths)]
         envelope = StepEnvelope(
             meta=replace(
                 published_meta,
@@ -296,36 +231,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             )
             for value in values
         ]
-
-    @staticmethod
-    def _packing_metadata(batch: Mapping[str, Any]) -> dict[str, Any]:
-        source_ids = batch["source_ids"]
-        cu_seqlens = batch["cu_seqlens"]
-        cu_seqlens_padded = batch["cu_seqlens_padded"]
-        pack_lengths = [int(value) for value in batch["input_lengths"].tolist()]
-        capacities = {int(value) for value in batch["pack_capacity"].tolist()}
-        schema_versions = {
-            int(value) for value in batch["packed_schema_version"].tolist()
-        }
-        if len(capacities) != 1 or len(schema_versions) != 1:
-            raise ValueError("One Energon batch must use one packing schema and capacity.")
-        return {
-            "schema_version": schema_versions.pop(),
-            "pack_count": len(pack_lengths),
-            "source_count": sum(len(ids) for ids in source_ids),
-            "source_counts": [len(ids) for ids in source_ids],
-            "pack_lengths": pack_lengths,
-            "pack_capacity": capacities.pop(),
-            "boundaries": [
-                {
-                    "cu_seqlens": boundaries.tolist(),
-                    "cu_seqlens_padded": padded_boundaries.tolist(),
-                }
-                for boundaries, padded_boundaries in zip(
-                    cu_seqlens, cu_seqlens_padded
-                )
-            ],
-        }
 
     @classmethod
     def _field_fingerprints(cls, batch: Mapping[str, Any]) -> dict[str, Any]:

@@ -25,7 +25,7 @@ from nemo_rl.data.energon.multimodal.model_families import (
     supports_model_family,
 )
 
-RegistryKind = Literal["cooker", "task_encoder", "packing"]
+RegistryKind = Literal["cooker", "task_encoder"]
 
 
 @dataclass(frozen=True)
@@ -87,8 +87,6 @@ class LazyRegistry:
 
     def resolve_for_model_family(self, key: str, *, model_family: ModelFamily) -> Any:
         """Resolve a cooker or task encoder and validate its model family."""
-        if self.kind == "packing":
-            raise TypeError("Packing registry entries have no model-family metadata.")
         resolved = self.resolve(key)
         try:
             supported = get_supported_model_families(resolved)
@@ -121,17 +119,6 @@ class LazyRegistry:
                     "BaseSFTTaskEncoder subclass."
                 )
             return
-        if self.kind == "packing":
-            from nemo_rl.data.packing import SequencePacker
-
-            if not isinstance(resolved, type) or not issubclass(
-                resolved, SequencePacker
-            ):
-                raise TypeError(
-                    f"Packing registry key {key!r} must resolve to a "
-                    "SequencePacker subclass."
-                )
-            return
         if not callable(resolved):
             raise TypeError(
                 f"{self.kind.capitalize()} registry key {key!r} must resolve "
@@ -156,47 +143,14 @@ TASK_ENCODER_REGISTRY.register(
     version="1",
 )
 
-PACKING_REGISTRY = LazyRegistry("packing")
-PACKING_REGISTRY.register(
-    "concatenative",
-    import_path="nemo_rl.data.packing.algorithms:ConcatenativePacker",
-    version="1",
-)
-PACKING_REGISTRY.register(
-    "first_fit_decreasing",
-    import_path="nemo_rl.data.packing.algorithms:FirstFitDecreasingPacker",
-    version="1",
-)
-PACKING_REGISTRY.register(
-    "first_fit_shuffle",
-    import_path="nemo_rl.data.packing.algorithms:FirstFitShufflePacker",
-    version="1",
-)
-PACKING_REGISTRY.register(
-    "modified_first_fit_decreasing",
-    import_path="nemo_rl.data.packing.algorithms:ModifiedFirstFitDecreasingPacker",
-    version="1",
-)
-PACKING_REGISTRY.register(
-    "greedy_knapsack",
-    import_path="nemo_rl.data.packing.algorithms:GreedyKnapsackPacker",
-    version="1",
-)
-PACKING_REGISTRY.register(
-    "balanced_greedy_knapsack",
-    import_path="nemo_rl.data.packing.algorithms:BalancedGreedyKnapsackPacker",
-    version="1",
-)
-
 
 def selected_registry_identity(
-    *, task_encoder: str, cookers: list[str], packing: str | None
+    *, task_encoder: str, cookers: list[str]
 ) -> dict[str, Any]:
     """Return stable identity data for all configured multimodal components."""
     return {
         "task_encoder": TASK_ENCODER_REGISTRY.identity(task_encoder),
         "cookers": [COOKER_REGISTRY.identity(cooker) for cooker in cookers],
-        "packing": None if packing is None else PACKING_REGISTRY.identity(packing),
     }
 
 
@@ -204,7 +158,6 @@ __all__ = [
     "COOKER_REGISTRY",
     "LazyRegistry",
     "LazyRegistryEntry",
-    "PACKING_REGISTRY",
     "TASK_ENCODER_REGISTRY",
     "selected_registry_identity",
 ]

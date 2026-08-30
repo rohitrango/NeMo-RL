@@ -4,7 +4,6 @@ import pytest
 
 from nemo_rl.models.policy.packing import (
     NeMoRLPacker,
-    NoOpPacker,
     Packer,
     resolve_packer,
 )
@@ -25,10 +24,6 @@ def test_resolver_returns_nemo_rl_packer() -> None:
     assert isinstance(_resolve("nemo_rl"), NeMoRLPacker)
 
 
-def test_resolver_returns_no_op_packer() -> None:
-    assert isinstance(_resolve("no_op"), NoOpPacker)
-
-
 def test_resolver_rejects_unknown_packer() -> None:
-    with pytest.raises(ValueError, match="Supported packers"):
+    with pytest.raises(ValueError, match="only supported packer"):
         _resolve("energon")

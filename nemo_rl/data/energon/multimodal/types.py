@@ -72,24 +72,11 @@ class EncodedSFTSample(Sample):
     pending_sample: CanonicalSFTSample | None = None
 
 
-@edataclass
-class PackedSFTSample(Sample):
-    """One physical pack selected from compatible encoded conversations."""
-
-    samples: list[EncodedSFTSample]
-    source_lengths: list[int]
-    source_padded_lengths: list[int]
-    source_ids: list[str]
-    group_key: tuple[Any, ...]
-    pack_capacity: int
-
-
 __all__ = [
     "CanonicalSFTSample",
     "EncodedSFTSample",
     "FrozenMediaMetadata",
     "MediaRef",
     "MediaMetadataValue",
-    "PackedSFTSample",
     "freeze_media_metadata",
 ]

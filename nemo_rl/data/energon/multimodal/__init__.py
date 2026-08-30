@@ -20,14 +20,12 @@ _EXPORT_MODULES = {
     "BaseSFTTaskEncoder": "nemo_rl.data.energon.multimodal.task_encoders",
     "CanonicalSFTSample": "nemo_rl.data.energon.multimodal.types",
     "EncodedSFTSample": "nemo_rl.data.energon.multimodal.types",
-    "EnergonPackingHooks": "nemo_rl.data.energon.multimodal.packing",
     "GenericSFTTaskEncoder": "nemo_rl.data.energon.multimodal.task_encoders",
     "HFMultimodalSFTProcessorAdapter": (
         "nemo_rl.data.energon.multimodal.task_encoders"
     ),
     "MediaRef": "nemo_rl.data.energon.multimodal.types",
     "ModelFamily": "nemo_rl.data.energon.multimodal.model_families",
-    "PackedSFTSample": "nemo_rl.data.energon.multimodal.types",
     "SFTProcessorAdapter": "nemo_rl.data.energon.multimodal.task_encoders",
     "build_processor_adapter": "nemo_rl.data.energon.multimodal.task_encoders",
     "cook_conversation": "nemo_rl.data.energon.multimodal.cookers",

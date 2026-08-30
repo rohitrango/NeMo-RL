@@ -17,8 +17,6 @@ from typing import Any
 from nemo_rl.data.energon.config import (
     EnergonCookerConfig,
     EnergonLoaderConfig,
-    EnergonPackingConfig,
-    EnergonPackingOptions,
     EnergonSourceConfig,
     EnergonTaskEncoderConfig,
 )
@@ -47,8 +45,6 @@ def build_energon_sft_dataloaders(**kwargs: Any) -> tuple[Any, Any]:
 __all__ = [
     "EnergonCookerConfig",
     "EnergonLoaderConfig",
-    "EnergonPackingConfig",
-    "EnergonPackingOptions",
     "EnergonSourceConfig",
     "EnergonTaskEncoderConfig",
     "build_energon_sft_loader",

@@ -134,14 +134,6 @@ def test_loader_setup_rejects_an_unsupported_cooker(
         )
 
 
-def test_packing_registry_has_no_model_family_validation() -> None:
-    registry = LazyRegistry("packing")
-    registry.register("callable", import_path="json:loads", version="1")
-
-    with pytest.raises(TypeError, match="Packing registry entries"):
-        registry.resolve_for_model_family("callable", model_family="qwen")
-
-
 def test_undecorated_subclass_does_not_inherit_model_family_metadata() -> None:
     @supports_model_families("qwen")
     class QwenComponent:

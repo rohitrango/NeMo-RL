@@ -9,7 +9,6 @@ import torch
 from nemo_rl.algorithms.sft import prepare_sft_batch
 from nemo_rl.data.energon.config import (
     EnergonLoaderConfig,
-    EnergonPackingConfig,
     EnergonSourceConfig,
 )
 from nemo_rl.data.energon.multimodal import (
@@ -169,7 +168,6 @@ def _encoder(adapter, *, include_source_ids=False):
     return GenericSFTTaskEncoder(
         adapter=adapter,
         cooker_functions=[cook_conversation],
-        packing_hooks=None,
         include_source_ids=include_source_ids,
     )
 
@@ -321,7 +319,6 @@ def test_energon_config_disables_sequence_packing():
     assert config.processor_adapter == "hf_multimodal"
     assert config.topology_mapper == "default"
     assert config.task_encoder.name == "generic_sft"
-    assert config.task_encoder.packing is None
     assert [cooker.name for cooker in config.cookers] == ["generic_conversation"]
 
     source = EnergonSourceConfig(
@@ -414,25 +411,6 @@ def test_config_parses_registry_keys_and_validates_packing_options():
     )
     assert config.task_encoder.name == "generic_sft"
     assert config.cookers[0].name == "generic_conversation"
-    with pytest.raises(ValueError):
-        EnergonPackingConfig(name="future", buffer_size=0)
-    packed = _loader_config(
-        {
-            "model_family": "qwen",
-            "task_encoder": {
-                "packing": {
-                    "name": "first_fit_decreasing",
-                    "buffer_size": 16,
-                    "options": {
-                        "max_sequence_length": 1024,
-                        "sequence_length_pad_multiple": 8,
-                    },
-                }
-            },
-        }
-    )
-    assert packed.task_encoder.packing is not None
-    assert packed.task_encoder.packing.options.max_sequence_length == 1024
 
 
 def test_config_rejects_options_for_the_generic_task_encoder():

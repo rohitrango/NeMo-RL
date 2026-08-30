@@ -18,14 +18,9 @@ from typing import Any, ClassVar, TypeAlias
 
 from megatron.energon import Cooker, CrudeSample, DefaultTaskEncoder
 
-from nemo_rl.data.energon.multimodal.packing import (
-    EnergonPackingHooks,
-    validate_packing_schema,
-)
 from nemo_rl.data.energon.multimodal.types import (
     CanonicalSFTSample,
     EncodedSFTSample,
-    PackedSFTSample,
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
@@ -43,7 +38,7 @@ class BaseSFTTaskEncoder(
     ],
     ABC,
 ):
-    """Common SFT lifecycle and optional Energon packing forwarding."""
+    """Common SFT lifecycle shared by the Energon task encoders."""
 
     sample_schema: ClassVar[str]
 
@@ -51,40 +46,12 @@ class BaseSFTTaskEncoder(
         self,
         *,
         cooker_functions: Sequence[SFTCooker],
-        packing_hooks: EnergonPackingHooks[Any, Any, Any] | None,
     ) -> None:
         super().__init__()
         self.cookers = tuple(
             cooker if isinstance(cooker, Cooker) else Cooker(cooker)
             for cooker in cooker_functions
         )
-        self._packing_hooks: EnergonPackingHooks[Any, Any, Any] | None = None
-        self._packing_is_bound = False
-        self.register_packing(packing_hooks)
-
-    def register_packing(
-        self, hooks: EnergonPackingHooks[Any, Any, Any] | None
-    ) -> None:
-        """Bind the selected packing callbacks once during loader setup."""
-        if self._packing_is_bound:
-            raise RuntimeError("Energon packing hooks are already bound.")
-        if hooks is not None:
-            validate_packing_schema(self.sample_schema, hooks)
-        self._packing_hooks = hooks
-        self._packing_is_bound = True
-
-    def _require_packing(self) -> EnergonPackingHooks[Any, Any, Any]:
-        if self._packing_hooks is None:
-            raise RuntimeError("No Energon packing implementation is configured.")
-        return self._packing_hooks
-
-    def select_samples_to_pack(self, samples: list[Any]) -> list[list[Any]]:
-        """Forward pack selection to the configured packing implementation."""
-        return self._require_packing().select_samples_to_pack(samples)
-
-    def pack_selected_samples(self, samples: list[Any]) -> Any:
-        """Forward physical pack construction to the configured implementation."""
-        return self._require_packing().pack_selected_samples(samples)
 
     @abstractmethod
     def preencode_sample(self, sample: CanonicalSFTSample) -> EncodedSFTSample:
@@ -95,9 +62,7 @@ class BaseSFTTaskEncoder(
         """Finish the selected sample before physical packing."""
 
     @abstractmethod
-    def batch(
-        self, samples: list[EncodedSFTSample | PackedSFTSample]
-    ) -> BatchedDataDict[Any]:
+    def batch(self, samples: list[EncodedSFTSample]) -> BatchedDataDict[Any]:
         """Combine encoded samples into one minibatch."""
 
     @abstractmethod

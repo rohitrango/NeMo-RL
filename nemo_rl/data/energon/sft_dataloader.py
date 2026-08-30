@@ -35,10 +35,8 @@ from megatron.energon import (
 )
 
 from nemo_rl.data.energon.config import EnergonLoaderConfig, EnergonSourceConfig
-from nemo_rl.data.energon.multimodal.packing import build_packing_hooks
 from nemo_rl.data.energon.multimodal.registry import (
     COOKER_REGISTRY,
-    PACKING_REGISTRY,
     TASK_ENCODER_REGISTRY,
     selected_registry_identity,
 )
@@ -47,7 +45,6 @@ from nemo_rl.data.energon.multimodal.task_encoders import (
     build_processor_adapter,
 )
 from nemo_rl.data.energon.multimodal.types import CanonicalSFTSample
-from nemo_rl.data.packing import SequencePacker
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 _V1_STATE_FORMAT_VERSION = 1
@@ -242,7 +239,6 @@ def _v1_loader_projection(config: EnergonLoaderConfig) -> dict[str, Any]:
     legacy_components = (
         config.task_encoder.name == "generic_sft"
         and not config.task_encoder.options
-        and config.task_encoder.packing is None
         and len(config.cookers) == 1
         and config.cookers[0].name == "generic_conversation"
         and not config.cookers[0].options
@@ -258,11 +254,6 @@ def _v1_loader_projection(config: EnergonLoaderConfig) -> dict[str, Any]:
         "registries": selected_registry_identity(
             task_encoder=config.task_encoder.name,
             cookers=[cooker.name for cooker in config.cookers],
-            packing=(
-                None
-                if config.task_encoder.packing is None
-                else config.task_encoder.packing.name
-            ),
         ),
     }
     return projection
@@ -296,7 +287,6 @@ def _v2_fingerprint(
     logical_world_size: int,
     placement_fingerprint: str,
 ) -> str:
-    packing = loader_config.task_encoder.packing
     payload = {
         "state_format_version": _V2_STATE_FORMAT_VERSION,
         "source": source.model_dump(mode="json"),
@@ -312,7 +302,6 @@ def _v2_fingerprint(
         "registries": selected_registry_identity(
             task_encoder=loader_config.task_encoder.name,
             cookers=[cooker.name for cooker in loader_config.cookers],
-            packing=None if packing is None else packing.name,
         ),
     }
     return hashlib.sha256(
@@ -360,25 +349,11 @@ def _task_encoder(
         Any, TASK_ENCODER_REGISTRY.resolve(loader_config.task_encoder.name)
     )
     encoder_options: dict[str, Any] = dict(loader_config.task_encoder.options)
-    packing_config = loader_config.task_encoder.packing
-    packing_hooks = None
-    if packing_config is not None:
-        packer_type = cast(
-            type[SequencePacker],
-            PACKING_REGISTRY.resolve(packing_config.name),
-        )
-        packing_hooks = build_packing_hooks(
-            packing_config.options,
-            algorithm=packing_config.name,
-            version=PACKING_REGISTRY.identity(packing_config.name)["version"],
-            packer_type=packer_type,
-        )
     return cast(
         BaseSFTTaskEncoder,
         encoder_type(
             adapter=adapter,
             cooker_functions=cooker_functions,
-            packing_hooks=packing_hooks,
             include_source_ids=include_source_ids,
             **encoder_options,
         ),
@@ -406,19 +381,6 @@ def _build_energon_sft_loader(
         raise ValueError("SFTv2 requires a non-empty placement fingerprint.")
 
     loader_config = _loader_config(data_config["energon"])
-    if (
-        state_format_version == _V1_STATE_FORMAT_VERSION
-        and loader_config.task_encoder.packing is not None
-    ):
-        raise ValueError("Energon-owned packing requires the SFTv2 loader path.")
-    if (
-        loader_config.task_encoder.packing is not None
-        and loader_config.task_encoder.packing.options.max_sequence_length
-        != max_sequence_length
-    ):
-        raise ValueError(
-            "Energon pack capacity must match the SFT maximum sequence length."
-        )
     adapter = build_processor_adapter(
         processor_adapter=loader_config.processor_adapter,
         processor=processor,
@@ -449,11 +411,6 @@ def _build_energon_sft_loader(
             worker_config=worker_config,
             batch_size=batch_size,
             batch_drop_last=True,
-            packing_buffer_size=(
-                None
-                if loader_config.task_encoder.packing is None
-                else loader_config.task_encoder.packing.buffer_size
-            ),
             shuffle_buffer_size=(
                 loader_config.shuffle_buffer_size if data_config["shuffle"] else None
             ),
@@ -468,11 +425,6 @@ def _build_energon_sft_loader(
             worker_config=worker_config,
             batch_size=batch_size,
             batch_drop_last=False,
-            packing_buffer_size=(
-                None
-                if loader_config.task_encoder.packing is None
-                else loader_config.task_encoder.packing.buffer_size
-            ),
             limit=source.limit,
             task_encoder=task_encoder,
         )
