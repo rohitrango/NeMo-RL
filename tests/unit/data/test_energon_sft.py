@@ -19,8 +19,9 @@ from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (
 from nemo_rl.data.energon.multimodal.types import CanonicalSFTSample, MediaRef
 from nemo_rl.data.energon.sft_dataloader import (
     EnergonSFTDataLoader,
+    _identity_fingerprint,
     _loader_config,
-    _v1_fingerprint,
+    _loader_identity,
 )
 from nemo_rl.data.llm_message_utils import message_log_to_flat_messages
 from nemo_rl.data.multimodal_utils import PackedTensor
@@ -288,16 +289,19 @@ class _FakeLoader:
 
 
 def test_loader_state_is_fingerprinted_and_restored_before_iteration():
+    identity = {"split_role": "train", "loader": {"num_workers": 4}}
     raw_loader = _FakeLoader()
-    loader = EnergonSFTDataLoader(raw_loader, fingerprint="expected")
+    loader = EnergonSFTDataLoader(raw_loader, identity=identity)
     state = loader.state_dict()
     checkpoint = io.BytesIO()
     torch.save(state, checkpoint)
     checkpoint.seek(0)
+    # The identity travels through a weights-only load with the rest of the
+    # checkpoint, so it may hold JSON containers and scalars only.
     state = torch.load(checkpoint, weights_only=True)
 
     restored_raw_loader = _FakeLoader()
-    restored = EnergonSFTDataLoader(restored_raw_loader, fingerprint="expected")
+    restored = EnergonSFTDataLoader(restored_raw_loader, identity=identity)
     restored.load_state_dict(state)
 
     assert restored_raw_loader.restored == {"next": 1}
@@ -305,9 +309,29 @@ def test_loader_state_is_fingerprinted_and_restored_before_iteration():
     with pytest.raises(RuntimeError, match="before iteration"):
         restored.load_state_dict(state)
 
-    mismatched = EnergonSFTDataLoader(_FakeLoader(), fingerprint="changed")
-    with pytest.raises(ValueError, match="fingerprint mismatch"):
+
+def test_rejected_restore_names_the_settings_that_changed():
+    state = EnergonSFTDataLoader(
+        _FakeLoader(),
+        identity={"split_role": "train", "loader": {"num_workers": 4}},
+    ).state_dict()
+
+    mismatched = EnergonSFTDataLoader(
+        _FakeLoader(),
+        identity={"split_role": "validation", "loader": {"num_workers": 2}},
+    )
+    with pytest.raises(ValueError) as failure:
         mismatched.load_state_dict(state)
+    assert "loader.num_workers 4 -> 2" in str(failure.value)
+    assert "split_role 'train' -> 'validation'" in str(failure.value)
+
+    # State written before the identity was recorded still fails, with the
+    # generic reason.
+    del state["identity"]
+    with pytest.raises(ValueError, match="dataset, processor, or loader settings"):
+        EnergonSFTDataLoader(
+            _FakeLoader(), identity={"split_role": "validation"}
+        ).load_state_dict(state)
 
 
 def test_energon_config_disables_sequence_packing():
@@ -334,7 +358,7 @@ def test_energon_config_disables_sequence_packing():
         EnergonLoaderConfig.model_validate({"model_family": "unsupported"})
 
 
-def test_v1_fingerprint_uses_the_former_loader_fields_only():
+def test_v1_identity_uses_the_former_loader_fields_only():
     source = EnergonSourceConfig(
         path="/data/prepared", split="train", virtual_epoch_length=10
     )
@@ -357,22 +381,24 @@ def test_v1_fingerprint_uses_the_former_loader_fields_only():
         "adapter": "adapter-fingerprint",
         "split_role": "train",
     }
-    expected = hashlib.sha256(
-        json.dumps(payload, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    identity = _loader_identity(
+        source=source,
+        loader_config=config,
+        adapter_fingerprint="adapter-fingerprint",
+        split_role="train",
+    )
 
+    assert identity == payload
+    # The hash V1 checkpoints were written against.
     assert (
-        _v1_fingerprint(
-            source=source,
-            loader_config=config,
-            adapter_fingerprint="adapter-fingerprint",
-            split_role="train",
-        )
-        == expected
+        _identity_fingerprint(identity)
+        == hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()
     )
 
 
-def test_v1_fingerprint_identifies_stage3_component_selection():
+def test_v1_identity_identifies_stage3_component_selection():
     source = EnergonSourceConfig(path="/data/prepared", split="train")
     generic = EnergonLoaderConfig(model_family="qwen")
     stage3 = EnergonLoaderConfig.model_validate(
@@ -388,16 +414,43 @@ def test_v1_fingerprint_identifies_stage3_component_selection():
     )
 
     fingerprints = {
-        _v1_fingerprint(
-            source=source,
-            loader_config=config,
-            adapter_fingerprint="same-processor",
-            split_role="train",
+        _identity_fingerprint(
+            _loader_identity(
+                source=source,
+                loader_config=config,
+                adapter_fingerprint="same-processor",
+                split_role="train",
+            )
         )
         for config in (generic, stage3)
     }
 
     assert len(fingerprints) == 2
+
+
+def test_v2_identity_binds_the_loader_to_one_logical_shard():
+    source = EnergonSourceConfig(path="/data/prepared", split="train")
+    config = EnergonLoaderConfig(model_family="qwen")
+
+    def identity(logical_rank: int) -> dict:
+        return _loader_identity(
+            source=source,
+            loader_config=config,
+            adapter_fingerprint="same-processor",
+            split_role="train",
+            topology={
+                "mapper": config.topology_mapper,
+                "placement": "same-placement",
+                "logical_rank": logical_rank,
+                "logical_world_size": 2,
+            },
+        )
+
+    # V2 pins the whole loader config, not the V1 projection.
+    assert identity(0)["loader"] == config.model_dump(mode="json")
+    assert identity(0)["state_format_version"] == 2
+    # Two shards of one run must not accept each other's state.
+    assert _identity_fingerprint(identity(0)) != _identity_fingerprint(identity(1))
 
 
 def test_config_parses_registry_keys_and_validates_packing_options():

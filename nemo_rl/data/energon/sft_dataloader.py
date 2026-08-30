@@ -105,14 +105,50 @@ class SFTDataLoader(Protocol):
     def load_state_dict(self, state: dict[str, Any]) -> None: ...
 
 
+def _identity_fingerprint(identity: Mapping[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(identity, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _brief(value: Any) -> str:
+    text = repr(value)
+    return text if len(text) <= 80 else f"{text[:77]}..."
+
+
+def _identity_differences(saved: Any, current: Any, path: str = "") -> list[str]:
+    """List the identity entries that changed, as `key old -> new` lines."""
+    if isinstance(saved, Mapping) and isinstance(current, Mapping):
+        differences: list[str] = []
+        for key in sorted(set(saved) | set(current)):
+            child = f"{path}.{key}" if path else str(key)
+            if key not in saved:
+                differences.append(f"{child} added {_brief(current[key])}")
+            elif key not in current:
+                differences.append(f"{child} removed {_brief(saved[key])}")
+            else:
+                differences.extend(
+                    _identity_differences(saved[key], current[key], child)
+                )
+        return differences
+    if saved != current:
+        return [f"{path} {_brief(saved)} -> {_brief(current)}"]
+    return []
+
+
 class EnergonSFTDataLoader:
     """Expose Energon rank state through NeMo-RL's dataloader interface."""
 
     def __init__(
-        self, loader: Any, *, fingerprint: str, state_format_version: int = 1
+        self,
+        loader: Any,
+        *,
+        identity: Mapping[str, Any],
+        state_format_version: int = 1,
     ) -> None:
         self._loader = loader
-        self._fingerprint = fingerprint
+        self._identity = dict(identity)
+        self._fingerprint = _identity_fingerprint(self._identity)
         self._state_format_version = state_format_version
         self._iteration_started = False
 
@@ -130,6 +166,11 @@ class EnergonSFTDataLoader:
             "backend": "energon",
             "format_version": self._state_format_version,
             "fingerprint": self._fingerprint,
+            # The payload the fingerprint hashes. Kept so a rejected restore can
+            # name the settings that moved instead of only reporting a hash
+            # mismatch. It holds JSON scalars, lists and dicts only, so the
+            # outer checkpoint stays weights-only loadable.
+            "identity": self._identity,
             # The outer NeMo-RL checkpoint stays compatible with torch.load's
             # weights-only default. Energon classes are decoded after validation.
             "loader_state": torch.frombuffer(
@@ -150,10 +191,20 @@ class EnergonSFTDataLoader:
                 f"{state.get('format_version')!r}."
             )
         if state.get("fingerprint") != self._fingerprint:
-            raise ValueError(
-                "Energon loader fingerprint mismatch; dataset, processor, or loader "
-                "settings changed."
+            saved_identity = state.get("identity")
+            differences = (
+                _identity_differences(saved_identity, self._identity)
+                if isinstance(saved_identity, Mapping)
+                else []
             )
+            # State written before the identity was recorded carries the hash
+            # alone, so there is nothing to diff against.
+            detail = (
+                "; ".join(differences)
+                if differences
+                else "dataset, processor, or loader settings changed"
+            )
+            raise ValueError(f"Energon loader identity changed: {detail}")
         loader_state = state.get("loader_state")
         if (
             not isinstance(loader_state, torch.Tensor)
@@ -259,54 +310,44 @@ def _v1_loader_projection(config: EnergonLoaderConfig) -> dict[str, Any]:
     return projection
 
 
-def _v1_fingerprint(
+def _loader_identity(
     *,
     source: EnergonSourceConfig,
     loader_config: EnergonLoaderConfig,
     adapter_fingerprint: str,
     split_role: str,
-) -> str:
-    payload = {
+    topology: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Describe what a restored loader must still agree with.
+
+    `topology` is set for V2 only, and is what makes one DP shard refuse
+    another shard's state. Its absence selects the V1 payload, which stays
+    byte-identical to the one V1 checkpoints were written against:
+
+      loader      V1 hashes a hand-picked projection, so adding a field to
+                  EnergonLoaderConfig does not invalidate older checkpoints.
+                  V2 has no such history and pins the whole config.
+      registries  V1 carries them inside the projection's stage3 block, and
+                  only for non-legacy components.
+    """
+    payload: dict[str, Any] = {
         "source": source.model_dump(mode="json"),
-        "loader": _v1_loader_projection(loader_config),
+        "loader": (
+            loader_config.model_dump(mode="json")
+            if topology is not None
+            else _v1_loader_projection(loader_config)
+        ),
         "adapter": adapter_fingerprint,
         "split_role": split_role,
     }
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True).encode("utf-8")
-    ).hexdigest()
-
-
-def _v2_fingerprint(
-    *,
-    source: EnergonSourceConfig,
-    loader_config: EnergonLoaderConfig,
-    adapter_fingerprint: str,
-    split_role: str,
-    logical_rank: int,
-    logical_world_size: int,
-    placement_fingerprint: str,
-) -> str:
-    payload = {
-        "state_format_version": _V2_STATE_FORMAT_VERSION,
-        "source": source.model_dump(mode="json"),
-        "loader": loader_config.model_dump(mode="json"),
-        "adapter": adapter_fingerprint,
-        "split_role": split_role,
-        "topology": {
-            "mapper": loader_config.topology_mapper,
-            "placement": placement_fingerprint,
-            "logical_rank": logical_rank,
-            "logical_world_size": logical_world_size,
-        },
-        "registries": selected_registry_identity(
+    if topology is not None:
+        payload["state_format_version"] = _V2_STATE_FORMAT_VERSION
+        payload["topology"] = topology
+        payload["registries"] = selected_registry_identity(
             task_encoder=loader_config.task_encoder.name,
             cookers=[cooker.name for cooker in loader_config.cookers],
-        ),
-    }
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+        )
+    return payload
 
 
 def _worker_config(
@@ -442,27 +483,24 @@ def _build_energon_sft_loader(
         watchdog_timeout_seconds=loader_config.watchdog_timeout_seconds,
         fail_on_timeout=True,
     )
-    if state_format_version == _V1_STATE_FORMAT_VERSION:
-        fingerprint = _v1_fingerprint(
-            source=source,
-            loader_config=loader_config,
-            adapter_fingerprint=adapter.fingerprint,
-            split_role=split_role,
-        )
-    else:
+    topology = None
+    if state_format_version == _V2_STATE_FORMAT_VERSION:
         assert placement_fingerprint is not None
-        fingerprint = _v2_fingerprint(
-            source=source,
-            loader_config=loader_config,
-            adapter_fingerprint=adapter.fingerprint,
-            split_role=split_role,
-            logical_rank=logical_rank,
-            logical_world_size=logical_world_size,
-            placement_fingerprint=placement_fingerprint,
-        )
+        topology = {
+            "mapper": loader_config.topology_mapper,
+            "placement": placement_fingerprint,
+            "logical_rank": logical_rank,
+            "logical_world_size": logical_world_size,
+        }
     return EnergonSFTDataLoader(
         loader,
-        fingerprint=fingerprint,
+        identity=_loader_identity(
+            source=source,
+            loader_config=loader_config,
+            adapter_fingerprint=adapter.fingerprint,
+            split_role=split_role,
+            topology=topology,
+        ),
         state_format_version=state_format_version,
     )
 
