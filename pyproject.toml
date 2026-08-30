@@ -226,6 +226,12 @@ mcore = [
   "torch-memory-saver>=0.0.9.post1",
   "nvshmem4py-cu13>=0.2.1",
   "cupy-cuda13x",
+  # nemo_rl/data/energon/ imports megatron.energon directly, so declare it here
+  # rather than inheriting it from megatron-core's [dev] extra -- that edge is an
+  # upstream detail that can disappear on a Megatron-Bridge bump. This extra is
+  # the right home because PY_EXECUTABLES.MCORE syncs `--extra mcore` only, and
+  # the energon SFT worker (ray_actor_environment_registry.py) runs on that tier.
+  "megatron-energon[av-decode]~=7.0",
 ]
 # TRT-LLM is built from source via 3rdparty/TensorRT-LLM-workspace's custom PEP 517
 # backend (_backend.py). The path source lets uv lock resolve the dep graph
@@ -241,9 +247,6 @@ nvrx = [
   "nvidia-resiliency-ext==0.6.0",
 ] # for ft_launcher (fault-tolerant training launcher)
 nemo_gym = ["nemo_gym"]
-energon = [
-    "megatron-energon[av-decode]~=7.0",
-]
 
 [dependency-groups]
 
