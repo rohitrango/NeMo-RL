@@ -15,9 +15,12 @@
 
 from __future__ import annotations
 
+import pickle
+import shutil
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -406,6 +409,12 @@ class LocalDataPlaneClient(DataPlaneClient):
         }
         return local_batch_to_tensordict(selected, batch_size=len(sample_ids))
 
+    def list_sample_ids(self, partition_id: str) -> list[str]:
+        """List stored sample IDs without reading their batch payloads."""
+        self._require_open()
+        partition = self._partitions.get(partition_id)
+        return sorted(partition.sample_ids) if partition is not None else []
+
     def clear_samples(self, sample_ids: list[str] | None, partition_id: str) -> None:
         partition = self._partition(partition_id)
         if sample_ids is None:
@@ -436,6 +445,69 @@ class LocalDataPlaneClient(DataPlaneClient):
             consumed.difference_update(removed)
         if not partition.sample_ids:
             del self._partitions[partition_id]
+
+    def save_checkpoint(
+        self,
+        checkpoint_dir: str | Path,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist the in-process partitions to ``checkpoint_dir``.
+
+        State never leaves this process, so pickle is sufficient; callers must
+        not load checkpoints from untrusted paths. The write goes to a sibling
+        ``.tmp`` directory and is renamed into place so a crash mid-save leaves
+        the previous checkpoint intact.
+        """
+        self._require_open()
+        checkpoint_dir = Path(checkpoint_dir)
+        tmp_dir = checkpoint_dir.with_name(f"{checkpoint_dir.name}.tmp")
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir)
+        tmp_dir.mkdir(parents=True)
+        try:
+            with (tmp_dir / "local_state.pkl").open("wb") as checkpoint_file:
+                pickle.dump(
+                    {
+                        "partitions": self._partitions,
+                        "partition_generations": self._partition_generations,
+                        "metadata": metadata or {},
+                    },
+                    checkpoint_file,
+                    protocol=pickle.HIGHEST_PROTOCOL,
+                )
+            if checkpoint_dir.exists():
+                shutil.rmtree(checkpoint_dir)
+            tmp_dir.rename(checkpoint_dir)
+        except Exception:
+            if tmp_dir.exists():
+                shutil.rmtree(tmp_dir)
+            raise
+
+    def load_checkpoint(self, checkpoint_dir: str | Path) -> dict[str, Any]:
+        """Restore partitions into a client that has not registered any yet."""
+        self._require_open()
+        if self._partitions:
+            raise RuntimeError(
+                "load_checkpoint requires a clean data-plane client with no "
+                "registered partitions"
+            )
+        checkpoint_file = Path(checkpoint_dir) / "local_state.pkl"
+        if not checkpoint_file.is_file():
+            raise FileNotFoundError(f"Local checkpoint not found: {checkpoint_file}")
+        with checkpoint_file.open("rb") as state_file:
+            state = pickle.load(state_file)
+        if "partitions" not in state:
+            raise ValueError(
+                f"Local checkpoint at {checkpoint_file} has no 'partitions' key; "
+                "it was written by an incompatible version of this adapter."
+            )
+        metadata = state.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise ValueError("Local checkpoint metadata must be a dictionary")
+        self._partitions = state["partitions"]
+        self._partition_generations = state.get("partition_generations", {})
+        return metadata
 
     def close(self) -> None:
         if self._closed:
