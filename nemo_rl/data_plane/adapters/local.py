@@ -179,7 +179,7 @@ class LocalDataPlaneClient(DataPlaneClient):
     def __init__(self, cfg: LocalDataPlaneConfig) -> None:
         self._max_partitions = cfg.max_partitions
         self._partitions: dict[str, _LocalPartition] = {}
-        self._partition_generations: dict[str, int] = {}
+        self._next_generation = 0
         self._closed = False
 
     def _require_open(self) -> None:
@@ -228,8 +228,8 @@ class LocalDataPlaneClient(DataPlaneClient):
         if len(consumer_tasks) != len(set(consumer_tasks)):
             raise ValueError("Local partition consumer task names must be unique.")
 
-        generation = self._partition_generations.get(partition_id, 0) + 1
-        self._partition_generations[partition_id] = generation
+        self._next_generation += 1
+        generation = self._next_generation
         self._partitions[partition_id] = _LocalPartition(
             fields=tuple(fields),
             num_samples=num_samples,
@@ -420,9 +420,6 @@ class LocalDataPlaneClient(DataPlaneClient):
         partition = self._partition(partition_id)
         if sample_ids is None:
             del self._partitions[partition_id]
-            # SFTv2 mints a fresh partition id per step, so retaining the
-            # generation of a deleted partition grows without bound.
-            self._partition_generations.pop(partition_id, None)
             return
         if len(sample_ids) != len(set(sample_ids)):
             raise ValueError("Local clear sample IDs must be unique.")
@@ -449,7 +446,6 @@ class LocalDataPlaneClient(DataPlaneClient):
             consumed.difference_update(removed)
         if not partition.sample_ids:
             del self._partitions[partition_id]
-            self._partition_generations.pop(partition_id, None)
 
     def save_checkpoint(
         self,
@@ -475,7 +471,7 @@ class LocalDataPlaneClient(DataPlaneClient):
                 pickle.dump(
                     {
                         "partitions": self._partitions,
-                        "partition_generations": self._partition_generations,
+                        "next_generation": self._next_generation,
                         "metadata": metadata or {},
                     },
                     checkpoint_file,
@@ -524,7 +520,10 @@ class LocalDataPlaneClient(DataPlaneClient):
         if not isinstance(metadata, dict):
             raise ValueError("Local checkpoint metadata must be a dictionary")
         self._partitions = state["partitions"]
-        self._partition_generations = state.get("partition_generations", {})
+        self._next_generation = max(
+            [state.get("next_generation", 0)]
+            + list(state.get("partition_generations", {}).values())
+        )
         return metadata
 
     def close(self) -> None:
