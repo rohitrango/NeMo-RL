@@ -19,7 +19,9 @@ from nemo_rl.data.energon.config import (  # noqa: E402
     EnergonSourceConfig,
 )
 from nemo_rl.data.energon.sft_dataloader import (  # noqa: E402
-    _v2_fingerprint,
+    _identity_fingerprint,
+    _loader_identity,
+    _v2_topology,
     _worker_config,
     build_energon_sft_dataloaders,
 )
@@ -28,6 +30,35 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict  # noqa: E402
 from nemo_rl.distributed.ray_actor_environment_registry import (  # noqa: E402
     get_actor_python_env,
 )
+
+
+def _v2_fingerprint(
+    *,
+    source: EnergonSourceConfig,
+    loader_config: EnergonLoaderConfig,
+    adapter_fingerprint: str,
+    split_role: str,
+    logical_rank: int,
+    logical_world_size: int,
+    placement_fingerprint: str,
+    batch_size: int = 1,
+) -> str:
+    """Hash a V2 loader identity the way ``build_energon_sft_dataloaders`` does."""
+    return _identity_fingerprint(
+        _loader_identity(
+            source=source,
+            loader_config=loader_config,
+            adapter_fingerprint=adapter_fingerprint,
+            split_role=split_role,
+            batch_size=batch_size,
+            topology=_v2_topology(
+                loader_config=loader_config,
+                placement_fingerprint=placement_fingerprint,
+                logical_rank=logical_rank,
+                logical_world_size=logical_world_size,
+            ),
+        )
+    )
 
 
 def test_worker_config_uses_logical_data_rank() -> None:

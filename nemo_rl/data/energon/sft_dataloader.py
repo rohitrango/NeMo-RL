@@ -311,6 +311,26 @@ def _v1_loader_projection(config: EnergonLoaderConfig) -> dict[str, Any]:
     return projection
 
 
+def _v2_topology(
+    *,
+    loader_config: EnergonLoaderConfig,
+    placement_fingerprint: str,
+    logical_rank: int,
+    logical_world_size: int,
+) -> dict[str, Any]:
+    """Describe the DP shard a V2 loader state belongs to.
+
+    This is what makes one DP shard refuse another shard's state, so it is
+    hashed into the loader identity by :func:`_loader_identity`.
+    """
+    return {
+        "mapper": loader_config.topology_mapper,
+        "placement": placement_fingerprint,
+        "logical_rank": logical_rank,
+        "logical_world_size": logical_world_size,
+    }
+
+
 def _loader_identity(
     *,
     source: EnergonSourceConfig,
@@ -498,12 +518,12 @@ def _build_energon_sft_loader(
     topology = None
     if state_format_version == _V2_STATE_FORMAT_VERSION:
         assert placement_fingerprint is not None
-        topology = {
-            "mapper": loader_config.topology_mapper,
-            "placement": placement_fingerprint,
-            "logical_rank": logical_rank,
-            "logical_world_size": logical_world_size,
-        }
+        topology = _v2_topology(
+            loader_config=loader_config,
+            placement_fingerprint=placement_fingerprint,
+            logical_rank=logical_rank,
+            logical_world_size=logical_world_size,
+        )
     return EnergonSFTDataLoader(
         loader,
         identity=_loader_identity(

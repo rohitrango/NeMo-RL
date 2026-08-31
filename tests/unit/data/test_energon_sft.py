@@ -5,6 +5,7 @@ from copy import deepcopy
 
 import pytest
 import torch
+from PIL import Image
 
 # nemo_rl/data/energon/{cookers,task_encoders,types,sft_dataloader} import
 # megatron.energon at module scope, and it ships only in the `mcore` extra.
@@ -121,6 +122,15 @@ class NemotronH_Nano_Omni_Reasoning_V3Processor(_FakeQwenProcessor):
         return processed
 
 
+def _rgb_image(level: int) -> Image.Image:
+    """Build media the way Energon does.
+
+    ``GenericSFTTaskEncoder`` decodes with ``SampleDecoder(image_decode="pilrgb")``,
+    so a cooked ``MediaRef`` carries a PIL image -- not a raw tensor.
+    """
+    return Image.new("RGB", (4, 4), color=(level, level, level))
+
+
 def _sample(*, with_tools=False):
     messages = [
         {
@@ -162,8 +172,8 @@ def _sample(*, with_tools=False):
         __restore_key__=("sample-0",),
         messages=messages,
         media=[
-            MediaRef("image", torch.ones(3, 4, 4)),
-            MediaRef("image", torch.zeros(3, 4, 4)),
+            MediaRef("image", _rgb_image(255)),
+            MediaRef("image", _rgb_image(0)),
         ],
         tools=tools,
     )
@@ -193,8 +203,8 @@ def test_qwen_adapter_returns_tokenized_message_log_with_model_inputs():
 
     user_content = processor.messages[0]["content"]
     assert [part["type"] for part in user_content] == ["image", "text", "image"]
-    assert torch.equal(user_content[0]["image"], torch.ones(3, 4, 4))
-    assert torch.equal(user_content[2]["image"], torch.zeros(3, 4, 4))
+    assert user_content[0]["image"].getpixel((0, 0)) == (255, 255, 255)
+    assert user_content[2]["image"].getpixel((0, 0)) == (0, 0, 0)
     assert processor.tools == [{"type": "function", "function": {"name": "lookup"}}]
 
     flat = message_log_to_flat_messages(encoded.message_log)
@@ -207,7 +217,13 @@ def test_qwen_adapter_returns_tokenized_message_log_with_model_inputs():
     ]
     assert isinstance(flat["pixel_values"], PackedTensor)
     assert isinstance(flat["image_grid_thw"], PackedTensor)
-    assert flat["mm_token_type_ids"].shape == flat["token_ids"].shape
+    # mm_token_type_ids rides along with the multimodal turn only: get_formatted_message_log
+    # attaches it where the processor ran (the user message), and the text-only turns are
+    # tokenized without it. Batching zero-fills the rest, which is the correct text type.
+    assert (
+        flat["mm_token_type_ids"].shape[0]
+        == encoded.message_log[0]["token_ids"].shape[0]
+    )
 
 
 def test_prepare_sft_batch_builds_mask_from_energon_message_log():
