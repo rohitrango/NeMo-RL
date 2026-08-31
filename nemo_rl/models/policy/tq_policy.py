@@ -499,17 +499,27 @@ class TQPolicy(TQDriverMixin, Policy):
                 "Placed metadata supports fixed batches only. Disable NeMo-RL "
                 "sequence packing and dynamic batching."
             )
-        self._stamp_placed_pad_seqlen(dp_metas)
-        train_metas = [replace(meta, task_name="train") for meta in dp_metas]
+        train_metas = [
+            replace(meta, task_name="train")
+            for meta in self._stamp_placed_pad_seqlen(dp_metas)
+        ]
         self._dispatch_train_microbatches(train_metas, timer=timer)
 
-    def _stamp_placed_pad_seqlen(self, dp_metas: list[KVBatchMeta]) -> None:
-        """Set one forward padding target across all placed DP batches."""
+    def _stamp_placed_pad_seqlen(
+        self, dp_metas: list[KVBatchMeta]
+    ) -> list[KVBatchMeta]:
+        """Mint one fresh forward padding target across all placed DP batches.
+
+        Returns new metadata rather than mutating the caller's, and ignores any
+        inherited target: reusing one would let it ratchet upward across steps
+        and pad every later step to a historical maximum. This mirrors
+        ``TQDriverMixin._isolated_meta``, which pops the key for the same reason.
+        """
         sequence_lengths = [
             length for meta in dp_metas for length in (meta.sequence_lengths or [])
         ]
         if not sequence_lengths:
-            return
+            return list(dp_metas)
         _, dynamic_args = self._packing_args("train_mb_tokens")
         sequence_round = (
             int(dynamic_args["sequence_length_round"])
@@ -519,17 +529,14 @@ class TQPolicy(TQDriverMixin, Policy):
         pad_multiple = max(
             [int(meta.extra_info.get("pad_to_multiple", 1)) for meta in dp_metas]
         )
-        existing_targets = [
-            int(meta.extra_info[GLOBAL_FORWARD_PAD_SEQLEN])
+        target = round_up(max(sequence_lengths), max(pad_multiple, sequence_round))
+        return [
+            replace(
+                meta,
+                extra_info={**meta.extra_info, GLOBAL_FORWARD_PAD_SEQLEN: target},
+            )
             for meta in dp_metas
-            if GLOBAL_FORWARD_PAD_SEQLEN in meta.extra_info
         ]
-        target = round_up(
-            max([*sequence_lengths, *existing_targets]),
-            max(pad_multiple, sequence_round),
-        )
-        for meta in dp_metas:
-            meta.extra_info[GLOBAL_FORWARD_PAD_SEQLEN] = target
 
     def _dispatch_train_microbatches(
         self,

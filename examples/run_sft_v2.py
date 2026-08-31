@@ -31,6 +31,7 @@ from nemo_rl.algorithms.sft_v2 import (
 )
 from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.distributed.virtual_cluster import init_ray
+from nemo_rl.telemetry.setup import init_telemetry_driver, shutdown_telemetry
 from nemo_rl.utils.config import (
     load_config,
     parse_hydra_overrides,
@@ -70,6 +71,10 @@ def main() -> None:
     )
     pprint.pprint(master_config.model_dump())
 
+    # NEMO_RL_OTEL_* env is snapshotted into the Ray runtime_env and inherited
+    # by every worker, so this has to run before init_ray().
+    init_telemetry_driver(master_config, algorithm="sft_v2")
+
     init_ray()
     processor = get_tokenizer(master_config.policy["tokenizer"], get_processor=True)
     actor_args = setup_sft_v2(master_config, processor)
@@ -82,6 +87,7 @@ def main() -> None:
             actor_args.trainer.shutdown()
         except Exception as error:  # teardown must preserve the controller failure
             warnings.warn(f"SFTv2 trainer shutdown failed: {error}", stacklevel=2)
+        shutdown_telemetry()
 
 
 if __name__ == "__main__":

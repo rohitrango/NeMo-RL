@@ -3,20 +3,28 @@ from types import ModuleType
 
 import pytest
 
-from nemo_rl.data.energon.multimodal.model_families import (
+# generic_sft and sft_dataloader import megatron.energon at module scope, and it
+# ships only in the `mcore` extra. importorskip must run before those imports:
+# the mcore mark is applied in pytest_collection_modifyitems, too late to
+# prevent a collection error.
+pytest.importorskip("megatron.energon")
+
+pytestmark = pytest.mark.mcore
+
+from nemo_rl.data.energon.multimodal.model_families import (  # noqa: E402
     ALL_MODEL_FAMILIES,
     get_supported_model_families,
     supports_model_families,
     supports_model_family,
 )
-from nemo_rl.data.energon.multimodal.registry import (
+from nemo_rl.data.energon.multimodal.registry import (  # noqa: E402
     COOKER_REGISTRY,
     LazyRegistry,
 )
-from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (
+from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (  # noqa: E402
     GenericSFTTaskEncoder,
 )
-from nemo_rl.data.energon.sft_dataloader import _loader_config
+from nemo_rl.data.energon.sft_dataloader import _loader_config  # noqa: E402
 
 
 def test_decorator_stores_immutable_model_family_metadata() -> None:

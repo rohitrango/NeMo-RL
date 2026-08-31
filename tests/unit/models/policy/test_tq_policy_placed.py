@@ -48,9 +48,10 @@ def test_train_placed_microbatches_keeps_fields_and_replica_delivery() -> None:
         ["input_ids", "image_grid_thw"],
     ]
     assert [meta.task_name for meta in dispatched] == ["train", "train"]
-    assert [
-        meta.extra_info[GLOBAL_FORWARD_PAD_SEQLEN] for meta in dispatched
-    ] == [24, 24]
+    assert [meta.extra_info[GLOBAL_FORWARD_PAD_SEQLEN] for meta in dispatched] == [
+        24,
+        24,
+    ]
 
     assert dispatch.args[0] == "train_microbatch_presharded"
     assert dispatch.kwargs["in_sharded_axes"] == ["data_parallel"]

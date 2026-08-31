@@ -419,6 +419,9 @@ class LocalDataPlaneClient(DataPlaneClient):
         partition = self._partition(partition_id)
         if sample_ids is None:
             del self._partitions[partition_id]
+            # SFTv2 mints a fresh partition id per step, so retaining the
+            # generation of a deleted partition grows without bound.
+            self._partition_generations.pop(partition_id, None)
             return
         if len(sample_ids) != len(set(sample_ids)):
             raise ValueError("Local clear sample IDs must be unique.")
@@ -445,6 +448,7 @@ class LocalDataPlaneClient(DataPlaneClient):
             consumed.difference_update(removed)
         if not partition.sample_ids:
             del self._partitions[partition_id]
+            self._partition_generations.pop(partition_id, None)
 
     def save_checkpoint(
         self,
@@ -476,9 +480,22 @@ class LocalDataPlaneClient(DataPlaneClient):
                     checkpoint_file,
                     protocol=pickle.HIGHEST_PROTOCOL,
                 )
-            if checkpoint_dir.exists():
-                shutil.rmtree(checkpoint_dir)
-            tmp_dir.rename(checkpoint_dir)
+            # Move the previous checkpoint aside rather than deleting it first,
+            # so a failed rename can be rolled back instead of leaving neither.
+            old_dir = checkpoint_dir.with_name(f"{checkpoint_dir.name}.old")
+            if old_dir.exists():
+                shutil.rmtree(old_dir)
+            replaced = checkpoint_dir.exists()
+            if replaced:
+                checkpoint_dir.rename(old_dir)
+            try:
+                tmp_dir.rename(checkpoint_dir)
+            except OSError:
+                if replaced:
+                    old_dir.rename(checkpoint_dir)
+                raise
+            if replaced:
+                shutil.rmtree(old_dir)
         except Exception:
             if tmp_dir.exists():
                 shutil.rmtree(tmp_dir)

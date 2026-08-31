@@ -78,9 +78,13 @@ def _get_media_value(sample: CrudeSample, entry: dict[str, Any]) -> Any:
 
     sample_key = str(sample.get("__key__", ""))
     member_path = PurePosixPath(member)
-    candidates = [member, member_path.name, member_path.suffix.removeprefix(".")]
+    candidates = [member, member_path.name]
     if sample_key and member.startswith(f"{sample_key}."):
         candidates.append(member.removeprefix(f"{sample_key}."))
+    # The bare extension is the single-media-per-sample fallback. It cannot tell
+    # two members sharing a suffix apart, so it must be tried last: otherwise
+    # "<key>.first.jpg" and "<key>.second.jpg" both resolve to a bare "jpg".
+    candidates.append(member_path.suffix.removeprefix("."))
     for candidate in candidates:
         if candidate and candidate in sample:
             return sample[candidate]

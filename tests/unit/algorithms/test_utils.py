@@ -274,9 +274,7 @@ def test_maybe_pad_last_batch_preserves_multimodal_rows():
             "input_lengths": torch.full((batch_size,), 4),
             "sample_mask": torch.ones(batch_size),
             "token_mask": torch.ones(batch_size, 4),
-            "mm_token_type_ids": torch.arange(batch_size * 4).reshape(
-                batch_size, 4
-            ),
+            "mm_token_type_ids": torch.arange(batch_size * 4).reshape(batch_size, 4),
             "pixel_values": PackedTensor(
                 [torch.full((1, 2), row) for row in range(batch_size)],
                 dim_to_pack=0,

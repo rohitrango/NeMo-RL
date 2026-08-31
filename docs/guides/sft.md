@@ -207,6 +207,7 @@ data:
   max_input_seq_length: ${policy.max_total_sequence_length}
   shuffle: true
   energon:
+    model_family: qwen          # required, no default: "qwen" or "nemotron"
     num_workers: 8
     shuffle_buffer_size: 1000
     processor_adapter: hf_multimodal
@@ -219,7 +220,14 @@ data:
     path: /path/to/prepared/energon/dataset
     split: val
     limit: 100                  # validation batches
+data_plane:                     # required by run_sft_v2.py
+  enabled: true
+  impl: local
+  max_partitions: 2
 ```
+
+`model_family` and the top-level `data_plane` block have no defaults and are not
+supplied by any exemplar config, so both must be set explicitly.
 
 The processor runs inside Energon loader workers and returns the same tokenized `message_log` representation as the Hugging Face path, including model inputs such as Qwen3-VL grid metadata or Nano Omni image sizes and frame counts. `prepare_sft_batch` creates the assistant loss mask, flattens the messages, and pads the batch without checking which loader produced it.
 

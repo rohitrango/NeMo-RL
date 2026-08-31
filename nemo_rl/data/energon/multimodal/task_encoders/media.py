@@ -63,7 +63,9 @@ def materialize_media_value(
     elif modality == "video" and callable(getattr(payload, "get_video", None)):
         clips = payload.get_video().video_clips
         if len(clips) != 1:
-            raise ValueError(f"Selected video must decode to one clip; got {len(clips)}.")
+            raise ValueError(
+                f"Selected video must decode to one clip; got {len(clips)}."
+            )
         payload = clips[0]
     elif modality == "audio" and callable(getattr(payload, "get_audio", None)):
         payload = payload.get_audio().audio_clips

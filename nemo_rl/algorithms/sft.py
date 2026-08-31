@@ -288,9 +288,7 @@ def _validate_prepared_sft_batch(batch: BatchedDataDict) -> None:
     required_keys = {"input_ids", "input_lengths", "token_mask", "sample_mask"}
     missing_keys = required_keys.difference(batch)
     if missing_keys:
-        raise ValueError(
-            f"Prepared SFT batch is missing keys: {sorted(missing_keys)}."
-        )
+        raise ValueError(f"Prepared SFT batch is missing keys: {sorted(missing_keys)}.")
 
     input_ids = batch["input_ids"]
     input_lengths = batch["input_lengths"]
@@ -311,8 +309,17 @@ def _validate_prepared_sft_batch(batch: BatchedDataDict) -> None:
     ):
         raise ValueError("Prepared input_lengths must be within the padded sequence.")
     trainable_by_row = token_mask.bool().any(dim=-1)
-    if bool(torch.any(sample_mask.bool() & ~trainable_by_row)):
-        raise ValueError("Each active prepared SFT row needs a trainable token.")
+    degenerate = sample_mask.bool() & ~trainable_by_row
+    if bool(torch.any(degenerate)):
+        # Such a row contributed exactly 0 to the loss before this validation
+        # existed, so mask it out rather than killing a run hours in over one
+        # bad sample (e.g. a conversation with no assistant turn).
+        warnings.warn(
+            f"{int(degenerate.sum())} active SFT rows have no trainable token; "
+            "masking them out of this batch.",
+            stacklevel=2,
+        )
+        batch["sample_mask"] = sample_mask * (~degenerate).to(sample_mask.dtype)
 
     for key, value in batch.items():
         if isinstance(value, PackedTensor) and len(value) != batch_size:
@@ -384,8 +391,15 @@ def prepare_sft_batch(
             }
         )
         prepared.update(cat_and_padded.get_multimodal_dict(as_tensors=False))
+        # get_multimodal_dict only carries PackedTensor leaves and the optional
+        # sequence-aligned tensors, so per-sample provenance has to come across
+        # explicitly or the data plane tags every row "unknown:<row>".
+        if "source_ids" in batch:
+            prepared["source_ids"] = batch["source_ids"]
     else:
-        prepared = batch if isinstance(batch, BatchedDataDict) else BatchedDataDict(batch)
+        prepared = (
+            batch if isinstance(batch, BatchedDataDict) else BatchedDataDict(batch)
+        )
 
     _validate_prepared_sft_batch(prepared)
     return prepared

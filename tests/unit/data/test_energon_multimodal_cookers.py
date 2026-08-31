@@ -16,7 +16,17 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from nemo_rl.data.energon.multimodal.cookers.generic import cook_conversation
+# cookers.generic imports megatron.energon at module scope, and it ships only in
+# the `mcore` extra. importorskip must run before that import: the mcore mark is
+# applied in pytest_collection_modifyitems, too late to prevent a collection
+# error.
+pytest.importorskip("megatron.energon")
+
+pytestmark = pytest.mark.mcore
+
+from nemo_rl.data.energon.multimodal.cookers.generic import (  # noqa: E402
+    cook_conversation,
+)
 
 
 def _sample(payload, **members):

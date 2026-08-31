@@ -26,13 +26,14 @@ import torch
 from megatron.core import parallel_state
 
 from nemo_rl.algorithms.sft import prepare_sft_batch
+from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data.energon.sft_dataloader import (
     EnergonSFTDataLoader,
     build_energon_sft_loader,
 )
 from nemo_rl.data.energon.sft_types import StepEnvelope
-from nemo_rl.data_plane.adapters.local import local_batch_to_tensordict
 from nemo_rl.data.multimodal_utils import PackedTensor
+from nemo_rl.data_plane.adapters.local import local_batch_to_tensordict
 from nemo_rl.models.policy.utils import get_runtime_env_for_policy_worker
 from nemo_rl.models.policy.workers.megatron_policy_worker import (
     MegatronPolicyWorkerImpl,
@@ -46,6 +47,10 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
     """Megatron policy worker with an Energon loader on each DP owner."""
 
     def __init__(self, *args: Any, processor: Any = None, **kwargs: Any) -> None:
+        if processor is None:
+            config = args[0] if args else kwargs["config"]
+            if config["tokenizer"].get("use_processor"):
+                processor = get_tokenizer(config["tokenizer"], get_processor=True)
         self._sft_processor = processor
         self._sft_loader: Optional[EnergonSFTDataLoader] = None
         self._sft_loader_iterator: Any = None

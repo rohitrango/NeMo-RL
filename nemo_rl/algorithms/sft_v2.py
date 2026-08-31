@@ -24,8 +24,8 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Optional, cast
 
-import ray
 import numpy as np
+import ray
 import torch
 from pydantic import BaseModel
 from transformers import PreTrainedTokenizerBase
@@ -49,6 +49,7 @@ from nemo_rl.distributed.virtual_cluster import (
 )
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.tq_policy import TQPolicy
+from nemo_rl.telemetry.config import TelemetryConfig
 from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
 from nemo_rl.utils.logger import Logger, LoggerConfig
 
@@ -63,6 +64,7 @@ class MasterConfig(BaseModel, extra="allow"):
     logger: LoggerConfig
     cluster: ClusterConfig
     checkpointing: CheckpointingConfig
+    telemetry: Optional[TelemetryConfig] = None
 
 
 @dataclass
@@ -115,6 +117,15 @@ def _restore_save_state(
 
 def _max_train_steps(master_config: MasterConfig) -> int:
     source = EnergonSourceConfig.model_validate(master_config.data["train"])
+    # The loader rejects a non-positive value too, but only once the actor builds
+    # it -- by then the cluster is up and megatron_cfg.train_iters has already
+    # been set from this result. Fail on the driver, before any allocation.
+    if source.virtual_epoch_length <= 0:
+        raise ValueError(
+            "Energon training requires data.train.virtual_epoch_length in batches "
+            "(optimizer steps per virtual epoch); it drives both the epoch budget "
+            "and megatron_cfg.train_iters."
+        )
     return min(
         master_config.sft.max_num_steps,
         master_config.sft.max_num_epochs * source.virtual_epoch_length,
@@ -241,19 +252,13 @@ class SFTSingleControllerActor:
             len(envelope.source_ids) for envelope in envelopes
         )
         self._save_state.total_valid_tokens += valid_tokens
+        loader_seconds = [envelope.load_seconds for envelope in envelopes]
+        loader_latency_max = max(loader_seconds)
         metrics: dict[str, Any] = {
-            "loader_latency_max": max(envelope.load_seconds for envelope in envelopes),
-            "loader_latency_mean": statistics.fmean(
-                envelope.load_seconds for envelope in envelopes
-            ),
-            "loader_copy_imbalance": max(
-                envelope.load_seconds for envelope in envelopes
-            )
-            - min(envelope.load_seconds for envelope in envelopes),
+            "loader_latency_max": loader_latency_max,
+            "loader_latency_mean": statistics.fmean(loader_seconds),
+            "loader_copy_imbalance": loader_latency_max - min(loader_seconds),
             "policy_time": policy_seconds,
-            "loader_wait": max(envelope.load_seconds for envelope in envelopes),
-            "gpu_idle_time": max(envelope.load_seconds for envelope in envelopes),
-            "queue_depth": 1,
             "total_step_time": time.monotonic() - started,
             "valid_tokens": valid_tokens,
             "source_samples": sum(len(envelope.source_ids) for envelope in envelopes),
@@ -337,14 +342,25 @@ def setup_sft_v2(
     set_seed(master_config.sft.seed)
     if master_config.data.get("backend") != "energon":
         raise ValueError("SFTv2 Stage 1 requires data.backend=energon.")
-    if not isinstance(master_config.data_plane, LocalDataPlaneConfig):
-        raise ValueError("SFTv2 Stage 1 requires data_plane.impl=local.")
-    if not master_config.policy.get("megatron_cfg", {}).get("enabled", False):
+    if not master_config.policy["megatron_cfg"]["enabled"]:
         raise ValueError("SFTv2 Stage 1 supports only the Megatron policy backend.")
-    sequence_packing = master_config.policy.get("sequence_packing", {})
-    dynamic_batching = master_config.policy.get("dynamic_batching", {})
-    if sequence_packing.get("enabled", False) or dynamic_batching.get("enabled", False):
+    if (
+        master_config.policy["sequence_packing"]["enabled"]
+        or master_config.policy["dynamic_batching"]["enabled"]
+    ):
         raise ValueError("SFTv2 Stage 1 requires fixed NeMo-RL batching.")
+    # SFTConfig carries validation knobs that default to on (val_period=10,
+    # val_at_start=True) and this loop has no validation path, so reject them
+    # rather than accepting a config whose validation silently never runs.
+    if (
+        master_config.sft.val_period != 0
+        or master_config.sft.val_at_start
+        or master_config.sft.val_at_end
+    ):
+        raise ValueError(
+            "SFTv2 Stage 1 has no validation loop. Set sft.val_period=0, "
+            "sft.val_at_start=false and sft.val_at_end=false."
+        )
     max_sequence_length = master_config.data["max_input_seq_length"]
     if max_sequence_length is None:
         raise ValueError("SFTv2 requires data.max_input_seq_length.")
@@ -356,6 +372,11 @@ def setup_sft_v2(
         tokenizer = tokenizer_or_processor.tokenizer
     if processor is None:
         raise ValueError("SFTv2 Stage 1 requires a multimodal processor.")
+    # Workers rebuild the processor in-process rather than receiving it as a
+    # pickled constructor argument. A trust_remote_code processor's class lives
+    # in ``transformers_modules``, which Ray's worker interpreters cannot import
+    # while deserializing their arguments, so shipping the object fails there.
+    master_config.policy["tokenizer"]["use_processor"] = True
 
     checkpoint_probe = CheckpointManager(master_config.checkpointing)
     latest = checkpoint_probe.get_latest_checkpoint_path()
@@ -384,7 +405,6 @@ def setup_sft_v2(
         cluster=cluster,
         config=master_config.policy,
         tokenizer=tokenizer,
-        processor=processor,
         weights_path=weights_path,
         optimizer_path=optimizer_path,
         init_optimizer=True,

@@ -40,6 +40,7 @@ from nemo_rl.data.energon.multimodal.types import (
 )
 from nemo_rl.data.interfaces import TaskDataSpec
 from nemo_rl.data.llm_message_utils import get_formatted_message_log
+from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 
@@ -214,17 +215,23 @@ class HFMultimodalSFTProcessorAdapter:
         length = sum(len(message["token_ids"]) for message in message_log)
         loss_multiplier = 1.0
         if length >= self.max_sequence_length:
+            # Treat truncated messages as text only. Dropping the placeholder
+            # tokens without dropping the media would leave the vision merge
+            # with N features and no placeholders to scatter them into, which
+            # raises rather than training a zero-weighted row.
             for message in message_log:
                 message["token_ids"] = message["token_ids"][
                     : min(4, self.max_sequence_length // len(message_log))
                 ]
+                for key, value in list(message.items()):
+                    if isinstance(value, PackedTensor):
+                        message[key] = PackedTensor.empty_like(value)
             loss_multiplier = 0.0
 
-        # The fingerprint alone.
-        # This path derived the key from the tensor names actually present in
-        # message_log, so it split on any difference in model inputs, not only
-        # on media. batch() puts those tensors in the per-message dicts rather
-        # than in a stacked batch tensor, so the split bought nothing.
+        # group_key is the adapter fingerprint alone. Keying on the tensor names
+        # present in message_log would split groups on any model-input difference,
+        # but batch() keeps those tensors in the per-message dicts rather than in
+        # a stacked batch tensor, so the finer split buys nothing.
         return EncodedSFTSample.derive_from(
             sample,
             message_log=message_log,
@@ -240,7 +247,10 @@ class HFMultimodalSFTProcessorAdapter:
 class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
     """Encode, group, and batch complete multimodal SFT conversations."""
 
-    __default_failure_tolerance__ = 0
+    # Energon reads 0 as "disable tolerance checking" (megatron/energon/errors.py),
+    # which would let a systematically broken dataset retry forever. 1 fails on the
+    # first bad sample; raise it to tolerate transient decode errors.
+    __default_failure_tolerance__ = 1
     sample_schema = "nemo_rl.sft.encoded.v1"
     # Match the existing HF VLM path. Its processor expects PIL RGB images.
     decoder = SampleDecoder(image_decode="pilrgb")

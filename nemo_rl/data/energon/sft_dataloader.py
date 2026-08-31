@@ -49,7 +49,8 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 _V1_STATE_FORMAT_VERSION = 1
 _V2_STATE_FORMAT_VERSION = 2
-_FIRST_SAMPLE_ASSERTION = False
+# Cleared after the viewer hint is printed once; must start True or it never is.
+_FIRST_SAMPLE_ASSERTION = True
 
 
 def compact_sample_error_handler(
@@ -316,6 +317,7 @@ def _loader_identity(
     loader_config: EnergonLoaderConfig,
     adapter_fingerprint: str,
     split_role: str,
+    batch_size: int,
     topology: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Describe what a restored loader must still agree with.
@@ -342,6 +344,12 @@ def _loader_identity(
     }
     if topology is not None:
         payload["state_format_version"] = _V2_STATE_FORMAT_VERSION
+        # Energon rescales a restored worker offset only when it can find a
+        # BatchDataset, and overriding batch_group_criterion substitutes a
+        # sibling GroupBatchDataset, so a changed batch size would otherwise
+        # resume mid-stream and silently replay samples. V1 omits this to keep
+        # existing V1 fingerprints byte-identical.
+        payload["batch_size"] = batch_size
         payload["topology"] = topology
         payload["registries"] = selected_registry_identity(
             task_encoder=loader_config.task_encoder.name,
@@ -455,6 +463,10 @@ def _build_energon_sft_loader(
             shuffle_buffer_size=(
                 loader_config.shuffle_buffer_size if data_config["shuffle"] else None
             ),
+            # The buffer alone only removes sample-level shuffling. Energon still
+            # randomizes shard-slice order and interleaving unless this is None,
+            # so data.shuffle=false would otherwise not give a repeatable order.
+            shuffle_over_epochs_multiplier=1 if data_config["shuffle"] else None,
             max_samples_per_sequence=None,
             virtual_epoch_length=source.virtual_epoch_length,
             task_encoder=task_encoder,
@@ -499,6 +511,7 @@ def _build_energon_sft_loader(
             loader_config=loader_config,
             adapter_fingerprint=adapter.fingerprint,
             split_role=split_role,
+            batch_size=batch_size,
             topology=topology,
         ),
         state_format_version=state_format_version,

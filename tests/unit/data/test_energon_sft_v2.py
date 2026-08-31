@@ -2,17 +2,32 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 import torch
 
-from nemo_rl.data.energon.config import EnergonLoaderConfig, EnergonSourceConfig
-from nemo_rl.data.energon.sft_dataloader import (
+# sft_dataloader imports megatron.energon and sft_worker imports megatron.core,
+# both of which ship only in the `mcore` extra. importorskip must run before the
+# imports below: the mcore mark is applied in pytest_collection_modifyitems,
+# too late to prevent a collection error.
+pytest.importorskip("megatron.energon")
+pytest.importorskip("megatron.core")
+
+pytestmark = pytest.mark.mcore
+
+from nemo_rl.data.energon.config import (  # noqa: E402
+    EnergonLoaderConfig,
+    EnergonSourceConfig,
+)
+from nemo_rl.data.energon.sft_dataloader import (  # noqa: E402
     _v2_fingerprint,
     _worker_config,
     build_energon_sft_dataloaders,
 )
-from nemo_rl.data_plane import KVBatchMeta
-from nemo_rl.distributed.batched_data_dict import BatchedDataDict
-from nemo_rl.distributed.ray_actor_environment_registry import get_actor_python_env
+from nemo_rl.data_plane import KVBatchMeta  # noqa: E402
+from nemo_rl.distributed.batched_data_dict import BatchedDataDict  # noqa: E402
+from nemo_rl.distributed.ray_actor_environment_registry import (  # noqa: E402
+    get_actor_python_env,
+)
 
 
 def test_worker_config_uses_logical_data_rank() -> None:

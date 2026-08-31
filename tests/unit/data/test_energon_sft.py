@@ -6,25 +6,40 @@ from copy import deepcopy
 import pytest
 import torch
 
-from nemo_rl.algorithms.sft import prepare_sft_batch
-from nemo_rl.data.energon.config import (
+# nemo_rl/data/energon/{cookers,task_encoders,types,sft_dataloader} import
+# megatron.energon at module scope, and it ships only in the `mcore` extra.
+# importorskip must run before those imports: the mcore mark is applied in
+# pytest_collection_modifyitems, too late to prevent a collection error.
+pytest.importorskip("megatron.energon")
+
+pytestmark = pytest.mark.mcore
+
+from nemo_rl.algorithms.sft import prepare_sft_batch  # noqa: E402
+from nemo_rl.data.energon.config import (  # noqa: E402
     EnergonLoaderConfig,
     EnergonSourceConfig,
 )
-from nemo_rl.data.energon.multimodal.cookers.generic import cook_conversation
-from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (
+from nemo_rl.data.energon.multimodal.cookers.generic import (  # noqa: E402
+    cook_conversation,
+)
+from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (  # noqa: E402
     GenericSFTTaskEncoder,
     HFMultimodalSFTProcessorAdapter,
 )
-from nemo_rl.data.energon.multimodal.types import CanonicalSFTSample, MediaRef
-from nemo_rl.data.energon.sft_dataloader import (
+from nemo_rl.data.energon.multimodal.types import (  # noqa: E402
+    CanonicalSFTSample,
+    MediaRef,
+)
+from nemo_rl.data.energon.sft_dataloader import (  # noqa: E402
     EnergonSFTDataLoader,
     _identity_fingerprint,
     _loader_config,
     _loader_identity,
 )
-from nemo_rl.data.llm_message_utils import message_log_to_flat_messages
-from nemo_rl.data.multimodal_utils import PackedTensor
+from nemo_rl.data.llm_message_utils import (  # noqa: E402
+    message_log_to_flat_messages,
+)
+from nemo_rl.data.multimodal_utils import PackedTensor  # noqa: E402
 
 
 class _FakeTokenizer:
@@ -267,7 +282,11 @@ def test_task_encoder_runs_split_encode_and_batch_lifecycle_methods():
 
     assert encoder.encode_batch(batch) is batch
     assert batch["source_ids"] == ["sample-0"]
-    with pytest.raises(RuntimeError, match="No Energon packing"):
+    # Stage 1 does not override select_samples_to_pack, so this falls through to
+    # Energon's base implementation.
+    with pytest.raises(
+        NotImplementedError, match="Packing only effective when overridden"
+    ):
         encoder.select_samples_to_pack([preencoded])
 
 
@@ -386,6 +405,7 @@ def test_v1_identity_uses_the_former_loader_fields_only():
         loader_config=config,
         adapter_fingerprint="adapter-fingerprint",
         split_role="train",
+        batch_size=8,
     )
 
     assert identity == payload
@@ -420,6 +440,7 @@ def test_v1_identity_identifies_stage3_component_selection():
                 loader_config=config,
                 adapter_fingerprint="same-processor",
                 split_role="train",
+                batch_size=8,
             )
         )
         for config in (generic, stage3)
@@ -432,12 +453,13 @@ def test_v2_identity_binds_the_loader_to_one_logical_shard():
     source = EnergonSourceConfig(path="/data/prepared", split="train")
     config = EnergonLoaderConfig(model_family="qwen")
 
-    def identity(logical_rank: int) -> dict:
+    def identity(logical_rank: int, batch_size: int = 8) -> dict:
         return _loader_identity(
             source=source,
             loader_config=config,
             adapter_fingerprint="same-processor",
             split_role="train",
+            batch_size=batch_size,
             topology={
                 "mapper": config.topology_mapper,
                 "placement": "same-placement",
@@ -451,6 +473,12 @@ def test_v2_identity_binds_the_loader_to_one_logical_shard():
     assert identity(0)["state_format_version"] == 2
     # Two shards of one run must not accept each other's state.
     assert _identity_fingerprint(identity(0)) != _identity_fingerprint(identity(1))
+    # A changed batch size must be refused too: Energon cannot rescale a restored
+    # offset through GroupBatchDataset, so resuming would replay samples.
+    assert identity(0)["batch_size"] == 8
+    assert _identity_fingerprint(identity(0)) != _identity_fingerprint(
+        identity(0, batch_size=4)
+    )
 
 
 def test_config_parses_registry_keys_and_validates_packing_options():
