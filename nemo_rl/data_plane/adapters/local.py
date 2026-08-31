@@ -140,6 +140,7 @@ def local_batch_to_tensordict(
         else:
             result.set(
                 name,
+                # pyrefly: ignore[bad-argument-type]  tensordict's stubs declare `TensorClass` without its `TensorCollection` base, so `NonTensorData` is not seen as a valid `set` item
                 NonTensorData(value, batch_size=(batch_size,)),
             )
     return result

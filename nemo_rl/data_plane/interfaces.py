@@ -38,7 +38,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Literal, NotRequired, Sequence, TypedDict
+from typing import Annotated, Any, Callable, Literal, NotRequired, Sequence, TypedDict
 
 from pydantic import BaseModel, Field
 from tensordict import TensorDict
@@ -191,7 +191,7 @@ class LocalDataPlaneConfig(BaseModel, extra="allow"):
 
     enabled: Literal[True] = True
     impl: Literal["local"] = "local"
-    max_partitions: int = Field(default=2, ge=1)
+    max_partitions: Annotated[int, Field(ge=1)] = 2
     observability: ObservabilityConfig | None = None
 
 
