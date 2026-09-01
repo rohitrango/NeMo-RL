@@ -103,7 +103,7 @@ from nemo_rl.algorithms.single_controller_utils.utils import (
 from nemo_rl.data.interfaces import DatumSpec
 from nemo_rl.data_plane import DATA_PLANE_CHECKPOINT_SCHEMA_VERSION, KVBatchMeta
 from nemo_rl.data_plane.async_utils import call_data_plane
-from nemo_rl.data_plane.schema import DP_CALIB_INPUT_FIELDS
+from nemo_rl.data_plane.schema import DP_CALIB_INPUT_FIELDS, DP_TRAIN_FIELDS
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.refit_watchdog import RefitAborted, is_refit_context_lost
 from nemo_rl.environments.nemo_gym import should_use_nemo_gym
@@ -149,6 +149,20 @@ def _pooled_opd_metrics(
         "on_policy_distillation/adv_mean": mean,
         "on_policy_distillation/adv_std": math.sqrt(max(variance, 0.0)),
     }
+
+
+def _train_fields_for_step(
+    *,
+    policy_logprobs_required: bool,
+    reference_logprobs_required: bool,
+) -> tuple[str, ...]:
+    """Return only the data-plane columns produced for this train step."""
+    return tuple(
+        field
+        for field in DP_TRAIN_FIELDS
+        if (policy_logprobs_required or field != "prev_logprobs")
+        and (reference_logprobs_required or field != "reference_policy_logprobs")
+    )
 
 
 @ray.remote(num_cpus=1, num_gpus=0)  # pragma: no cover
@@ -215,11 +229,17 @@ class SingleControllerActor:
             master_config.loss_fn.force_on_policy_ratio
             and self._algo_cfg.seq_logprob_error_threshold is None
         )
+        # _build_trainer initializes the reference model only for a positive KL
+        # penalty, so the controller must use the same gate before requesting it.
         self._reference_logprobs_required = bool(
             master_config.loss_fn.reference_policy_kl_penalty > 0
             and not self._algo_cfg.skip_reference_policy_logprobs_calculation
         )
         self._teacher_logprobs_required = opd_module.is_opd_enabled(master_config)
+        self._train_fields = _train_fields_for_step(
+            policy_logprobs_required=self._policy_logprobs_required,
+            reference_logprobs_required=self._reference_logprobs_required,
+        )
         self._dp_client = actor_args.dp_client
         self._gen: Generation = actor_args.gen_handle
         self._trainer: TQPolicy = actor_args.trainer_handle
@@ -1887,6 +1907,7 @@ class SingleControllerActor:
                                     await asyncio.to_thread(
                                         self._trainer.train_microbatches_from_meta,
                                         train_meta,
+                                        train_fields=self._train_fields,
                                     )
                                     # A PPO step is one chunk: nothing to
                                     # accumulate, so close every epoch here.
