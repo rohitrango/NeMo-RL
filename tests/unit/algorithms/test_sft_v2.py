@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -98,6 +99,61 @@ def test_train_step_aborts_policy_and_loader_on_training_failure() -> None:
     controller._trainer.abort_train_step.assert_called_once_with()
     controller._owner_call.assert_called_once_with("abort_sft_batch")
     assert controller._save_state.total_steps == 0
+
+
+def _save_controller(**checkpointing: Any) -> object:
+    controller = _controller()
+    controller._master_config.checkpointing = {
+        "enabled": True,
+        "save_period": 10,
+        **checkpointing,
+    }
+    controller._max_steps = 25
+    return controller
+
+
+def test_should_save_honors_save_period_ft_period_and_timeout() -> None:
+    controller = _save_controller(ft_save_period=4)
+
+    controller._save_state.total_steps = 3
+    assert not controller._should_save(save_by_timeout=False)
+    # A timeout save has to land between save_period boundaries, or a preempted
+    # run loses everything since the last periodic save.
+    assert controller._should_save(save_by_timeout=True)
+
+    for step in (4, 10, 25):  # ft_save_period, save_period, final step
+        controller._save_state.total_steps = step
+        assert controller._should_save(save_by_timeout=False)
+
+
+def test_should_save_is_disabled_by_the_checkpointing_flag() -> None:
+    controller = _save_controller(enabled=False)
+    controller._save_state.total_steps = 10
+
+    assert not controller._should_save(save_by_timeout=True)
+
+
+def test_run_stops_after_a_timeout_checkpoint() -> None:
+    controller = _save_controller()
+    controller._max_steps = 5
+    controller._logger = MagicMock()
+    controller._checkpointer = MagicMock()
+    controller._close_loaders = MagicMock()
+    controller._save_checkpoint = MagicMock()
+    controller._timeout = MagicMock()
+    controller._timeout.check_save.side_effect = [False, True]
+
+    def advance() -> dict[str, Any]:
+        controller._save_state.total_steps += 1
+        return {}
+
+    controller._run_train_step = MagicMock(side_effect=advance)
+    controller.run()
+
+    # check_save latches after firing once, so the loop must exit instead of
+    # training unsaved until the walltime kill.
+    assert controller._run_train_step.call_count == 2
+    controller._save_checkpoint.assert_called_once_with()
 
 
 def test_restore_rejects_changed_placement() -> None:

@@ -52,6 +52,7 @@ from nemo_rl.models.policy.tq_policy import TQPolicy
 from nemo_rl.telemetry.config import TelemetryConfig
 from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
 from nemo_rl.utils.logger import Logger, LoggerConfig
+from nemo_rl.utils.timer import TimeoutChecker
 
 
 class MasterConfig(BaseModel, extra="allow"):
@@ -148,6 +149,14 @@ class SFTSingleControllerActor:
         self._logger = Logger(master_config.logger)  # type: ignore[arg-type]
         self._logger.log_hyperparams(master_config.model_dump())
         self._checkpointer = CheckpointManager(master_config.checkpointing)
+        # Also built here, not on the driver: TimeoutChecker starts its
+        # wall clock in __init__, so a driver-built one would count the
+        # cluster and policy setup against the training budget.
+        self._timeout = TimeoutChecker(
+            timeout=master_config.checkpointing.get("checkpoint_must_save_by"),
+            fit_last_save_time=True,
+        )
+        self._timeout.start_iterations()
         self._setup_loaders()
 
     def run(self) -> dict[str, Any]:
@@ -157,8 +166,15 @@ class SFTSingleControllerActor:
             while self._save_state.total_steps < self._max_steps:
                 metrics = self._run_train_step()
                 self._logger.log_metrics(metrics, self._save_state.total_steps)
-                if self._should_save():
+                self._timeout.mark_iteration()
+                save_by_timeout = self._timeout.check_save()
+                if self._should_save(save_by_timeout=save_by_timeout):
                     self._save_checkpoint()
+                if save_by_timeout:
+                    # check_save fires once and then latches, so continuing
+                    # would train unsaved until the walltime kill.
+                    print("Timeout has been reached, stopping training early")
+                    break
             return vars(self._save_state).copy()
         finally:
             for cleanup, name in (
@@ -300,11 +316,15 @@ class SFTSingleControllerActor:
     def _loader_state_dicts(self) -> list[dict[str, Any]]:
         return self._owner_call("sft_dataloader_state_dict")
 
-    def _should_save(self) -> bool:
+    def _should_save(self, *, save_by_timeout: bool) -> bool:
         config = self._master_config.checkpointing
+        ft_save_period = config.get("ft_save_period")
+        steps = self._save_state.total_steps
         return bool(config["enabled"]) and (
-            self._save_state.total_steps == self._max_steps
-            or self._save_state.total_steps % config["save_period"] == 0
+            save_by_timeout
+            or steps == self._max_steps
+            or steps % config["save_period"] == 0
+            or (ft_save_period is not None and steps % ft_save_period == 0)
         )
 
     def _save_checkpoint(self) -> None:
