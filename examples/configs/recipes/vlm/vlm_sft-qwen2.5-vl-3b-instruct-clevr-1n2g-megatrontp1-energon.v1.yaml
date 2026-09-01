@@ -20,6 +20,11 @@ checkpointing:
 data:
   _override_: true
   backend: energon
+  max_input_seq_length: ${policy.max_total_sequence_length}
+  add_bos: true
+  add_eos: true
+  add_generation_prompt: false
+  shuffle: true
   num_workers: 0
   energon:
     model_family: qwen
@@ -35,6 +40,7 @@ data:
       options: {}
   train:
     path: /data/nemorl-datasets/clevr
+    split: train
     virtual_epoch_length: 4375
   validation: null
 data_plane:

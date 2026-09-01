@@ -203,7 +203,7 @@ def main(is_vlm: bool = False):
 
         # setup data
         if config.data.get("backend") == "energon":
-            dataset, val_dataset = None, None
+            raise ValueError("Energon backend is not supported for V1, use `run_sft_v2.py` instead.")
         else:
             dataset, val_dataset = setup_data(tokenizer, config.data)
 
