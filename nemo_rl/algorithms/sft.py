@@ -174,18 +174,7 @@ def setup(
     #           Data
     # ==========================
     if data_config.get("backend") == "energon":
-        from nemo_rl.data.energon import build_energon_sft_dataloaders
-
-        max_sequence_length = data_config["max_input_seq_length"]
-        if max_sequence_length is None:
-            raise ValueError("Energon SFT requires data.max_input_seq_length.")
-        train_dataloader, val_dataloader = build_energon_sft_dataloaders(
-            data_config=data_config,
-            processor=processor,
-            train_batch_size=policy_config["train_global_batch_size"],
-            val_batch_size=sft_config.val_global_batch_size,
-            max_sequence_length=max_sequence_length,
-        )
+        raise ValueError("Energon SFT is not supported yet.")
     else:
         if train_dataset is None:
             raise ValueError("The Hugging Face SFT backend requires a train dataset.")

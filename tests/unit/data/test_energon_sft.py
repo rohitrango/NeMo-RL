@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import hashlib
 import io
-import json
 from copy import deepcopy
 
 import pytest
@@ -374,8 +372,7 @@ def test_rejected_restore_names_the_settings_that_changed():
     assert "loader.num_workers 4 -> 2" in str(failure.value)
     assert "split_role 'train' -> 'validation'" in str(failure.value)
 
-    # State written before the identity was recorded still fails, with the
-    # generic reason.
+    # A state whose identity is missing still fails, with the generic reason.
     del state["identity"]
     with pytest.raises(ValueError, match="dataset, processor, or loader settings"):
         EnergonSFTDataLoader(
@@ -407,51 +404,35 @@ def test_energon_config_disables_sequence_packing():
         EnergonLoaderConfig.model_validate({"model_family": "unsupported"})
 
 
-def test_v1_identity_uses_the_former_loader_fields_only():
-    source = EnergonSourceConfig(
-        path="/data/prepared", split="train", virtual_epoch_length=10
-    )
-    config = EnergonLoaderConfig(model_family="qwen")
-    former_loader_config = {
-        "num_workers": 8,
-        "shuffle_buffer_size": 1000,
-        "max_samples_per_sequence": None,
-        "packing_buffer_size": None,
-        "batch_grouping": "auto",
-        "processor_adapter": "hf_multimodal",
-        "seed_offset": 0,
-        "prefetch_factor": 2,
-        "checkpoint_every_sec": 60.0,
-        "watchdog_timeout_seconds": 60.0,
-    }
-    payload = {
-        "source": source.model_dump(mode="json"),
-        "loader": former_loader_config,
-        "adapter": "adapter-fingerprint",
-        "split_role": "train",
-    }
-    identity = _loader_identity(
-        source=source,
+def _identity(
+    *,
+    loader_config: EnergonLoaderConfig | None = None,
+    batch_size: int = 8,
+    shuffle: bool | None = True,
+    logical_rank: int = 0,
+) -> dict:
+    config = loader_config or EnergonLoaderConfig(model_family="qwen")
+    return _loader_identity(
+        source=EnergonSourceConfig(
+            path="/data/prepared", split="train", virtual_epoch_length=10
+        ),
         loader_config=config,
-        adapter_fingerprint="adapter-fingerprint",
+        adapter_fingerprint="same-processor",
         split_role="train",
-        batch_size=8,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        topology={
+            "mapper": config.topology_mapper,
+            "placement": "same-placement",
+            "logical_rank": logical_rank,
+            "logical_world_size": 2,
+        },
     )
 
-    assert identity == payload
-    # The hash V1 checkpoints were written against.
-    assert (
-        _identity_fingerprint(identity)
-        == hashlib.sha256(
-            json.dumps(payload, sort_keys=True).encode("utf-8")
-        ).hexdigest()
-    )
 
-
-def test_v1_identity_identifies_stage3_component_selection():
-    source = EnergonSourceConfig(path="/data/prepared", split="train")
+def test_identity_pins_the_whole_loader_config_and_component_selection():
     generic = EnergonLoaderConfig(model_family="qwen")
-    stage3 = EnergonLoaderConfig.model_validate(
+    subflavored = EnergonLoaderConfig.model_validate(
         {
             "model_family": "qwen",
             "cookers": [
@@ -463,51 +444,33 @@ def test_v1_identity_identifies_stage3_component_selection():
         }
     )
 
-    fingerprints = {
-        _identity_fingerprint(
-            _loader_identity(
-                source=source,
-                loader_config=config,
-                adapter_fingerprint="same-processor",
-                split_role="train",
-                batch_size=8,
-            )
-        )
-        for config in (generic, stage3)
-    }
+    assert _identity()["loader"] == generic.model_dump(mode="json")
+    assert _identity()["registries"]
+    assert _identity()["state_format_version"] == 2
 
+    fingerprints = {
+        _identity_fingerprint(_identity(loader_config=config))
+        for config in (generic, subflavored)
+    }
     assert len(fingerprints) == 2
 
 
-def test_v2_identity_binds_the_loader_to_one_logical_shard():
-    source = EnergonSourceConfig(path="/data/prepared", split="train")
-    config = EnergonLoaderConfig(model_family="qwen")
+def test_identity_refuses_a_changed_batch_size_or_shuffle():
+    # Energon cannot rescale a restored offset through GroupBatchDataset and
+    # data.shuffle also reorders shard slices, so either change would resume
+    # mid-stream and silently replay samples.
+    baseline = _identity()
 
-    def identity(logical_rank: int, batch_size: int = 8) -> dict:
-        return _loader_identity(
-            source=source,
-            loader_config=config,
-            adapter_fingerprint="same-processor",
-            split_role="train",
-            batch_size=batch_size,
-            topology={
-                "mapper": config.topology_mapper,
-                "placement": "same-placement",
-                "logical_rank": logical_rank,
-                "logical_world_size": 2,
-            },
-        )
+    assert baseline["batch_size"] == 8
+    assert baseline["shuffle"] is True
+    for changed in (_identity(batch_size=4), _identity(shuffle=False)):
+        assert _identity_fingerprint(changed) != _identity_fingerprint(baseline)
 
-    # V2 pins the whole loader config, not the V1 projection.
-    assert identity(0)["loader"] == config.model_dump(mode="json")
-    assert identity(0)["state_format_version"] == 2
+
+def test_identity_binds_the_loader_to_one_logical_shard():
     # Two shards of one run must not accept each other's state.
-    assert _identity_fingerprint(identity(0)) != _identity_fingerprint(identity(1))
-    # A changed batch size must be refused too: Energon cannot rescale a restored
-    # offset through GroupBatchDataset, so resuming would replay samples.
-    assert identity(0)["batch_size"] == 8
-    assert _identity_fingerprint(identity(0)) != _identity_fingerprint(
-        identity(0, batch_size=4)
+    assert _identity_fingerprint(_identity(logical_rank=0)) != _identity_fingerprint(
+        _identity(logical_rank=1)
     )
 
 

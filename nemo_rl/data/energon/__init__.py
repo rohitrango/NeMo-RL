@@ -32,21 +32,10 @@ def build_energon_sft_loader(**kwargs: Any) -> Any:
     return _build(**kwargs)
 
 
-def build_energon_sft_dataloaders(**kwargs: Any) -> tuple[Any, Any]:
-    """Build SFT loaders while keeping Energon an optional dependency."""
-    # Deferred so importing the default Hugging Face SFT path does not require Energon.
-    from nemo_rl.data.energon.sft_dataloader import (
-        build_energon_sft_dataloaders as _build,
-    )
-
-    return _build(**kwargs)
-
-
 __all__ = [
     "EnergonCookerConfig",
     "EnergonLoaderConfig",
     "EnergonSourceConfig",
     "EnergonTaskEncoderConfig",
     "build_energon_sft_loader",
-    "build_energon_sft_dataloaders",
 ]

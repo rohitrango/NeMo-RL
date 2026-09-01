@@ -114,7 +114,14 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             raise RuntimeError("The SFT logical loader identity is missing.")
 
         started = time.monotonic()
-        batch = next(self._sft_loader_iterator)
+
+        # restart when one epoch is exhausted
+        try:
+            batch = next(self._sft_loader_iterator)
+        except StopIteration:
+            self._sft_loader_iterator = iter(self._sft_loader)
+            batch = next(self._sft_loader_iterator)
+
         prepared = prepare_sft_batch(
             batch,
             tokenizer=self.tokenizer,

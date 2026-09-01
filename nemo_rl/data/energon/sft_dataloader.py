@@ -47,7 +47,6 @@ from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (
 from nemo_rl.data.energon.multimodal.types import CanonicalSFTSample
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
-_V1_STATE_FORMAT_VERSION = 1
 _V2_STATE_FORMAT_VERSION = 2
 # Cleared after the viewer hint is printed once; must start True or it never is.
 _FIRST_SAMPLE_ASSERTION = True
@@ -140,17 +139,10 @@ def _identity_differences(saved: Any, current: Any, path: str = "") -> list[str]
 class EnergonSFTDataLoader:
     """Expose Energon rank state through NeMo-RL's dataloader interface."""
 
-    def __init__(
-        self,
-        loader: Any,
-        *,
-        identity: Mapping[str, Any],
-        state_format_version: int = 1,
-    ) -> None:
+    def __init__(self, loader: Any, *, identity: Mapping[str, Any]) -> None:
         self._loader = loader
         self._identity = dict(identity)
         self._fingerprint = _identity_fingerprint(self._identity)
-        self._state_format_version = state_format_version
         self._iteration_started = False
 
     def __iter__(self) -> Iterator[BatchedDataDict[Any]]:
@@ -165,7 +157,7 @@ class EnergonSFTDataLoader:
         torch.save(self._loader.save_state_rank(), buffer)
         return {
             "backend": "energon",
-            "format_version": self._state_format_version,
+            "format_version": _V2_STATE_FORMAT_VERSION,
             "fingerprint": self._fingerprint,
             # The payload the fingerprint hashes. Kept so a rejected restore can
             # name the settings that moved instead of only reporting a hash
@@ -186,7 +178,7 @@ class EnergonSFTDataLoader:
             )
         if state.get("backend") != "energon":
             raise ValueError("Cannot restore non-Energon state into an Energon loader.")
-        if state.get("format_version") != self._state_format_version:
+        if state.get("format_version") != _V2_STATE_FORMAT_VERSION:
             raise ValueError(
                 "Unsupported Energon loader state format "
                 f"{state.get('format_version')!r}."
@@ -198,8 +190,8 @@ class EnergonSFTDataLoader:
                 if isinstance(saved_identity, Mapping)
                 else []
             )
-            # State written before the identity was recorded carries the hash
-            # alone, so there is nothing to diff against.
+            # A state whose identity is missing or malformed carries nothing to
+            # diff against, so report the mismatch without naming a setting.
             detail = (
                 "; ".join(differences)
                 if differences
@@ -274,43 +266,6 @@ def _loader_config(value: Any) -> EnergonLoaderConfig:
     return config
 
 
-def _v1_loader_projection(config: EnergonLoaderConfig) -> dict[str, Any]:
-    """Preserve legacy V1 state while identifying Stage 3 components."""
-    projection: dict[str, Any] = {
-        "num_workers": config.num_workers,
-        "shuffle_buffer_size": config.shuffle_buffer_size,
-        "max_samples_per_sequence": config.max_samples_per_sequence,
-        "packing_buffer_size": config.packing_buffer_size,
-        "batch_grouping": config.batch_grouping,
-        "processor_adapter": config.processor_adapter,
-        "seed_offset": config.seed_offset,
-        "prefetch_factor": config.prefetch_factor,
-        "checkpoint_every_sec": config.checkpoint_every_sec,
-        "watchdog_timeout_seconds": config.watchdog_timeout_seconds,
-    }
-    legacy_components = (
-        config.task_encoder.name == "generic_sft"
-        and not config.task_encoder.options
-        and len(config.cookers) == 1
-        and config.cookers[0].name == "generic_conversation"
-        and not config.cookers[0].options
-        and config.cookers[0].has_subflavors is None
-    )
-    if legacy_components:
-        return projection
-
-    projection["stage3"] = {
-        "model_family": config.model_family,
-        "task_encoder": config.task_encoder.model_dump(mode="json"),
-        "cookers": [cooker.model_dump(mode="json") for cooker in config.cookers],
-        "registries": selected_registry_identity(
-            task_encoder=config.task_encoder.name,
-            cookers=[cooker.name for cooker in config.cookers],
-        ),
-    }
-    return projection
-
-
 def _v2_topology(
     *,
     loader_config: EnergonLoaderConfig,
@@ -338,44 +293,33 @@ def _loader_identity(
     adapter_fingerprint: str,
     split_role: str,
     batch_size: int,
-    topology: dict[str, Any] | None = None,
+    shuffle: bool | None,
+    topology: dict[str, Any],
 ) -> dict[str, Any]:
-    """Describe what a restored loader must still agree with.
-
-    `topology` is set for V2 only, and is what makes one DP shard refuse
-    another shard's state. Its absence selects the V1 payload, which stays
-    byte-identical to the one V1 checkpoints were written against:
-
-      loader      V1 hashes a hand-picked projection, so adding a field to
-                  EnergonLoaderConfig does not invalidate older checkpoints.
-                  V2 has no such history and pins the whole config.
-      registries  V1 carries them inside the projection's stage3 block, and
-                  only for non-legacy components.
-    """
-    payload: dict[str, Any] = {
+    """Describe what a restored loader must still agree with."""
+    return {
         "source": source.model_dump(mode="json"),
-        "loader": (
-            loader_config.model_dump(mode="json")
-            if topology is not None
-            else _v1_loader_projection(loader_config)
-        ),
+        "loader": loader_config.model_dump(mode="json"),
         "adapter": adapter_fingerprint,
         "split_role": split_role,
-    }
-    if topology is not None:
-        payload["state_format_version"] = _V2_STATE_FORMAT_VERSION
         # Energon rescales a restored worker offset only when it can find a
         # BatchDataset, and overriding batch_group_criterion substitutes a
         # sibling GroupBatchDataset, so a changed batch size would otherwise
-        # resume mid-stream and silently replay samples. V1 omits this to keep
-        # existing V1 fingerprints byte-identical.
-        payload["batch_size"] = batch_size
-        payload["topology"] = topology
-        payload["registries"] = selected_registry_identity(
+        # resume mid-stream and silently replay samples.
+        "batch_size": batch_size,
+        # Toggling data.shuffle reorders shard slices as well as samples, so a
+        # restored offset would point into a stream the saved state never saw.
+        # None for validation, which is not shuffled either way.
+        "shuffle": shuffle,
+        # Bumping the format version invalidates saved fingerprints, which is
+        # what a change to this payload's shape needs.
+        "state_format_version": _V2_STATE_FORMAT_VERSION,
+        "registries": selected_registry_identity(
             task_encoder=loader_config.task_encoder.name,
             cookers=[cooker.name for cooker in loader_config.cookers],
-        )
-    return payload
+        ),
+        "topology": topology,
+    }
 
 
 def _worker_config(
@@ -429,26 +373,29 @@ def _task_encoder(
     )
 
 
-def _build_energon_sft_loader(
+def build_energon_sft_loader(
     *,
     data_config: Mapping[str, Any],
-    source: EnergonSourceConfig,
+    source: Mapping[str, Any] | EnergonSourceConfig,
     processor: Any,
     batch_size: int,
     max_sequence_length: int,
     split_role: Literal["train", "validation"],
     logical_rank: int,
     logical_world_size: int,
-    placement_fingerprint: str | None,
-    state_format_version: Literal[1, 2],
+    placement_fingerprint: str,
 ) -> EnergonSFTDataLoader:
+    """Build one loader for an explicit logical data shard and split."""
+    if "energon" not in data_config:
+        raise ValueError("data.backend=energon requires a data.energon block.")
     if processor is None:
         raise ValueError("data.backend=energon requires a multimodal processor.")
     if batch_size <= 0:
         raise ValueError("Energon SFT batch size must be positive.")
-    if state_format_version == _V2_STATE_FORMAT_VERSION and not placement_fingerprint:
+    if not placement_fingerprint:
         raise ValueError("SFTv2 requires a non-empty placement fingerprint.")
 
+    resolved_source = _source_config(source, name=split_role)
     loader_config = _loader_config(data_config["energon"])
     adapter = build_processor_adapter(
         processor_adapter=loader_config.processor_adapter,
@@ -461,7 +408,7 @@ def _build_energon_sft_loader(
     task_encoder = _task_encoder(
         loader_config=loader_config,
         adapter=adapter,
-        include_source_ids=state_format_version == _V2_STATE_FORMAT_VERSION,
+        include_source_ids=True,
     )
     worker_config = _worker_config(
         loader_config,
@@ -470,13 +417,13 @@ def _build_energon_sft_loader(
     )
 
     if split_role == "train":
-        if source.virtual_epoch_length <= 0:
+        if resolved_source.virtual_epoch_length <= 0:
             raise ValueError(
                 "Energon training requires train.virtual_epoch_length in batches."
             )
         dataset = get_train_dataset(
-            source.path,
-            split_part=source.split,
+            resolved_source.path,
+            split_part=resolved_source.split,
             worker_config=worker_config,
             batch_size=batch_size,
             batch_drop_last=True,
@@ -488,17 +435,17 @@ def _build_energon_sft_loader(
             # so data.shuffle=false would otherwise not give a repeatable order.
             shuffle_over_epochs_multiplier=1 if data_config["shuffle"] else None,
             max_samples_per_sequence=None,
-            virtual_epoch_length=source.virtual_epoch_length,
+            virtual_epoch_length=resolved_source.virtual_epoch_length,
             task_encoder=task_encoder,
         )
     else:
         dataset = get_val_dataset(
-            source.path,
-            split_part=source.split,
+            resolved_source.path,
+            split_part=resolved_source.split,
             worker_config=worker_config,
             batch_size=batch_size,
             batch_drop_last=False,
-            limit=source.limit,
+            limit=resolved_source.limit,
             task_encoder=task_encoder,
         )
 
@@ -515,117 +462,27 @@ def _build_energon_sft_loader(
         watchdog_timeout_seconds=loader_config.watchdog_timeout_seconds,
         fail_on_timeout=True,
     )
-    topology = None
-    if state_format_version == _V2_STATE_FORMAT_VERSION:
-        assert placement_fingerprint is not None
-        topology = _v2_topology(
-            loader_config=loader_config,
-            placement_fingerprint=placement_fingerprint,
-            logical_rank=logical_rank,
-            logical_world_size=logical_world_size,
-        )
     return EnergonSFTDataLoader(
         loader,
         identity=_loader_identity(
-            source=source,
+            source=resolved_source,
             loader_config=loader_config,
             adapter_fingerprint=adapter.fingerprint,
             split_role=split_role,
             batch_size=batch_size,
-            topology=topology,
+            shuffle=bool(data_config["shuffle"]) if split_role == "train" else None,
+            topology=_v2_topology(
+                loader_config=loader_config,
+                placement_fingerprint=placement_fingerprint,
+                logical_rank=logical_rank,
+                logical_world_size=logical_world_size,
+            ),
         ),
-        state_format_version=state_format_version,
     )
-
-
-def build_energon_sft_loader(
-    *,
-    data_config: Mapping[str, Any],
-    source: Mapping[str, Any] | EnergonSourceConfig,
-    processor: Any,
-    batch_size: int,
-    max_sequence_length: int,
-    split_role: Literal["train", "validation"],
-    logical_rank: int,
-    logical_world_size: int,
-    placement_fingerprint: str,
-) -> EnergonSFTDataLoader:
-    """Build one V2 loader for an explicit logical data shard and split."""
-    if "energon" not in data_config:
-        raise ValueError("data.backend=energon requires a data.energon block.")
-    resolved_source = _source_config(source, name=split_role)
-    return _build_energon_sft_loader(
-        data_config=data_config,
-        source=resolved_source,
-        processor=processor,
-        batch_size=batch_size,
-        max_sequence_length=max_sequence_length,
-        split_role=split_role,
-        logical_rank=logical_rank,
-        logical_world_size=logical_world_size,
-        placement_fingerprint=placement_fingerprint,
-        state_format_version=_V2_STATE_FORMAT_VERSION,
-    )
-
-
-def build_energon_sft_dataloaders(
-    *,
-    data_config: Mapping[str, Any],
-    processor: Any,
-    train_batch_size: int,
-    val_batch_size: int,
-    max_sequence_length: int,
-) -> tuple[EnergonSFTDataLoader, EnergonSFTDataLoader | None]:
-    """Build V1 driver-owned loaders through the shared rank-aware path."""
-    if "energon" not in data_config:
-        raise ValueError("data.backend=energon requires a data.energon block.")
-    if isinstance(data_config.get("train"), list):
-        raise ValueError(
-            "Energon v1 accepts one train path; use an Energon metadataset to "
-            "blend sources."
-        )
-
-    train_source = _source_config(data_config.get("train"), name="train")
-    train_loader = _build_energon_sft_loader(
-        data_config=data_config,
-        source=train_source,
-        processor=processor,
-        batch_size=train_batch_size,
-        max_sequence_length=max_sequence_length,
-        split_role="train",
-        logical_rank=0,
-        logical_world_size=1,
-        placement_fingerprint=None,
-        state_format_version=_V1_STATE_FORMAT_VERSION,
-    )
-
-    validation = data_config.get("validation")
-    if validation is None:
-        return train_loader, None
-    if isinstance(validation, list):
-        raise ValueError(
-            "Energon v1 accepts one validation path; use an Energon metadataset "
-            "to combine sources."
-        )
-    val_source = _source_config(validation, name="validation")
-    val_loader = _build_energon_sft_loader(
-        data_config=data_config,
-        source=val_source,
-        processor=processor,
-        batch_size=val_batch_size,
-        max_sequence_length=max_sequence_length,
-        split_role="validation",
-        logical_rank=0,
-        logical_world_size=1,
-        placement_fingerprint=None,
-        state_format_version=_V1_STATE_FORMAT_VERSION,
-    )
-    return train_loader, val_loader
 
 
 __all__ = [
     "EnergonSFTDataLoader",
     "SFTDataLoader",
     "build_energon_sft_loader",
-    "build_energon_sft_dataloaders",
 ]

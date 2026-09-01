@@ -37,7 +37,6 @@ from nemo_rl.data.energon.sft_dataloader import (  # noqa: E402
     _loader_identity,
     _v2_topology,
     _worker_config,
-    build_energon_sft_dataloaders,
 )
 from nemo_rl.data_plane import KVBatchMeta  # noqa: E402
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict  # noqa: E402
@@ -57,7 +56,7 @@ def _v2_fingerprint(
     placement_fingerprint: str,
     batch_size: int = 1,
 ) -> str:
-    """Hash a V2 loader identity the way ``build_energon_sft_dataloaders`` does."""
+    """Hash a V2 loader identity the way ``build_energon_sft_loader`` does."""
     return _identity_fingerprint(
         _loader_identity(
             source=source,
@@ -65,6 +64,7 @@ def _v2_fingerprint(
             adapter_fingerprint=adapter_fingerprint,
             split_role=split_role,
             batch_size=batch_size,
+            shuffle=split_role == "train",
             topology=_v2_topology(
                 loader_config=loader_config,
                 placement_fingerprint=placement_fingerprint,
@@ -110,37 +110,6 @@ def test_v2_fingerprint_identifies_each_logical_shard() -> None:
         logical_rank=0,
         **{**common, "loader_config": nemotron},
     )
-
-
-def test_v1_builder_uses_shared_loader_as_rank_zero_of_one() -> None:
-    train_loader = MagicMock()
-    data_config = {
-        "energon": {"model_family": "qwen"},
-        "shuffle": True,
-        "train": {
-            "path": "/dataset",
-            "split": "train",
-            "virtual_epoch_length": 8,
-        },
-        "validation": None,
-    }
-    with patch(
-        "nemo_rl.data.energon.sft_dataloader._build_energon_sft_loader",
-        return_value=train_loader,
-    ) as build:
-        actual, validation = build_energon_sft_dataloaders(
-            data_config=data_config,
-            processor=object(),
-            train_batch_size=8,
-            val_batch_size=4,
-            max_sequence_length=512,
-        )
-
-    assert actual is train_loader
-    assert validation is None
-    assert build.call_args.kwargs["logical_rank"] == 0
-    assert build.call_args.kwargs["logical_world_size"] == 1
-    assert build.call_args.kwargs["state_format_version"] == 1
 
 
 def test_sft_v2_worker_uses_megatron_worker_environment() -> None:
