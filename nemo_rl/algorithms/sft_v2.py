@@ -166,10 +166,11 @@ class SFTSingleControllerActor:
             while self._save_state.total_steps < self._max_steps:
                 metrics = self._run_train_step()
                 self._logger.log_metrics(metrics, self._save_state.total_steps)
+                metric = self._checkpoint_metric(metrics)
                 self._timeout.mark_iteration()
                 save_by_timeout = self._timeout.check_save()
                 if self._should_save(save_by_timeout=save_by_timeout):
-                    self._save_checkpoint()
+                    self._save_checkpoint(metric)
                 if save_by_timeout:
                     # check_save fires once and then latches, so continuing
                     # would train unsaved until the walltime kill.
@@ -327,12 +328,32 @@ class SFTSingleControllerActor:
             or (ft_save_period is not None and steps % ft_save_period == 0)
         )
 
-    def _save_checkpoint(self) -> None:
+    def _checkpoint_metric(self, metrics: dict[str, Any]) -> dict[str, float]:
+        """Read checkpointing.metric_name out of one step's training metrics.
+
+        Called every step rather than only on a save so a name that no step
+        produces fails on step 1 instead of at the first checkpoint.
+        """
+        metric_name = self._master_config.checkpointing["metric_name"]
+        if metric_name is None:
+            return {}
+        # setup_sft_v2 already rejected anything but a train: name.
+        key = metric_name.split(":", 1)[1]
+        if key not in metrics:
+            raise ValueError(
+                f"checkpointing.metric_name={metric_name!r} names a training "
+                f"metric this step did not produce. Available: {sorted(metrics)}."
+            )
+        return {metric_name: float(metrics[key])}
+
+    def _save_checkpoint(self, metric: dict[str, float]) -> None:
         step = self._save_state.total_steps
         loader_states = self._loader_state_dicts()
         if len(loader_states) != self._placement_plan.logical_world_size:
             raise RuntimeError("Refusing to save without every logical loader state.")
-        training_info = vars(self._save_state).copy()
+        # CheckpointManager ranks keep_top_k on metric_name read back out of
+        # training_info, so the metric travels with the save state.
+        training_info = vars(self._save_state) | metric
         checkpoint_path = self._checkpointer.init_tmp_checkpoint(
             step, training_info, self._master_config
         )
@@ -361,14 +382,14 @@ def setup_sft_v2(
     """Build the V2 cluster, TQPolicy, placement, and resume state."""
     set_seed(master_config.sft.seed)
     if master_config.data.get("backend") != "energon":
-        raise ValueError("SFTv2 Stage 1 requires data.backend=energon.")
+        raise ValueError("SFTv2 requires data.backend=energon.")
     if not master_config.policy["megatron_cfg"]["enabled"]:
-        raise ValueError("SFTv2 Stage 1 supports only the Megatron policy backend.")
+        raise ValueError("SFTv2 supports only the Megatron policy backend.")
     if (
         master_config.policy["sequence_packing"]["enabled"]
         or master_config.policy["dynamic_batching"]["enabled"]
     ):
-        raise ValueError("SFTv2 Stage 1 requires fixed NeMo-RL batching.")
+        raise ValueError("SFTv2 requires fixed NeMo-RL batching.")
     # SFTConfig carries validation knobs that default to on (val_period=10,
     # val_at_start=True) and this loop has no validation path, so reject them
     # rather than accepting a config whose validation silently never runs.
@@ -378,8 +399,17 @@ def setup_sft_v2(
         or master_config.sft.val_at_end
     ):
         raise ValueError(
-            "SFTv2 Stage 1 has no validation loop. Set sft.val_period=0, "
+            "SFTv2 has no validation loop. Set sft.val_period=0, "
             "sft.val_at_start=false and sft.val_at_end=false."
+        )
+    # Same reason: only train metrics exist here, so a val: name would leave
+    # keep_top_k ranking every checkpoint on a metric that is never written.
+    metric_name = master_config.checkpointing["metric_name"]
+    if metric_name is not None and not metric_name.startswith("train:"):
+        raise ValueError(
+            "SFTv2 can rank checkpoints on training metrics only. Set "
+            "checkpointing.metric_name to null or 'train:<metric>'; got "
+            f"{metric_name!r}."
         )
     max_sequence_length = master_config.data["max_input_seq_length"]
     if max_sequence_length is None:
@@ -391,7 +421,7 @@ def setup_sft_v2(
         processor = tokenizer_or_processor
         tokenizer = tokenizer_or_processor.tokenizer
     if processor is None:
-        raise ValueError("SFTv2 Stage 1 requires a multimodal processor.")
+        raise ValueError("SFTv2 requires a multimodal processor.")
     # Workers rebuild the processor in-process rather than receiving it as a
     # pickled constructor argument. A trust_remote_code processor's class lives
     # in ``transformers_modules``, which Ray's worker interpreters cannot import

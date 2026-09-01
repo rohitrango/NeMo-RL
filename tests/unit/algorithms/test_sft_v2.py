@@ -106,6 +106,7 @@ def _save_controller(**checkpointing: Any) -> object:
     controller._master_config.checkpointing = {
         "enabled": True,
         "save_period": 10,
+        "metric_name": None,
         **checkpointing,
     }
     controller._max_steps = 25
@@ -153,7 +154,44 @@ def test_run_stops_after_a_timeout_checkpoint() -> None:
     # check_save latches after firing once, so the loop must exit instead of
     # training unsaved until the walltime kill.
     assert controller._run_train_step.call_count == 2
-    controller._save_checkpoint.assert_called_once_with()
+    controller._save_checkpoint.assert_called_once_with({})
+
+
+def test_checkpoint_metric_tags_the_configured_train_metric() -> None:
+    controller = _save_controller(metric_name="train:loss")
+
+    assert controller._checkpoint_metric({"loss": 1.5, "grad_norm": 0.5}) == {
+        "train:loss": 1.5
+    }
+    # CheckpointManager looks the value up under the full prefixed name.
+    assert _save_controller()._checkpoint_metric({"loss": 1.5}) == {}
+
+
+def test_checkpoint_metric_rejects_a_metric_no_step_produces() -> None:
+    controller = _save_controller(metric_name="train:accuracy")
+
+    # Every step reports the same keys, so a name that misses once misses
+    # always -- fail on step 1 rather than at the first checkpoint.
+    with pytest.raises(ValueError, match="did not produce"):
+        controller._checkpoint_metric({"loss": 1.5})
+
+
+def test_setup_rejects_a_validation_checkpoint_metric() -> None:
+    from nemo_rl.algorithms.sft_v2 import setup_sft_v2
+
+    config = SimpleNamespace(
+        sft=SimpleNamespace(seed=0, val_period=0, val_at_start=False, val_at_end=False),
+        data={"backend": "energon"},
+        policy={
+            "megatron_cfg": {"enabled": True},
+            "sequence_packing": {"enabled": False},
+            "dynamic_batching": {"enabled": False},
+        },
+        checkpointing={"metric_name": "val:val_loss"},
+    )
+
+    with pytest.raises(ValueError, match="training metrics only"):
+        setup_sft_v2(config, MagicMock())
 
 
 def test_restore_rejects_changed_placement() -> None:
