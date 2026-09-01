@@ -95,6 +95,12 @@ class EnergonTaskEncoderOptions(BaseModel, extra="forbid"):
     video_aug_scale_resolution_only: bool = False
     tiling_augment_prob: Annotated[float, Field(ge=0.0, le=1.0)] = 0.4
     allow_large_videos: bool = False
+    # Energon disables ffmpeg codec threads before the loader workers fork, so
+    # every video decodes single-threaded. Positive values re-enable FRAME
+    # threading for the duration of one worker-local decode, leaving Energon's
+    # indexing, seeking, and frame selection untouched. 0 restores Energon's
+    # stock behavior. Mirrors the reference --video-decode-thread-count.
+    video_decode_thread_count: Annotated[int, Field(ge=0)] = 8
     audio_subsampling_factor: Annotated[int, Field(ge=1)] | None = None
     audio_num_mel_bins: Annotated[int, Field(ge=1)] = 128
     audio_clip_duration_seconds: Annotated[float, Field(gt=0)] = 30.0

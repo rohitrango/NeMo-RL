@@ -15,11 +15,13 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import logging
 import math
 import random
 import re
+import threading
 from collections import defaultdict
 from collections.abc import Sequence
 from copy import deepcopy
@@ -57,6 +59,12 @@ from nemo_rl.data.multimodal_utils import (
 # The marker sits between two special tokens, so encoding segment-by-segment
 # cannot merge across the splice boundary.
 COMPACT_IMAGE_PLACEHOLDER = f"<img>{MM_MARKER}</img>"
+
+# Serializes the temporary av_open rebind below. Loader workers are separate
+# forked processes, so each holds its own copy and this is uncontended in
+# practice; it only matters if a caller ever decodes from multiple threads in
+# one process (num_workers=0 runs the loader inside the training process).
+_ENERGON_AV_OPEN_LOCK = threading.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -565,6 +573,7 @@ class _NemotronVisualProcessorAdapter:
         video_aug_scale_resolution_only: bool = False,
         allow_large_videos: bool = False,
         tiling_augment_prob: float = 0.4,
+        video_decode_thread_count: int = 8,
         add_bos: bool = False,
         add_eos: bool = False,
         add_generation_prompt: bool = False,
@@ -587,6 +596,8 @@ class _NemotronVisualProcessorAdapter:
             )
         if video_default_fps <= 0:
             raise ValueError("video_default_fps must be greater than zero.")
+        if video_decode_thread_count < 0:
+            raise ValueError("video_decode_thread_count must be non-negative.")
         if prompt_format not in {"nemotron-h-5p5-reasoning", "nemotron6-moe"}:
             raise ValueError(f"Unsupported Nemotron prompt format {prompt_format!r}.")
         # "default" is the legacy nemo-rl spelling of the reference's "normalized";
@@ -632,6 +643,10 @@ class _NemotronVisualProcessorAdapter:
         self.video_aug_scale_resolution_only = video_aug_scale_resolution_only
         self.allow_large_videos = allow_large_videos
         self.tiling_augment_prob = tiling_augment_prob
+        # Decode-speed knob only: it does not change which frames are selected,
+        # so it is deliberately left out of the fingerprint below to avoid
+        # invalidating checkpoint resume.
+        self.video_decode_thread_count = video_decode_thread_count
         self.add_bos = add_bos
         self.add_eos = add_eos
         self.add_generation_prompt = add_generation_prompt
@@ -1164,6 +1179,72 @@ class _NemotronVisualProcessorAdapter:
             visual_plans=visual_plans,
         )
 
+    def _decode_video_clips(
+        self, av_decoder: Any, targets: Sequence[float]
+    ) -> list[Any]:
+        """Decode the selected frames, optionally with worker-local ffmpeg threads.
+
+        Energon's ``initialize_av_container`` pins every codec context to
+        ``thread_type="NONE"`` so that no threads exist before the torch loader
+        forks its workers. That leaves each video decoding on a single core,
+        which is the dominant cost when a step has to fetch video. Rebinding
+        ``av_open`` for the duration of one ``get_clips`` call re-enables FRAME
+        threading inside the already-forked worker, and Energon's own indexing,
+        seeking, and frame choice are untouched -- the frames returned are the
+        same ones, decoded faster.
+        """
+        if not targets:
+            return []
+
+        def get_clips() -> list[Any]:
+            return list(
+                av_decoder.get_clips(
+                    video_clip_ranges=[
+                        (timestamp, timestamp) for timestamp in targets
+                    ],
+                    video_unit="seconds",
+                ).video_clips
+            )
+
+        thread_count = self.video_decode_thread_count
+        if thread_count <= 0:
+            return get_clips()
+
+        decoder_module = importlib.import_module(AVDecoder.__module__)
+        original_av_open = getattr(decoder_module, "av_open", None)
+        if not callable(original_av_open):
+            # Older/newer Energon builds may not expose the hook; decoding
+            # unthreaded is correct, just slower.
+            return get_clips()
+
+        def threaded_av_open(*args: Any, **kwargs: Any) -> Any:
+            container = original_av_open(*args, **kwargs)
+            try:
+                for media_stream in container.streams:
+                    if media_stream.type != "video":
+                        continue
+                    codec_context = media_stream.codec_context
+                    if codec_context is None:
+                        continue
+                    codec_context.thread_type = "FRAME"
+                    codec_context.thread_count = thread_count
+            except Exception:
+                container.close()
+                raise
+            return container
+
+        with _ENERGON_AV_OPEN_LOCK:
+            decoder_module.av_open = threaded_av_open
+            try:
+                clips = get_clips()
+            finally:
+                decoder_module.av_open = original_av_open
+        # Some codecs hold delayed frames under FRAME threading and return
+        # short. Retry that one video through the exact unthreaded path.
+        if len(clips) < len(targets):
+            clips = get_clips()
+        return clips
+
     def _process_media(
         self,
         ref: MediaRef,
@@ -1210,12 +1291,7 @@ class _NemotronVisualProcessorAdapter:
             if isinstance(value, (bytes, bytearray, memoryview)):
                 value = AVDecoder(BytesIO(bytes(value)))
             if callable(getattr(value, "get_clips", None)):
-                clips = list(value.get_clips(
-                    video_clip_ranges=[
-                        (timestamp, timestamp) for timestamp in plan.frame_timestamps
-                    ],
-                    video_unit="seconds",
-                ).video_clips)
+                clips = self._decode_video_clips(value, plan.frame_timestamps)
                 if not clips:
                     raise ValueError("Unable to decode any selected video frame.")
                 if len(clips) < len(plan.frame_timestamps):

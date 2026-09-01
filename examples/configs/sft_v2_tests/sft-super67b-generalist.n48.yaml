@@ -1,0 +1,104 @@
+defaults: sft_vlm_nemotron_omni_30B_energon_tp4etp4_v2.yaml
+sft:
+  max_num_epochs: 1
+  max_num_steps: 20
+policy:
+  model_name: /mnt/rl-workspace/rohitkumarj/data/models/NVIDIA-Nemotron-3.5-Super-midtrain-67B-vision-pretrained
+  train_global_batch_size: 6
+  train_micro_batch_size: 1
+  max_total_sequence_length: 524288
+  megatron_cfg:
+    tensor_model_parallel_size: 8
+    context_parallel_size: 8
+    expert_model_parallel_size: 64
+    expert_tensor_parallel_size: 1
+    pipeline_model_parallel_size: 1
+    sequence_parallel: true
+    mtp_num_layers: 2
+    mtp_loss_scaling_factor: 0.3
+    mtp_use_repeated_layer: true
+    moe_router_load_balancing_type: seq_aux_loss
+    moe_aux_loss_coeff: 0.0001
+    activation_checkpointing: true
+    recompute_granularity: selective
+    optimizer:
+      lr: 1.0e-05
+      min_lr: 2.0e-06
+      optimizer_cpu_offload: false
+      optimizer_offload_fraction: 0.0
+    scheduler:
+      lr_warmup_iters: 10
+    moe_token_dispatcher_type: alltoall
+    moe_permute_fusion: true
+    env_vars:
+      PYTHONPATH: /root/.cache/huggingface/modules
+      HF_MODULES_CACHE: /root/.cache/huggingface/modules
+      NRL_MEDIA_PATCH_DIM: '16'
+      NRL_MEDIA_PREPROCESSING_MODE: patchify
+      NRL_LOADDIAG: '1'
+    recompute_vision: false
+    vision_recompute_granularity: full
+    vision_recompute_method: block
+    vision_recompute_num_layers: 30
+    radio_force_eval_mode: false
+    radio_force_cpe_eval_mode: true
+    recompute_modules:
+    - moe
+  sequence_packing:
+    enabled: true
+    fuse_loss: true
+  tokenizer:
+    chat_template: default
+data:
+  energon:
+    watchdog_timeout_seconds: 1800
+    num_workers: 2
+    prefetch_factor: 2
+    model_family: nemotron
+    task_encoder:
+      options:
+        allow_large_videos: true
+        video_max_num_frames: 64
+        video_aug_scale_frames_up: 4
+        video_aug_scale_resolution_only: true
+      packing:
+        name: balanced_greedy_knapsack
+        buffer_size: 5000
+        options:
+          max_sequence_length: ${policy.max_total_sequence_length}
+          sequence_length_pad_multiple: 64
+          balanced_knapsack_delta: 5
+    cookers:
+    - name: nemotron_conversation
+      has_subflavors:
+        cook: conversation
+    - name: nemotron_general_conversations_jsonl
+      has_subflavors:
+        cook: general_conversations_jsonl
+    - name: nemotron_general_conversations_webdataset
+      has_subflavors:
+        cook: general_conversations_webdataset
+    - name: nemotron_nano_openai_messages_jsonl
+      has_subflavors:
+        cook: openai_messages_jsonl
+    seed_offset: 1234
+  train:
+    path: /mnt/rl-workspace/rohitkumarj/data/subset_cook_v2/subset.yaml
+    split: train
+    virtual_epoch_length: 487
+  validation: null
+logger:
+  wandb_enabled: true
+  log_dir: /mnt/rl-workspace/rohitkumarj/logs/sft-super67b-generalist-n48
+  wandb:
+    project: nemotron-super-sft
+    name: sft-super67b-generalist-n48
+  tensorboard:
+    log_dir: /mnt/rl-workspace/rohitkumarj/logs/tb-sft-super67b-generalist-n48
+cluster:
+  gpus_per_node: 4
+  num_nodes: 48
+data_plane:
+  enabled: true
+  impl: local
+  max_partitions: 2

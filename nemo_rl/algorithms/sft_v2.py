@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import statistics
+import sys
 import time
 import warnings
 from dataclasses import dataclass, fields
@@ -60,6 +61,8 @@ class SFTV2Config(BaseModel, extra="allow"):
     loader_only: bool = False
     loader_warmup_steps: int = Field(default=2, ge=0)
     loader_measurement_steps: int = Field(default=10, ge=1)
+    # 0 disables skipping (any step failure kills the run, the old behaviour).
+    max_consecutive_step_failures: int = Field(default=3, ge=0)
     measurement_output: str = "results/sft_v2_loader_metrics.pt"
 
 
@@ -84,6 +87,10 @@ class SFTV2SaveState:
     consumed_samples: int
     total_valid_tokens: int
     placement_hash: str
+
+
+class _StepFailed(RuntimeError):
+    """A training step failed and was skipped; carries the original as __cause__."""
 
 
 @dataclass
@@ -156,8 +163,23 @@ class SFTSingleControllerActor:
             if self._master_config.sft_v2.loader_only:
                 return self._run_loader_measurement()
             self._trainer.prepare_for_training()
+            consecutive_failures = 0
+            max_consecutive = self._master_config.sft_v2.max_consecutive_step_failures
             while self._save_state.total_steps < self._max_steps:
-                metrics = self._run_train_step()
+                try:
+                    metrics = self._run_train_step()
+                except _StepFailed:
+                    consecutive_failures += 1
+                    self._save_state.total_steps += 1  # do not retry the same batch
+                    if consecutive_failures > max_consecutive:
+                        warnings.warn(
+                            f"SFTv2 aborting: {consecutive_failures} consecutive step "
+                            "failures. A CUDA context fault cannot be skipped past.",
+                            stacklevel=2,
+                        )
+                        raise
+                    continue
+                consecutive_failures = 0
                 self._logger.log_metrics(metrics, self._save_state.total_steps)
                 if self._should_save():
                     self._save_checkpoint()
@@ -206,6 +228,47 @@ class SFTSingleControllerActor:
     # Per-tensor fingerprints are only consumed by _run_loader_measurement.
     _collect_fingerprints = False
 
+    def _record_failed_step(self, envelopes, error) -> None:
+        """Append a JSON record naming every sample in the failing batch."""
+        import json
+        import traceback
+
+        record = {
+            "step": self._save_state.total_steps,
+            "error_type": type(error).__name__,
+            "error": str(error)[:2000],
+            "traceback": traceback.format_exc()[-4000:],
+            "copies": [
+                {
+                    "logical_rank": envelope.logical_rank,
+                    "source_ids": list(envelope.source_ids),
+                    "sequence_lengths": list(envelope.sequence_lengths),
+                    "valid_tokens": envelope.valid_tokens,
+                }
+                for envelope in envelopes
+            ],
+        }
+        # Ask the loader owners to decode and write the actual batch contents.
+        try:
+            record["batch_dumps"] = self._owner_call("dump_failed_batch")
+        except Exception as dump_error:  # noqa: BLE001
+            record["batch_dumps"] = f"dump call failed: {dump_error}"
+
+        try:
+            out = Path(self._master_config.logger["log_dir"]) / "failed_steps.jsonl"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with open(out, "a") as handle:
+                handle.write(json.dumps(record) + "\n")
+            warnings.warn(
+                f"SFTv2 step {record['step']} failed ({record['error_type']}); "
+                f"sample ids recorded in {out}",
+                stacklevel=2,
+            )
+        except Exception as write_error:  # never let logging mask the real failure
+            warnings.warn(
+                f"SFTv2 could not record the failed step: {write_error}", stacklevel=2
+            )
+
     def _load_envelopes(self) -> list[StepEnvelope]:
         futures = self._trainer.worker_group.run_all_workers_single_data(
             "load_next_sft_batch",
@@ -249,7 +312,10 @@ class SFTSingleControllerActor:
                 self._owner_call("abort_sft_batch")
             except Exception as error:  # preserve the policy-step failure
                 warnings.warn(f"SFTv2 loader abort failed: {error}", stacklevel=2)
-            raise
+            # Name the samples in the failing batch before propagating, so a
+            # data-dependent failure can be traced to specific source_ids.
+            self._record_failed_step(envelopes, sys.exc_info()[1])
+            raise _StepFailed() from sys.exc_info()[1]
 
         policy_seconds = time.monotonic() - train_started
         valid_tokens = sum(envelope.valid_tokens for envelope in envelopes)

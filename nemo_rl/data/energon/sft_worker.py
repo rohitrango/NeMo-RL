@@ -332,9 +332,92 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         envelope = replace(envelope, load_seconds=time.monotonic() - started)
 
         self._ld_mark("idle")
+        # Keep a light copy so a failed step can dump what was actually fed in.
+        # int64 [rows, seq] at 524288 is ~8MB each; two of them is acceptable
+        # against the alternative of not knowing which data killed the run.
+        try:
+            self._sft_last_batch = {
+                "batch_index": self._sft_next_batch_index,
+                "input_ids": prepared["input_ids"].detach().to("cpu").clone(),
+                "token_mask": prepared["token_mask"].detach().to("cpu").clone(),
+                "input_lengths": prepared["input_lengths"].detach().to("cpu").clone(),
+                "source_ids": source_ids,
+                "source_lengths": prepared["source_lengths"],
+            }
+        except Exception:  # never let bookkeeping break the data path
+            self._sft_last_batch = None
+
         self._sft_active_envelope = envelope
         self._sft_next_batch_index += 1
         return envelope
+
+    def dump_failed_batch(self) -> str:
+        """Decode and write the last batch handed to the trainer.
+
+        Called by the controller after a step fails. Returns the path written,
+        or a short reason if nothing could be dumped.
+        """
+        import json
+        import os
+
+        batch = getattr(self, "_sft_last_batch", None)
+        if batch is None:
+            return "no retained batch"
+        try:
+            out_dir = os.environ.get(
+                "NRL_FAILED_BATCH_DIR", "/mnt/rl-workspace/rohitkumarj/failed_batches"
+            )
+            os.makedirs(out_dir, exist_ok=True)
+            rank = self._sft_logical_rank
+            path = os.path.join(
+                out_dir, f"batch{batch['batch_index']:06d}_dp{rank}.json"
+            )
+
+            ids = batch["input_ids"]
+            mask = batch["token_mask"]
+            rows = []
+            for row in range(ids.shape[0]):
+                row_len = int(batch["input_lengths"][row])
+                tok = ids[row][:row_len]
+                msk = mask[row][:row_len]
+                # decode mask-runs so the trained vs untrained split is visible
+                spans = []
+                start = 0
+                for i in range(1, row_len + 1):
+                    if i == row_len or bool(msk[i]) != bool(msk[start]):
+                        chunk = [int(t) for t in tok[start:i]]
+                        text = self.tokenizer.decode(chunk, skip_special_tokens=False)
+                        spans.append(
+                            {
+                                "trained": bool(msk[start]),
+                                "n_tokens": len(chunk),
+                                "text": text[:400],
+                            }
+                        )
+                        start = i
+                rows.append(
+                    {
+                        "row": row,
+                        "length": row_len,
+                        "source_ids": list(batch["source_ids"][row]),
+                        "source_lengths": [int(x) for x in batch["source_lengths"][row]],
+                        "n_trained_tokens": int((msk != 0).sum()),
+                        "min_token_id": int(tok.min()),
+                        "max_token_id": int(tok.max()),
+                        "spans": spans[:40],
+                    }
+                )
+
+            with open(path, "w") as handle:
+                json.dump(
+                    {"batch_index": batch["batch_index"], "dp_rank": rank, "rows": rows},
+                    handle,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            return path
+        except Exception as error:  # noqa: BLE001
+            return f"dump failed: {error}"
 
     def commit_sft_batch(self) -> None:
         """Release the active process-local batch after a successful step."""
