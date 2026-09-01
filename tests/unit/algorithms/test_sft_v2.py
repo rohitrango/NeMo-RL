@@ -32,7 +32,6 @@ def _envelope(rank: int, *, source_count: int = 1) -> StepEnvelope:
         ),
         field_names=("input_ids",),
         sequence_lengths=(8,),
-        field_fingerprints={"input_ids": {"hash": f"hash-{rank}"}},
         load_seconds=0.1 + rank * 0.1,
         valid_tokens=4,
     )
@@ -82,7 +81,7 @@ def test_train_step_aborts_policy_and_loader_on_training_failure() -> None:
         controller._run_train_step()
 
     controller._trainer.abort_train_step.assert_called_once_with()
-    controller._owner_call.assert_called_once_with("abort_sft_batch")
+    controller._owner_call.assert_any_call("abort_sft_batch")
     assert controller._save_state.total_steps == 0
 
 

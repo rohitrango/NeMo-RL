@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import os
 import statistics
-import sys
 import time
 import warnings
 from dataclasses import dataclass, fields
@@ -28,7 +27,7 @@ from typing import Any, Optional, cast
 import ray
 import numpy as np
 import torch
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.loss.loss_functions import NLLLossFn
@@ -55,24 +54,12 @@ from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
 from nemo_rl.utils.logger import Logger, LoggerConfig
 
 
-class SFTV2Config(BaseModel, extra="allow"):
-    """SFTv2 controller and loader measurement settings."""
-
-    loader_only: bool = False
-    loader_warmup_steps: int = Field(default=2, ge=0)
-    loader_measurement_steps: int = Field(default=10, ge=1)
-    # 0 disables skipping (any step failure kills the run, the old behaviour).
-    max_consecutive_step_failures: int = Field(default=3, ge=0)
-    measurement_output: str = "results/sft_v2_loader_metrics.pt"
-
-
 class MasterConfig(BaseModel, extra="allow"):
     """Standalone SFTv2 configuration."""
 
     policy: PolicyConfig
     data: DataConfig
     sft: SFTConfig
-    sft_v2: SFTV2Config
     data_plane: LocalDataPlaneConfig
     logger: LoggerConfig
     cluster: ClusterConfig
@@ -87,10 +74,6 @@ class SFTV2SaveState:
     consumed_samples: int
     total_valid_tokens: int
     placement_hash: str
-
-
-class _StepFailed(RuntimeError):
-    """A training step failed and was skipped; carries the original as __cause__."""
 
 
 @dataclass
@@ -158,28 +141,11 @@ class SFTSingleControllerActor:
         self._setup_loaders()
 
     def run(self) -> dict[str, Any]:
-        """Run loader measurement or SFT training."""
+        """Run SFT training."""
         try:
-            if self._master_config.sft_v2.loader_only:
-                return self._run_loader_measurement()
             self._trainer.prepare_for_training()
-            consecutive_failures = 0
-            max_consecutive = self._master_config.sft_v2.max_consecutive_step_failures
             while self._save_state.total_steps < self._max_steps:
-                try:
-                    metrics = self._run_train_step()
-                except _StepFailed:
-                    consecutive_failures += 1
-                    self._save_state.total_steps += 1  # do not retry the same batch
-                    if consecutive_failures > max_consecutive:
-                        warnings.warn(
-                            f"SFTv2 aborting: {consecutive_failures} consecutive step "
-                            "failures. A CUDA context fault cannot be skipped past.",
-                            stacklevel=2,
-                        )
-                        raise
-                    continue
-                consecutive_failures = 0
+                metrics = self._run_train_step()
                 self._logger.log_metrics(metrics, self._save_state.total_steps)
                 if self._should_save():
                     self._save_checkpoint()
@@ -224,9 +190,6 @@ class SFTSingleControllerActor:
         results = ray.get(futures)
         if results != [True] * self._placement_plan.logical_world_size:
             raise RuntimeError(f"Unexpected SFT loader setup results: {results!r}.")
-
-    # Per-tensor fingerprints are only consumed by _run_loader_measurement.
-    _collect_fingerprints = False
 
     def _record_failed_step(self, envelopes, error) -> None:
         """Append a JSON record naming every sample in the failing batch."""
@@ -273,7 +236,6 @@ class SFTSingleControllerActor:
         futures = self._trainer.worker_group.run_all_workers_single_data(
             "load_next_sft_batch",
             run_rank_0_only_axes=list(REPLICATED_AXES),
-            collect_fingerprints=self._collect_fingerprints,
             only_unmask_final=self._master_config.sft.only_unmask_final,
             make_sequence_length_divisible_by=self._master_config.policy[
                 "make_sequence_length_divisible_by"
@@ -302,20 +264,24 @@ class SFTSingleControllerActor:
             train_results = self._trainer.finish_train_step()
             step_open = False
             self._owner_call("commit_sft_batch")
-        except Exception:
+        except Exception as error:
             if step_open:
                 try:
                     self._trainer.abort_train_step()
-                except Exception as error:  # preserve the policy-step failure
-                    warnings.warn(f"SFTv2 policy abort failed: {error}", stacklevel=2)
+                except Exception as abort_error:  # preserve the policy-step failure
+                    warnings.warn(
+                        f"SFTv2 policy abort failed: {abort_error}", stacklevel=2
+                    )
             try:
                 self._owner_call("abort_sft_batch")
-            except Exception as error:  # preserve the policy-step failure
-                warnings.warn(f"SFTv2 loader abort failed: {error}", stacklevel=2)
+            except Exception as abort_error:  # preserve the policy-step failure
+                warnings.warn(
+                    f"SFTv2 loader abort failed: {abort_error}", stacklevel=2
+                )
             # Name the samples in the failing batch before propagating, so a
             # data-dependent failure can be traced to specific source_ids.
-            self._record_failed_step(envelopes, sys.exc_info()[1])
-            raise _StepFailed() from sys.exc_info()[1]
+            self._record_failed_step(envelopes, error)
+            raise
 
         policy_seconds = time.monotonic() - train_started
         valid_tokens = sum(envelope.valid_tokens for envelope in envelopes)
@@ -397,92 +363,6 @@ class SFTSingleControllerActor:
             if key in train_results:
                 metrics[key] = train_results[key]
         return metrics
-
-    def _run_loader_measurement(self) -> dict[str, Any]:
-        config = self._master_config.sft_v2
-        self._collect_fingerprints = True
-        measured: list[dict[str, Any]] = []
-        total = config.loader_warmup_steps + config.loader_measurement_steps
-        for step in range(total):
-            started = time.monotonic()
-            envelopes = self._load_envelopes()
-            self._owner_call("commit_sft_batch")
-            if step < config.loader_warmup_steps:
-                continue
-            elapsed = time.monotonic() - started
-            rows = sum(len(envelope.source_ids) for envelope in envelopes)
-            valid_tokens = sum(envelope.valid_tokens for envelope in envelopes)
-            measured.append(
-                {
-                    "rows_per_second": rows / max(elapsed, 1e-12),
-                    "valid_tokens_per_second": valid_tokens / max(elapsed, 1e-12),
-                    "envelope_seconds": elapsed,
-                    "slowest_copy_seconds": max(
-                        envelope.load_seconds for envelope in envelopes
-                    ),
-                    "loader_wait_seconds": max(
-                        envelope.load_seconds for envelope in envelopes
-                    ),
-                    "gpu_idle_seconds": max(
-                        envelope.load_seconds for envelope in envelopes
-                    ),
-                    "queue_depth": 1,
-                    "copy_imbalance_seconds": max(
-                        envelope.load_seconds for envelope in envelopes
-                    )
-                    - min(envelope.load_seconds for envelope in envelopes),
-                    "source_ids": [
-                        source_id
-                        for envelope in envelopes
-                        for source_id in envelope.source_ids
-                    ],
-                    "copies": [
-                        {
-                            "logical_rank": envelope.logical_rank,
-                            "source_ids": list(envelope.source_ids),
-                            "fields": list(envelope.field_names),
-                            "sequence_lengths": list(envelope.sequence_lengths),
-                            "values": envelope.field_fingerprints,
-                            "valid_tokens": envelope.valid_tokens,
-                        }
-                        for envelope in envelopes
-                    ],
-                }
-            )
-        output = Path(config.measurement_output)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(measured, output)
-        summary = {
-            "logical_dp_size": self._placement_plan.logical_world_size,
-            "measurement_steps": len(measured),
-            "rows_per_second": statistics.fmean(
-                item["rows_per_second"] for item in measured
-            ),
-            "valid_tokens_per_second": statistics.fmean(
-                item["valid_tokens_per_second"] for item in measured
-            ),
-            "envelope_p50_seconds": float(
-                np.percentile([item["envelope_seconds"] for item in measured], 50)
-            ),
-            "envelope_p95_seconds": float(
-                np.percentile([item["envelope_seconds"] for item in measured], 95)
-            ),
-            "slowest_copy_seconds": max(
-                item["slowest_copy_seconds"] for item in measured
-            ),
-            "loader_wait_seconds": statistics.fmean(
-                item["loader_wait_seconds"] for item in measured
-            ),
-            "gpu_idle_seconds": statistics.fmean(
-                item["gpu_idle_seconds"] for item in measured
-            ),
-            "source_coverage": len(
-                {source_id for item in measured for source_id in item["source_ids"]}
-            ),
-            "measurement_output": str(output),
-        }
-        self._logger.log_metrics(summary, self._save_state.total_steps)
-        return summary
 
     def _owner_call(self, method_name: str) -> list[Any]:
         futures = self._trainer.worker_group.run_all_workers_single_data(
@@ -667,7 +547,6 @@ __all__ = [
     "MasterConfig",
     "SFTSingleControllerActor",
     "SFTV2ActorArgs",
-    "SFTV2Config",
     "SFTV2SaveState",
     "setup_sft_v2",
 ]
