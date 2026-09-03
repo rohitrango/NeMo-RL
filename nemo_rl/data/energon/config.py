@@ -69,7 +69,7 @@ class EnergonLoaderConfig(BaseModel, extra="allow"):
     packing_buffer_size: None = None
     batch_grouping: Literal["auto"] = "auto"
     processor_adapter: Literal["hf_multimodal"] = "hf_multimodal"
-    topology_mapper: str = "default"
+    topology_mapper: Literal["default"] = "default"
     task_encoder: EnergonTaskEncoderConfig = Field(
         default_factory=EnergonTaskEncoderConfig
     )

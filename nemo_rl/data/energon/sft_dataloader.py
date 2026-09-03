@@ -234,7 +234,7 @@ def _loader_config(value: Any) -> EnergonLoaderConfig:
     if not config.cookers:
         raise ValueError("At least one Energon cooker must be configured.")
     if any(cooker.options for cooker in config.cookers):
-        raise ValueError("The Stage 1 generic conversation cooker has no options.")
+        raise ValueError("The generic conversation cooker has no options.")
     fallback_cookers = [
         index
         for index, cooker in enumerate(config.cookers)
