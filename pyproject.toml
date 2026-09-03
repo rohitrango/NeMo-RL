@@ -227,7 +227,12 @@ mcore = [
   "torch-memory-saver>=0.0.9.post1",
   "nvshmem4py-cu13>=0.2.1",
   "cupy-cuda13x",
-  "megatron-energon[av-decode]~=7.0",  # for energon backend
+  # megatron-energon already flows in transitively (megatron-core[dev,mlm] declares it), so
+  # this is not a mirror in the sense forbidden above -- it is a deliberately tighter floor:
+  # Megatron-LM pins ~=7.0, and the energon SFT path requires 7.3+.
+  # tests/unit/test_dependency_pins.py fails if Megatron-LM's own pin moves, so a
+  # Megatron-Bridge bump forces a re-check of this floor.
+  "megatron-energon[av-decode]~=7.3",  # for energon backend
 ]
 # TRT-LLM is built from source via 3rdparty/TensorRT-LLM-workspace's custom PEP 517
 # backend (_backend.py). The path source lets uv lock resolve the dep graph

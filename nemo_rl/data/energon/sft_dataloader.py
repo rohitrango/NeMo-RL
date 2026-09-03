@@ -421,6 +421,9 @@ def build_energon_sft_loader(
             raise ValueError(
                 "Energon training requires train.virtual_epoch_length in batches."
             )
+        if not data_config["shuffle"]:
+            raise ValueError("Energon training requires shuffle=true.")
+
         dataset = get_train_dataset(
             resolved_source.path,
             split_part=resolved_source.split,
@@ -428,12 +431,9 @@ def build_energon_sft_loader(
             batch_size=batch_size,
             batch_drop_last=True,
             shuffle_buffer_size=(
-                loader_config.shuffle_buffer_size if data_config["shuffle"] else None
+                loader_config.shuffle_buffer_size
             ),
-            # The buffer alone only removes sample-level shuffling. Energon still
-            # randomizes shard-slice order and interleaving unless this is None,
-            # so data.shuffle=false would otherwise not give a repeatable order.
-            shuffle_over_epochs_multiplier=1 if data_config["shuffle"] else None,
+            shuffle_over_epochs_multiplier=1,
             max_samples_per_sequence=None,
             virtual_epoch_length=resolved_source.virtual_epoch_length,
             task_encoder=task_encoder,

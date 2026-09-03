@@ -402,6 +402,10 @@ def setup_sft_v2(
             "SFTv2 has no validation loop. Set sft.val_period=0, "
             "sft.val_at_start=false and sft.val_at_end=false."
         )
+    # sft_worker builds its loader with split_role="train" only, so a validation
+    # source would be accepted and never read.
+    if master_config.data.get("validation") is not None:
+        raise ValueError("SFTv2 reads no validation source. Set data.validation=null.")
     # Same reason: only train metrics exist here, so a val: name would leave
     # keep_top_k ranking every checkpoint on a metric that is never written.
     metric_name = master_config.checkpointing["metric_name"]

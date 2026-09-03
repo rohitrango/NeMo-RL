@@ -467,7 +467,7 @@ class LocalDataPlaneClient(DataPlaneClient):
             shutil.rmtree(tmp_dir)
         tmp_dir.mkdir(parents=True)
         try:
-            with (tmp_dir / "local_state.pkl").open("wb") as checkpoint_file:
+            with (tmp_dir / "local_data_plane_state.pkl").open("wb") as checkpoint_file:
                 pickle.dump(
                     {
                         "partitions": self._partitions,
