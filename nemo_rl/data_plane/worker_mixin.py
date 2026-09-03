@@ -123,6 +123,50 @@ def _broadcast_batched_data_dict(
     return out
 
 
+def _materialize_fetched(
+    td: Any,
+    *,
+    local_batch: bool,
+    layout: Layout,
+    pad_value_dict: dict[str, int | float] | None,
+    pad_to_seqlen: int,
+) -> BatchedDataDict[Any]:
+    """Materialize a fetched TensorDict with the reader that matches the writer.
+
+    ``materialize`` and ``materialize_local`` are not interchangeable. The
+    local adapter stores each non-tensor column as one ``NonTensorData`` with
+    ``batch_size=(N,)``, and ``materialize`` reads a ``NonTensorData`` as a
+    single row, so calling it on a local batch collapses N rows into 1 without
+    raising. Both readers are picked from the same ``local_batch`` flag, so
+    this only guards against a future edit that changes one of the two
+    branches; it costs the TQ path one ``isinstance`` per column.
+    """
+    from tensordict import NonTensorData
+
+    from nemo_rl.data_plane import materialize
+    from nemo_rl.data_plane.adapters.local import materialize_local
+
+    if not local_batch:
+        batched = [
+            str(key)
+            for key in td.keys(include_nested=False)
+            if isinstance(td.get(key), NonTensorData)
+        ]
+        if batched:
+            raise TypeError(
+                f"materialize() cannot read process-local columns {sorted(batched)}: "
+                "each holds a whole column in one NonTensorData and would collapse "
+                "to a single row. This batch needs materialize_local()."
+            )
+    materialize_fn = materialize_local if local_batch else materialize
+    return materialize_fn(
+        td,
+        layout=layout,
+        pad_value_dict=pad_value_dict,
+        pad_to_seqlen=pad_to_seqlen,
+    )
+
+
 class TQWorkerMixin:
     """Adds TransferQueue per-rank fetch/write-back to a policy worker.
 
@@ -219,11 +263,7 @@ class TQWorkerMixin:
         if fetch_policy not in {"auto", "independent", "leader_broadcast"}:
             raise ValueError(f"unknown fetch_policy: {fetch_policy!r}")
 
-        from nemo_rl.data_plane import materialize
-        from nemo_rl.data_plane.adapters.local import (
-            is_local_batch_meta,
-            materialize_local,
-        )
+        from nemo_rl.data_plane.adapters.local import is_local_batch_meta
 
         pad_value_dict = self._pad_value_dict()
         replica_group = (
@@ -256,9 +296,9 @@ class TQWorkerMixin:
                         partition_id=meta.partition_id,
                         select_fields=list(meta.fields),  # type: ignore[no-matching-overload]
                     )
-                materialize_fn = materialize_local if local_batch else materialize
-                data = materialize_fn(
+                data = _materialize_fetched(
                     td,
+                    local_batch=local_batch,
                     layout=layout,
                     pad_value_dict=pad_value_dict,
                     pad_to_seqlen=pad_to_seqlen,
@@ -295,9 +335,9 @@ class TQWorkerMixin:
                 partition_id=meta.partition_id,
                 select_fields=list(meta.fields),  # type: ignore[no-matching-overload]
             )
-        materialize_fn = materialize_local if local_batch else materialize
-        data = materialize_fn(
+        data = _materialize_fetched(
             td,
+            local_batch=local_batch,
             layout=layout,
             pad_value_dict=pad_value_dict,
             pad_to_seqlen=pad_to_seqlen,
