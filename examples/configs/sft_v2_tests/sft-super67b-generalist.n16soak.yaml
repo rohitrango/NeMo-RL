@@ -54,8 +54,10 @@ policy:
 data:
   energon:
     watchdog_timeout_seconds: 1800
-    num_workers: 2
+    num_workers: 4
     prefetch_factor: 2
+    cache_pool_num_workers: 8
+    gc_collect_every_n_steps: 100000
     model_family: nemotron
     task_encoder:
       options:
@@ -65,7 +67,7 @@ data:
         video_aug_scale_resolution_only: true
       packing:
         name: balanced_greedy_knapsack
-        buffer_size: 5000
+        buffer_size: 2048
         options:
           max_sequence_length: ${policy.max_total_sequence_length}
           sequence_length_pad_multiple: 64
@@ -94,7 +96,7 @@ logger:
   log_dir: /mnt/rl-workspace/rohitkumarj/logs/sft-super67b-n16-seq524288-soak
   wandb:
     project: nemotron-super-sft
-    name: sft-super67b-n16-seq524288-soak
+    name: sft-super67b-n16-seq524288-v2
   tensorboard:
     log_dir: /mnt/rl-workspace/rohitkumarj/logs/tb-sft-super67b-n16-seq524288-soak
 cluster:

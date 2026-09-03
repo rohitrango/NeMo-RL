@@ -254,34 +254,12 @@ class SFTSingleControllerActor:
         started = time.monotonic()
         envelopes = self._load_envelopes()
         train_started = time.monotonic()
-        step_open = False
-        try:
-            self._trainer.begin_train_step(self._loss_fn)
-            step_open = True
-            self._trainer.train_placed_microbatches(
-                [envelope.meta for envelope in envelopes]
-            )
-            train_results = self._trainer.finish_train_step()
-            step_open = False
-            self._owner_call("commit_sft_batch")
-        except Exception as error:
-            if step_open:
-                try:
-                    self._trainer.abort_train_step()
-                except Exception as abort_error:  # preserve the policy-step failure
-                    warnings.warn(
-                        f"SFTv2 policy abort failed: {abort_error}", stacklevel=2
-                    )
-            try:
-                self._owner_call("abort_sft_batch")
-            except Exception as abort_error:  # preserve the policy-step failure
-                warnings.warn(
-                    f"SFTv2 loader abort failed: {abort_error}", stacklevel=2
-                )
-            # Name the samples in the failing batch before propagating, so a
-            # data-dependent failure can be traced to specific source_ids.
-            self._record_failed_step(envelopes, error)
-            raise
+        self._trainer.begin_train_step(self._loss_fn)
+        self._trainer.train_placed_microbatches(
+            [envelope.meta for envelope in envelopes]
+        )
+        train_results = self._trainer.finish_train_step()
+        self._owner_call("commit_sft_batch")
 
         policy_seconds = time.monotonic() - train_started
         valid_tokens = sum(envelope.valid_tokens for envelope in envelopes)

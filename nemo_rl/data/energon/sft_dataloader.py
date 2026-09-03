@@ -507,12 +507,19 @@ def _build_energon_sft_loader(
         if any(cooker.need_cache for cooker in task_encoder.cookers)
         else None
     )
+    # Reference (energon-megatron-lm examples/multimodal/iter_data.py) leaves
+    # this at its high default (100000) rather than the SavableDataLoader
+    # default -- gc.collect() on the shuffle/packing buffers is expensive at
+    # buffer_size=5000+, so only force it rarely. Let the recipe override.
+    _gc_every_n_steps = _loader_opt("gc_collect_every_n_steps", 100000)
+
     loader = get_savable_loader(
         dataset,
         cache_pool=cache_pool,
         checkpoint_every_sec=loader_config.checkpoint_every_sec,
         prefetch_factor=loader_config.prefetch_factor,
         watchdog_timeout_seconds=loader_config.watchdog_timeout_seconds,
+        gc_collect_every_n_steps=_gc_every_n_steps,
         fail_on_timeout=True,
     )
     if state_format_version == _V1_STATE_FORMAT_VERSION:
