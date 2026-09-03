@@ -182,3 +182,13 @@ class EnergonLoaderConfig(BaseModel, extra="allow"):
     prefetch_factor: Annotated[int, Field(ge=1)] = 2
     checkpoint_every_sec: Annotated[float, Field(gt=0)] = 60.0
     watchdog_timeout_seconds: Annotated[float, Field(gt=0)] | None = 60.0
+    nvdataset_cache_dir: str | None = Field(
+        default=None,
+        description=(
+            "Root of the DSS cache that `dss://` dataset paths in an Energon "
+            "metadataset resolve against. A path is exported as "
+            "NVDATASET_CACHE_DIR for the loader process. "
+            "Leave unset to use whatever the environment already provides; "
+            "Energon raises if neither is set and a `dss://` path is used."
+        ),
+    )

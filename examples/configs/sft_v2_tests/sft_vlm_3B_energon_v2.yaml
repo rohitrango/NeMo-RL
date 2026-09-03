@@ -42,6 +42,10 @@ data:
     shuffle_buffer_size: 1000
     processor_adapter: hf_multimodal
     topology_mapper: default
+    # Root of the DSS cache that `dss://` metadataset paths resolve against.
+    # null keeps whatever the environment already exports as
+    # NVDATASET_CACHE_DIR.
+    nvdataset_cache_dir: null
     task_encoder:
       name: generic_sft
       packing: null

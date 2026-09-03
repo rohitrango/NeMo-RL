@@ -53,6 +53,7 @@ policy:
     chat_template: default
 data:
   energon:
+    nvdataset_cache_dir: /home/svc-dss/cache/nemotron
     watchdog_timeout_seconds: 1800
     num_workers: 4
     prefetch_factor: 2
