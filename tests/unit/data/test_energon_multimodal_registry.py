@@ -70,7 +70,21 @@ def test_registry_rejects_invalid_resolved_type(monkeypatch):
         registry.resolve("invalid")
 
 
-def test_registry_does_not_import_component_during_registration(monkeypatch):
+def test_registry_does_not_import_component_during_registration(tmp_path, monkeypatch):
+    # sys.modules is the right instrument: importlib.import_module never routes
+    # the requested module through builtins.__import__, so an eager register()
+    # using the same idiom as resolve() would slip past an __import__ sentinel.
+    # delitem keeps the precondition true if anything else imports the probe.
+    monkeypatch.delitem(sys.modules, "lazy_probe_mod", raising=False)
+    monkeypatch.syspath_prepend(tmp_path)
+    (tmp_path / "lazy_probe_mod.py").write_text("def probe():\n    return 1\n")
+
+    registry = LazyRegistry("cooker")
+    registry.register("probe", import_path="lazy_probe_mod:probe", version="1")
+
+    assert "lazy_probe_mod" not in sys.modules
+    assert registry.resolve("probe")() == 1
+    assert "lazy_probe_mod" in sys.modules
     imported: list[str] = []
     original = __import__
 
