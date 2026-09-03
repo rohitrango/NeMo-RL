@@ -84,7 +84,13 @@ def compact_sample_error_handler(
             print(
                 "If not installed yet, install energon sample viewer from "
                 "https://gitlab-master.nvidia.com/lvoegtle/"
-                "vscode-energon-sample-viewer"
+        url = (
+            "vscode://nvidia.energon-sample-viewer/open?data="
+            f"{urllib.parse.quote(json.dumps(data))}"
+        )
+        print(f"Assertion error: {exception}")
+        if os.environ.get("NRL_ENERGON_SAMPLE_VIEWER") == "1":
+            print(f"(Ctrl+)Click to view sample in energon viewer: {url}")
             )
             _FIRST_SAMPLE_ASSERTION = False
         return
