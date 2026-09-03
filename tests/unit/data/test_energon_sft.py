@@ -48,6 +48,7 @@ from nemo_rl.data.energon.sft_dataloader import (  # noqa: E402
     _identity_fingerprint,
     _loader_config,
     _loader_identity,
+    build_energon_sft_loader,
 )
 from nemo_rl.data.llm_message_utils import (  # noqa: E402
     message_log_to_flat_messages,
@@ -499,6 +500,27 @@ def test_identity_refuses_a_changed_batch_size_or_shuffle():
     assert baseline["shuffle"] is True
     for changed in (_identity(batch_size=4), _identity(shuffle=False)):
         assert _identity_fingerprint(changed) != _identity_fingerprint(baseline)
+
+
+def test_train_loader_rejects_shuffle_false():
+    # get_train_dataset shards by slice and Energon asserts a single slice
+    # iterator when it does not shuffle over epochs, so shuffle=false is not a
+    # valid training config. Reject it here instead of failing on the first
+    # sample inside an Energon worker.
+    with pytest.raises(ValueError, match="requires shuffle=true"):
+        build_energon_sft_loader(
+            data_config={"energon": {"model_family": "qwen"}, "shuffle": False},
+            source=EnergonSourceConfig(
+                path="/data/prepared", split="train", virtual_epoch_length=10
+            ),
+            processor=_FakeQwenProcessor(),
+            batch_size=2,
+            max_sequence_length=128,
+            split_role="train",
+            logical_rank=0,
+            logical_world_size=1,
+            placement_fingerprint="same-placement",
+        )
 
 
 def test_identity_binds_the_loader_to_one_logical_shard():

@@ -37,6 +37,9 @@ from nemo_rl.data_plane.schema import Layout
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 _LOCAL_GENERATION_KEY = "local_partition_generation"
+# One name for both save_checkpoint and load_checkpoint. They used to spell it
+# differently, which made every local resume raise FileNotFoundError.
+_CHECKPOINT_FILENAME = "local_data_plane_state.pkl"
 
 
 @dataclass
@@ -168,7 +171,13 @@ def materialize_local(
     pad_value_dict: dict[str, int | float] | None = None,
     pad_to_seqlen: int = 0,
 ) -> BatchedDataDict[Any]:
-    """Materialize local tensors and restore exact non-tensor field values."""
+    """Materialize local tensors and restore exact non-tensor field values.
+
+    Not interchangeable with :func:`materialize`. ``local_batch_to_tensordict``
+    stores each non-tensor column as one ``NonTensorData`` holding the whole
+    column, which ``materialize`` reads as a single row. Batches written by
+    this adapter must be read back through here.
+    """
     tensor_fields: dict[str, torch.Tensor] = {}
     local_fields: dict[str, Any] = {}
     for name in td.keys(include_nested=False):
@@ -483,7 +492,7 @@ class LocalDataPlaneClient(DataPlaneClient):
             shutil.rmtree(tmp_dir)
         tmp_dir.mkdir(parents=True)
         try:
-            with (tmp_dir / "local_data_plane_state.pkl").open("wb") as checkpoint_file:
+            with (tmp_dir / _CHECKPOINT_FILENAME).open("wb") as checkpoint_file:
                 pickle.dump(
                     {
                         "partitions": self._partitions,
@@ -522,7 +531,7 @@ class LocalDataPlaneClient(DataPlaneClient):
                 "load_checkpoint requires a clean data-plane client with no "
                 "registered partitions"
             )
-        checkpoint_file = Path(checkpoint_dir) / "local_state.pkl"
+        checkpoint_file = Path(checkpoint_dir) / _CHECKPOINT_FILENAME
         if not checkpoint_file.is_file():
             raise FileNotFoundError(f"Local checkpoint not found: {checkpoint_file}")
         with checkpoint_file.open("rb") as state_file:
@@ -536,10 +545,7 @@ class LocalDataPlaneClient(DataPlaneClient):
         if not isinstance(metadata, dict):
             raise ValueError("Local checkpoint metadata must be a dictionary")
         self._partitions = state["partitions"]
-        self._next_generation = max(
-            [state.get("next_generation", 0)]
-            + list(state.get("partition_generations", {}).values())
-        )
+        self._next_generation = state.get("next_generation", 0)
         return metadata
 
     def close(self) -> None:

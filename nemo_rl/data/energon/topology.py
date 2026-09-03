@@ -21,13 +21,7 @@ import json
 from dataclasses import dataclass
 from typing import Protocol
 
-from nemo_rl.distributed.named_sharding import NamedSharding
-
 from nemo_rl.distributed.named_sharding import REPLICATED_AXES, NamedSharding
-    "tensor_parallel",
-    "pipeline_parallel",
-    "context_parallel",
-)
 
 
 @dataclass(frozen=True)
@@ -81,7 +75,7 @@ class DefaultDataLoaderTopologyMapper:
             delivery_ranks = tuple(sharding.get_ranks_by_coord(data_parallel=dp_rank))
             owner_coords = {"data_parallel": dp_rank}
             owner_coords.update(
-                {axis: 0 for axis in _REPLICA_AXES if axis in sharding.names}
+                {axis: 0 for axis in REPLICATED_AXES if axis in sharding.names}
             )
             owner_candidates = sharding.get_ranks_by_coord(**owner_coords)
             if len(owner_candidates) != 1:

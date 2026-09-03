@@ -25,6 +25,7 @@ from nemo_rl.data_plane.adapters.local import (
     materialize_local,
 )
 from nemo_rl.data_plane.interfaces import KVBatchMeta, LocalDataPlaneConfig
+from nemo_rl.data_plane.worker_mixin import _materialize_fetched
 
 
 def _client(*, max_partitions: int = 2) -> LocalDataPlaneClient:
@@ -104,6 +105,34 @@ def test_local_subset_preserves_requested_order_and_packed_rows() -> None:
     assert isinstance(pixels, PackedTensor)
     assert torch.equal(pixels.tensors[0], torch.full((2, 2), 2.0))
     assert torch.equal(pixels.tensors[1], torch.full((1, 2), 1.0))
+
+
+def test_stock_materialize_is_refused_for_a_local_batch() -> None:
+    # materialize() reads a whole-column NonTensorData as a single row, so
+    # pairing it with a local fetch would silently turn N rows into 1. The
+    # dispatch in worker_mixin picks both from one flag; this pins that a
+    # future edit to one branch alone fails loudly.
+    client = _client()
+    _register(client)
+    fetched = client.get_data(_put_multimodal_batch(client))
+
+    with pytest.raises(TypeError, match="materialize_local"):
+        _materialize_fetched(
+            fetched,
+            local_batch=False,
+            layout="padded",
+            pad_value_dict=None,
+            pad_to_seqlen=0,
+        )
+
+    batch = _materialize_fetched(
+        fetched,
+        local_batch=True,
+        layout="padded",
+        pad_value_dict=None,
+        pad_to_seqlen=0,
+    )
+    assert batch["source_ids"] == ["source-a", "source-b"]
 
 
 def test_local_rejects_duplicate_write() -> None:
