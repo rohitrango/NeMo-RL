@@ -28,6 +28,7 @@ pytest.importorskip("megatron.energon")
 pytestmark = pytest.mark.mcore
 
 from nemo_rl.algorithms.sft import prepare_sft_batch  # noqa: E402
+from nemo_rl.data.collate_fn import rl_collate_fn  # noqa: E402
 from nemo_rl.data.energon.config import (  # noqa: E402
     EnergonLoaderConfig,
     EnergonSourceConfig,
@@ -50,10 +51,12 @@ from nemo_rl.data.energon.sft_dataloader import (  # noqa: E402
     _loader_identity,
     build_energon_sft_loader,
 )
+from nemo_rl.data.interfaces import TaskDataSpec  # noqa: E402
 from nemo_rl.data.llm_message_utils import (  # noqa: E402
     message_log_to_flat_messages,
 )
 from nemo_rl.data.multimodal_utils import PackedTensor  # noqa: E402
+from nemo_rl.data.processors import sft_processor  # noqa: E402
 
 
 class _FakeTokenizer:
@@ -266,7 +269,8 @@ def test_hf_and_energon_backends_agree_on_the_same_conversation():
     )
 
     kwargs = dict(
-        tokenizer=processor, only_unmask_final=False,
+        tokenizer=processor,
+        only_unmask_final=False,
         make_sequence_length_divisible_by=8,
     )
     a = prepare_sft_batch(energon, **kwargs)

@@ -66,7 +66,9 @@ def _bounds(spec: SpecifierSet) -> tuple[Version, Version]:
     release = Version(specifiers[0].version).release
     prefix = release[:-1]  # `~=X.Y` implies `<X+1`; `~=X.Y.Z` implies `<X.Y+1`
     upper = prefix[:-1] + (prefix[-1] + 1,)
-    return Version(specifiers[0].version), Version(".".join(str(part) for part in upper))
+    return Version(specifiers[0].version), Version(
+        ".".join(str(part) for part in upper)
+    )
 
 
 @pytest.fixture(scope="module")

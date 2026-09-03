@@ -425,9 +425,7 @@ def build_energon_sft_loader(
             worker_config=worker_config,
             batch_size=batch_size,
             batch_drop_last=True,
-            shuffle_buffer_size=(
-                loader_config.shuffle_buffer_size
-            ),
+            shuffle_buffer_size=(loader_config.shuffle_buffer_size),
             shuffle_over_epochs_multiplier=1,
             max_samples_per_sequence=None,
             virtual_epoch_length=resolved_source.virtual_epoch_length,
