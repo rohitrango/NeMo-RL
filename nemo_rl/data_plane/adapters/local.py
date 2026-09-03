@@ -41,15 +41,31 @@ _LOCAL_GENERATION_KEY = "local_partition_generation"
 
 @dataclass
 class _LocalPartition:
+    # Declared schema. put_samples rejects any field not listed here.
     fields: tuple[str, ...]
+    # Expected row count. put_samples requires exactly this many sample_ids.
     num_samples: int
+    # [NOT CURRENTLY READ] Kept for readability. The register_partition argument
+    # seeds `consumed` below; this tuple itself is never read back.
+    # SFT registers ["train"].
     consumer_tasks: tuple[str, ...]
+    # [NOT CURRENTLY USED] Both come from the DataPlaneClient.register_partition
+    # signature and are stored so this adapter matches its siblings. Nothing in
+    # this file reads either. SFT passes neither, so they stay None and {}.
     grpo_group_size: int | None
     enums: dict[str, list[str]]
+    # Bumped on every register_partition and echoed into KVBatchMeta.extra_info.
+    # _validate_meta rejects a meta whose generation does not match, which is
+    # what stops a stale meta from reading a re-registered partition's rows.
+    # It is also the marker is_local_batch_meta() keys on.
     generation: int
+    # Everything below is filled by put_samples, not by registration.
     sample_ids: list[str] = field(default_factory=list)
     batch: dict[str, Any] = field(default_factory=dict)
     tags: list[dict[str, Any]] | None = None
+    # Per-task set of sample_ids already handed out by claim_meta. SFT does not
+    # call claim_meta -- it holds the meta put_samples returned -- so on the SFT
+    # path these sets stay empty and check_consumption_status is never asked.
     consumed: dict[str, set[str]] = field(default_factory=dict)
 
 
