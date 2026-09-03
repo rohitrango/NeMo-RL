@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import traceback
 import urllib.parse
 from collections.abc import Callable
@@ -65,34 +66,29 @@ def compact_sample_error_handler(
             print(f"Assertion error in sample {str(sample)[:100]}: {exception}")
             return
 
-        data = [
-            {
-                "dataset_path": str(source.dataset_path),
-                "index": source.index,
-                "shard_name": source.shard_name,
-                "file_names": list(source.file_names),
-            }
-            for source in sources
-        ]
-        url = (
-            "vscode://nvidia.energon-sample-viewer/open?data="
-            f"{urllib.parse.quote(json.dumps(data))}"
-        )
-        print(f"Assertion error: {exception}")
-        print(f"(Ctrl+)Click to view sample in energon viewer: {url}")
-        if _FIRST_SAMPLE_ASSERTION:
-            print(
-                "If not installed yet, install energon sample viewer from "
-                "https://gitlab-master.nvidia.com/lvoegtle/"
-        url = (
-            "vscode://nvidia.energon-sample-viewer/open?data="
-            f"{urllib.parse.quote(json.dumps(data))}"
-        )
         print(f"Assertion error: {exception}")
         if os.environ.get("NRL_ENERGON_SAMPLE_VIEWER") == "1":
-            print(f"(Ctrl+)Click to view sample in energon viewer: {url}")
+            data = [
+                {
+                    "dataset_path": str(source.dataset_path),
+                    "index": source.index,
+                    "shard_name": source.shard_name,
+                    "file_names": list(source.file_names),
+                }
+                for source in sources
+            ]
+            url = (
+                "vscode://nvidia.energon-sample-viewer/open?data="
+                f"{urllib.parse.quote(json.dumps(data))}"
             )
-            _FIRST_SAMPLE_ASSERTION = False
+            print(f"(Ctrl+)Click to view sample in energon viewer: {url}")
+            if _FIRST_SAMPLE_ASSERTION:
+                print(
+                    "If not installed yet, install energon sample viewer from "
+                    "https://gitlab-master.nvidia.com/lvoegtle/"
+                    "vscode-energon-sample-viewer"
+                )
+                _FIRST_SAMPLE_ASSERTION = False
         return
 
     print("Ignoring error processing sample:")
