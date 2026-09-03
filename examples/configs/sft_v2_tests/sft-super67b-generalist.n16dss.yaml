@@ -37,8 +37,19 @@ policy:
       NRL_MEDIA_PATCH_DIM: '16'
       NRL_MEDIA_PREPROCESSING_MODE: patchify
       NRL_LOADDIAG: '1'
+      # Collective watchdog. Torch defaults to 10 min, which this run trips on
+      # slow alltoall / cold media batches; the reference prod run uses 120.
+      NRL_DIST_TIMEOUT_MINUTES: '30'
+      # Transport settings copied from the reference Nemotron prod SFT launcher
+      # (sft_from_super35_..._generalist.sh:116-122).
       NCCL_DEBUG: WARN
-    recompute_vision: false
+      NCCL_NVLS_ENABLE: '0'
+      NCCL_PROTO: simple
+      NCCL_SHM_DISABLE: '1'
+      NCCL_P2P_NET_CHUNKSIZE: '2097152'
+      NCCL_IB_SL: '1'
+      NCCL_IB_TIMEOUT: '19'
+    recompute_vision: true
     vision_recompute_granularity: full
     vision_recompute_method: block
     vision_recompute_num_layers: 30
@@ -56,8 +67,8 @@ data:
     nvdataset_cache_dir: /home/svc-dss/cache/nemotron
     watchdog_timeout_seconds: 1800
     num_workers: 4
-    prefetch_factor: 2
-    cache_pool_num_workers: 32
+    prefetch_factor: 8
+    cache_pool_num_workers: 8
     gc_collect_every_n_steps: 100000
     model_family: nemotron
     task_encoder:
@@ -68,7 +79,7 @@ data:
         video_aug_scale_resolution_only: true
       packing:
         name: balanced_greedy_knapsack
-        buffer_size: 2048
+        buffer_size: 4096
         options:
           max_sequence_length: ${policy.max_total_sequence_length}
           sequence_length_pad_multiple: 64
@@ -88,7 +99,7 @@ data:
         cook: openai_messages_jsonl
     seed_offset: 1234
   train:
-    path: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/rohitkumarj/code/energon-megatron-lm-ref/examples/multimodal/v3p5_super_prod_run/sft_from_super35_dualds_4k_1of8_recover_iter366_radio_v4_h_full_generalist.yaml
+    path: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/rohitkumarj/code/RL/nemo-rl-energon-sft-prodrun/examples/configs/sft_v2_tests/sft_super35_generalist_full_no_fs12.yaml
     split: train
     virtual_epoch_length: 10000000
   validation: null
