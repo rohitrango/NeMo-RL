@@ -145,6 +145,13 @@ def _make_worker(loss_type):
     w._is_reward_model = False
     w._router_replay_enabled = False
     w.media_placeholder_token_id = None
+    # Model-capability flags __init__ derives from self.model, which
+    # object.__new__ skips. train_microbatch passes all three straight through
+    # to get_microbatch_iterator, so the plain-model defaults (NeMo-RL owns
+    # packing and CP sharding) have to be spelled out here.
+    w.delegate_pack_to_model = False
+    w.delegate_mtp_loss_mask_to_model = False
+    w.model_slices_context_parallel_inputs = False
     w._first_train_step_forward_pre_hook_disabled = False
     w._first_train_step_param_sync_func = None
     # Normally set from get_rank_safe() in __init__, which object.__new__ skips.

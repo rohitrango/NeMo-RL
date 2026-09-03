@@ -14,6 +14,7 @@
 
 import io
 from copy import deepcopy
+from typing import Any
 
 import pytest
 import torch
@@ -195,6 +196,34 @@ def _sample(*, with_tools=False):
     )
 
 
+def _hf_messages(sample: CanonicalSFTSample) -> list[dict[str, Any]]:
+    """Rewrite a canonical conversation into the shape the HF path expects.
+
+    The two backends deliberately do not share a message convention. Energon
+    keeps media out of line -- a content part carries ``media_index`` into
+    ``sample.media`` -- while ``sft_processor`` reads the payload inline off the
+    part itself (``{"type": "image", "image": <PIL.Image>}``). Inlining here
+    keeps the parity test comparing the two backends rather than the two
+    conventions.
+    """
+    messages = []
+    for message in sample.messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            messages.append(message)
+            continue
+        inlined = []
+        for part in content:
+            part = dict(part)
+            media_index = part.pop("media_index", None)
+            if media_index is not None:
+                media_ref = sample.media[media_index]
+                part[media_ref.modality] = media_ref.value
+            inlined.append(part)
+        messages.append({**message, "content": inlined})
+    return messages
+
+
 def _adapter(processor, *, max_sequence_length=1024):
     return HFMultimodalSFTProcessorAdapter(
         processor=processor,
@@ -245,6 +274,10 @@ def test_qwen_adapter_returns_tokenized_message_log_with_model_inputs():
 def test_hf_and_energon_backends_agree_on_the_same_conversation():
     """Both backends feed prepare_sft_batch; the prepared tensors must match.
 
+    Each backend is handed the conversation in its own message convention (see
+    ``_hf_messages``) -- the claim under test is that the two agree on the
+    prepared tensors, not on the input shape.
+
     Truncation is deliberately not compared: above max_sequence_length the
     Energon encoder also empties every PackedTensor (generic_sft.py:225-228)
     while the HF path leaves media alone, so the fixture stays short.
@@ -257,7 +290,7 @@ def test_hf_and_energon_backends_agree_on_the_same_conversation():
     hf = rl_collate_fn(
         [
             sft_processor(
-                {"task_name": "sft", "messages": sample.messages},
+                {"task_name": "sft", "messages": _hf_messages(sample)},
                 TaskDataSpec(),
                 processor,
                 max_seq_length=1024,

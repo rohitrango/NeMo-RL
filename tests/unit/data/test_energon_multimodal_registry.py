@@ -55,6 +55,12 @@ def test_registry_rejects_duplicate_unknown_and_malformed_keys():
         registry.register("bad", import_path="module.function", version="1")
 
 
+# Validating a task encoder imports task_encoders.base, which imports
+# megatron.energon at module scope, and that ships only in the `mcore` extra.
+# Everything else in this file stays importable without it -- the property
+# LazyRegistry exists to provide -- so mark this test alone rather than the
+# module.
+@pytest.mark.mcore
 def test_registry_rejects_invalid_resolved_type(monkeypatch):
     module = ModuleType("_test_energon_registry_module")
     module.invalid = object()
