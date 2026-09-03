@@ -23,7 +23,7 @@ from typing import Protocol
 
 from nemo_rl.distributed.named_sharding import NamedSharding
 
-_REPLICA_AXES = (
+from nemo_rl.distributed.named_sharding import REPLICATED_AXES, NamedSharding
     "tensor_parallel",
     "pipeline_parallel",
     "context_parallel",
