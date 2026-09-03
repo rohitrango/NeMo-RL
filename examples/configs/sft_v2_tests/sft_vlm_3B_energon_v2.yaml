@@ -26,6 +26,10 @@ checkpointing:
   higher_is_better: false
   keep_top_k: 1
   save_period: 10
+  # Walltime budget as DD:HH:MM:SS. When reached, checkpoint after the current
+  # step and stop; null disables the timeout. Set below the scheduler's job
+  # limit so the save has room to finish.
+  checkpoint_must_save_by: null
 
 data:
   _override_: true
