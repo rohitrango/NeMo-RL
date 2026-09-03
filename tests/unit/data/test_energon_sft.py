@@ -238,7 +238,41 @@ def test_qwen_adapter_returns_tokenized_message_log_with_model_inputs():
     )
 
 
-def test_prepare_sft_batch_builds_mask_from_energon_message_log():
+def test_hf_and_energon_backends_agree_on_the_same_conversation():
+    """Both backends feed prepare_sft_batch; the prepared tensors must match.
+
+    Truncation is deliberately not compared: above max_sequence_length the
+    Energon encoder also empties every PackedTensor (generic_sft.py:225-228)
+    while the HF path leaves media alone, so the fixture stays short.
+    """
+    processor = _FakeQwenProcessor()
+    encoder = _encoder(_adapter(processor))
+    sample = _sample()
+
+    energon = encoder.batch([_adapter(processor).encode(sample)])
+    hf = rl_collate_fn(
+        [
+            sft_processor(
+                {"task_name": "sft", "messages": sample.messages},
+                TaskDataSpec(),
+                processor,
+                max_seq_length=1024,
+                idx=0,
+                add_bos=False,
+                add_eos=False,
+            )
+        ]
+    )
+
+    kwargs = dict(
+        tokenizer=processor, only_unmask_final=False,
+        make_sequence_length_divisible_by=8,
+    )
+    a = prepare_sft_batch(energon, **kwargs)
+    b = prepare_sft_batch(hf, **kwargs)
+
+    for key in ("input_ids", "token_mask", "input_lengths", "sample_mask"):
+        assert torch.equal(a[key], b[key]), key
     processor = _FakeQwenProcessor()
     adapter = _adapter(processor)
     encoder = _encoder(adapter)
