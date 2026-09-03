@@ -16,13 +16,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import time
 from dataclasses import replace
 from typing import Any, Mapping, Optional
 
 import ray
-import torch
 from megatron.core import parallel_state
 
 from nemo_rl.algorithms.sft import prepare_sft_batch
@@ -32,7 +30,6 @@ from nemo_rl.data.energon.sft_dataloader import (
     build_energon_sft_loader,
 )
 from nemo_rl.data.energon.sft_types import StepEnvelope
-from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.data_plane.adapters.local import local_batch_to_tensordict
 from nemo_rl.models.policy.utils import get_runtime_env_for_policy_worker
 from nemo_rl.models.policy.workers.megatron_policy_worker import (
@@ -172,7 +169,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             source_ids=source_ids,
             field_names=tuple(field_names),
             sequence_lengths=lengths,
-            field_fingerprints=self._field_fingerprints(prepared),
             load_seconds=load_seconds,
             valid_tokens=valid_tokens,
         )
@@ -243,32 +239,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             )
             for value in values
         ]
-
-    @classmethod
-    def _field_fingerprints(cls, batch: Mapping[str, Any]) -> dict[str, Any]:
-        fingerprints: dict[str, Any] = {}
-        for name, value in batch.items():
-            if isinstance(value, torch.Tensor):
-                fingerprints[name] = {
-                    "kind": "tensor",
-                    "dtype": str(value.dtype),
-                    "shape": tuple(value.shape),
-                    "hash": cls._tensor_hash(value),
-                }
-            elif isinstance(value, PackedTensor):
-                tensors = [tensor for tensor in value.tensors if tensor is not None]
-                fingerprints[name] = {
-                    "kind": "packed_tensor",
-                    "rows": len(value),
-                    "tensor_shapes": [tuple(tensor.shape) for tensor in tensors],
-                    "tensor_hashes": [cls._tensor_hash(tensor) for tensor in tensors],
-                }
-        return fingerprints
-
-    @staticmethod
-    def _tensor_hash(tensor: torch.Tensor) -> str:
-        value = tensor.detach().cpu().contiguous()
-        return hashlib.sha256(value.view(torch.uint8).numpy().tobytes()).hexdigest()
 
 
 __all__ = ["SFTMegatronPolicyWorker", "StepEnvelope"]

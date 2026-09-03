@@ -47,7 +47,6 @@ def _envelope(rank: int, *, source_count: int = 1) -> StepEnvelope:
         ),
         field_names=("input_ids",),
         sequence_lengths=(8,),
-        field_fingerprints={"input_ids": {"hash": f"hash-{rank}"}},
         load_seconds=0.1 + rank * 0.1,
         valid_tokens=4,
     )
