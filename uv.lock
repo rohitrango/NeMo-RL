@@ -4570,7 +4570,7 @@ requires-dist = [
     { name = "math-verify" },
     { name = "matplotlib" },
     { name = "megatron-bridge", extras = ["ssm", "te"], marker = "extra == 'mcore'", editable = "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge" },
-    { name = "megatron-energon", extras = ["av-decode"], marker = "extra == 'mcore'", specifier = "~=7.0" },
+    { name = "megatron-energon", extras = ["av-decode"], marker = "extra == 'mcore'", specifier = "~=7.3" },
     { name = "mistral-common", marker = "extra == 'automodel'", specifier = ">=1.11.0" },
     { name = "mlflow", specifier = ">=3.13.0" },
     { name = "mooncake-transfer-engine-cuda13", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = "==0.3.11.post1" },
