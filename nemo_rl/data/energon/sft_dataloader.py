@@ -82,13 +82,6 @@ def compact_sample_error_handler(
                 f"{urllib.parse.quote(json.dumps(data))}"
             )
             print(f"(Ctrl+)Click to view sample in energon viewer: {url}")
-            if _FIRST_SAMPLE_ASSERTION:
-                print(
-                    "If not installed yet, install energon sample viewer from "
-                    "https://gitlab-master.nvidia.com/lvoegtle/"
-                    "vscode-energon-sample-viewer"
-                )
-                _FIRST_SAMPLE_ASSERTION = False
         return
 
     print("Ignoring error processing sample:")
