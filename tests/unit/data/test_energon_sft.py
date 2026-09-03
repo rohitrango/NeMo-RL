@@ -274,6 +274,9 @@ def test_hf_and_energon_backends_agree_on_the_same_conversation():
 
     for key in ("input_ids", "token_mask", "input_lengths", "sample_mask"):
         assert torch.equal(a[key], b[key]), key
+
+
+def test_prepare_sft_batch_builds_mask_from_energon_message_log():
     processor = _FakeQwenProcessor()
     adapter = _adapter(processor)
     encoder = _encoder(adapter)
