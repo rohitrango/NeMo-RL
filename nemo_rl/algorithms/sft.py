@@ -33,7 +33,7 @@ from nemo_rl.data.llm_message_utils import (
     add_loss_mask_to_message_log,
     batched_message_log_to_flat_message,
 )
-from nemo_rl.data.multimodal_utils import PackedTensor
+from nemo_rl.data.multimodal_utils import PER_TOKEN_MULTIMODAL_FIELDS, PackedTensor
 from nemo_rl.data.utils import load_dataloader_state
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.virtual_cluster import (
@@ -316,7 +316,7 @@ def _validate_prepared_sft_batch(batch: BatchedDataDict) -> None:
                 f"Prepared PackedTensor {key!r} has {len(value)} rows; "
                 f"expected {batch_size}."
             )
-    for key in BatchedDataDict.ADDITIONAL_OPTIONAL_KEY_TENSORS:
+    for key in PER_TOKEN_MULTIMODAL_FIELDS:
         value = batch.get(key)
         if isinstance(value, torch.Tensor) and value.shape != input_ids.shape:
             raise ValueError(

@@ -131,6 +131,7 @@ def test_stock_materialize_is_refused_for_a_local_batch() -> None:
         layout="padded",
         pad_value_dict=None,
         pad_to_seqlen=0,
+        tags=[{"source": "source-a"}, {"source": "source-b"}],
     )
     assert batch["source_ids"] == ["source-a", "source-b"]
 
