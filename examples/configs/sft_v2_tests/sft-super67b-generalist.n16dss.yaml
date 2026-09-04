@@ -21,7 +21,6 @@ policy:
     moe_router_load_balancing_type: seq_aux_loss
     moe_aux_loss_coeff: 0.0001
     activation_checkpointing: true
-    recompute_granularity: selective
     optimizer:
       lr: 1.0e-05
       min_lr: 2.0e-06
@@ -29,6 +28,10 @@ policy:
       optimizer_offload_fraction: 0.0
     scheduler:
       lr_warmup_iters: 10
+    #### DDP config parameters increase step time by a lot in conjunction with recompute_vision!!!! Disable this for now
+    # distributed_data_parallel_config:
+    #   overlap_grad_reduce: true
+    #   overlap_param_gather: true
     moe_token_dispatcher_type: alltoall
     moe_permute_fusion: true
     env_vars:
@@ -37,24 +40,34 @@ policy:
       NRL_MEDIA_PATCH_DIM: '16'
       NRL_MEDIA_PREPROCESSING_MODE: patchify
       NRL_LOADDIAG: '1'
-      # Collective watchdog. Torch defaults to 10 min, which this run trips on
-      # slow alltoall / cold media batches; the reference prod run uses 120.
-      NRL_DIST_TIMEOUT_MINUTES: '30'
-      # Transport settings copied from the reference Nemotron prod SFT launcher
-      # (sft_from_super35_..._generalist.sh:116-122).
-      NCCL_DEBUG: WARN
-      NCCL_NVLS_ENABLE: '0'
-      NCCL_PROTO: simple
-      NCCL_SHM_DISABLE: '1'
-      NCCL_P2P_NET_CHUNKSIZE: '2097152'
-      NCCL_IB_SL: '1'
-      NCCL_IB_TIMEOUT: '19'
-    recompute_vision: true
+      # --- Runtime settings from the reference Nemotron prod SFT launcher
+      # (sft_from_super35_..._generalist.sh:105-122). Kept in the same order.
+      #
+      # PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+      # Reserve SMs in TE's LayerNorm kernels so overlapped NCCL has SMs free.
+      # NVTE_FWD_LAYERNORM_SM_MARGIN: '16'
+      # NVTE_BWD_LAYERNORM_SM_MARGIN: '16'
+      # Userbuffers bootstrap timeout (seconds); inert unless UB is enabled.
+      UB_TIMEOUT: '720'
+      # Cap OpenMP threads per process: 4 workers x 144 cores would otherwise
+      # oversubscribe the node.
+      # OMP_NUM_THREADS: '16'
+      # TORCHINDUCTOR_WORKER_START: fork
+      # Transport settings tuned for this GB200 fabric by the reference run.
+      # NCCL_DEBUG: WARN
+      # NCCL_NVLS_ENABLE: '0'
+      # NCCL_PROTO: simple
+      # NCCL_SHM_DISABLE: '1'
+      # NCCL_P2P_NET_CHUNKSIZE: '2097152'
+      # NCCL_IB_SL: '1'
+      # NCCL_IB_TIMEOUT: '19'
+    recompute_vision: false #### DO NOT ENABLE THIS
     vision_recompute_granularity: full
     vision_recompute_method: block
     vision_recompute_num_layers: 30
     radio_force_eval_mode: false
     radio_force_cpe_eval_mode: true
+    recompute_granularity: selective
     recompute_modules:
     - moe
   sequence_packing:
@@ -65,21 +78,21 @@ policy:
 data:
   energon:
     nvdataset_cache_dir: /home/svc-dss/cache/nemotron
-    watchdog_timeout_seconds: 1800
-    num_workers: 4
-    prefetch_factor: 8
+    watchdog_timeout_seconds: 1200
+    num_workers: 8
+    prefetch_factor: 2
     cache_pool_num_workers: 8
     gc_collect_every_n_steps: 100000
     model_family: nemotron
     task_encoder:
       options:
-        allow_large_videos: true
-        video_max_num_frames: 64
+        allow_large_videos: false  # this param seemed to be fixing the OOMs
+        video_max_num_frames: 32
         video_aug_scale_frames_up: 4
         video_aug_scale_resolution_only: true
       packing:
         name: balanced_greedy_knapsack
-        buffer_size: 4096
+        buffer_size: 5000   # DO NOT CHANGE THIS agents
         options:
           max_sequence_length: ${policy.max_total_sequence_length}
           sequence_length_pad_multiple: 64
@@ -124,5 +137,5 @@ checkpointing:
   metric_name: null
   higher_is_better: false
   keep_top_k: 5
-  save_period: 2000
+  save_period: 100
   checkpoint_must_save_by: "00:03:40:00"

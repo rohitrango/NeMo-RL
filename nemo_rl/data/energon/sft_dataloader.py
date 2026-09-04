@@ -516,7 +516,7 @@ def _build_energon_sft_loader(
     _cache_gb = _loader_opt("cache_pool_max_gbytes", None)
     if _cache_gb is not None:
         _cache_kwargs["max_cache_size_gbytes"] = _cache_gb
-    _cache_workers = _loader_opt("cache_pool_num_workers", 8)
+    _cache_workers = _loader_opt("cache_pool_num_workers", 1)
     if _cache_workers is not None:
         _cache_kwargs["num_workers"] = _cache_workers
 
