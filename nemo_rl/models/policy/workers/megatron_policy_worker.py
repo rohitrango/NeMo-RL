@@ -64,7 +64,7 @@ from nemo_rl.models.generation.megatron.megatron_worker import (
     MegatronGenerationRefitMixin,
 )
 from nemo_rl.models.generation.vllm.config import VllmConfig
-from nemo_rl.models.megatron.common import get_moe_metrics
+from nemo_rl.models.megatron.common import count_moe_layers, get_moe_metrics
 from nemo_rl.models.megatron.data import (
     get_microbatch_iterator,
     process_global_batch,
@@ -1090,6 +1090,7 @@ class MegatronPolicyWorkerImpl(
             moe_metrics = get_moe_metrics(
                 loss_scale=moe_loss_scale,
                 per_layer_logging=self.cfg["megatron_cfg"]["moe_per_layer_logging"],
+                num_moe_layers=count_moe_layers(self.model, model_config),
             )
             if moe_metrics:
                 metrics["moe_metrics"] = moe_metrics
@@ -1791,6 +1792,7 @@ class MegatronPolicyWorkerImpl(
             moe_metrics = get_moe_metrics(
                 loss_scale=moe_loss_scale,
                 per_layer_logging=self.cfg["megatron_cfg"]["moe_per_layer_logging"],
+                num_moe_layers=count_moe_layers(self.model, model_config),
             )
             if moe_metrics:
                 metrics["moe_metrics"] = moe_metrics
