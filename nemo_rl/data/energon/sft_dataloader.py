@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import traceback
 import urllib.parse
 from collections.abc import Callable
@@ -33,6 +34,7 @@ from megatron.energon import (
     get_train_dataset,
     get_val_dataset,
 )
+from megatron.energon.epathlib import epath as energon_epath
 
 from nemo_rl.data.energon.config import EnergonLoaderConfig, EnergonSourceConfig
 from nemo_rl.data.energon.multimodal.packing import build_packing_hooks
@@ -53,6 +55,20 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 _V1_STATE_FORMAT_VERSION = 1
 _V2_STATE_FORMAT_VERSION = 2
 _FIRST_SAMPLE_ASSERTION = False
+
+
+def _set_nvdataset_cache_dir(path: str) -> None:
+    """Point Energon's ``dss://`` resolution at ``path`` for this process.
+
+    Energon snapshots ``NVDATASET_CACHE_DIR`` into a module global at import
+    time (``megatron/energon/epathlib/epath.py``), and every ``dss://`` lookup
+    reads that global rather than the environment. This module imports
+    ``megatron.energon`` at the top, so setting the env var alone would be a
+    silent no-op -- rebind the global too. The env var is still set so forked
+    Energon loader workers inherit it.
+    """
+    os.environ["NVDATASET_CACHE_DIR"] = path
+    energon_epath.NVDATASET_CACHE_DIR = energon_epath.EPath(path)
 
 
 def compact_sample_error_handler(
@@ -411,6 +427,8 @@ def _build_energon_sft_loader(
         raise ValueError("SFTv2 requires a non-empty placement fingerprint.")
 
     loader_config = _loader_config(data_config["energon"])
+    if loader_config.nvdataset_cache_dir is not None:
+        _set_nvdataset_cache_dir(loader_config.nvdataset_cache_dir)
     if (
         state_format_version == _V1_STATE_FORMAT_VERSION
         and loader_config.task_encoder.packing is not None
@@ -498,7 +516,7 @@ def _build_energon_sft_loader(
     _cache_gb = _loader_opt("cache_pool_max_gbytes", None)
     if _cache_gb is not None:
         _cache_kwargs["max_cache_size_gbytes"] = _cache_gb
-    _cache_workers = _loader_opt("cache_pool_num_workers", 8)
+    _cache_workers = _loader_opt("cache_pool_num_workers", 1)
     if _cache_workers is not None:
         _cache_kwargs["num_workers"] = _cache_workers
 

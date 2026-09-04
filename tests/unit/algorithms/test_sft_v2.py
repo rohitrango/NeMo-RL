@@ -107,3 +107,46 @@ def test_max_steps_is_bounded_by_virtual_epochs() -> None:
     )
 
     assert _max_train_steps(config) == 21
+
+
+def _save_controller(*, enabled: bool, total_steps: int, save_period: int) -> object:
+    controller = object.__new__(_ACTOR_CLS)
+    controller._master_config = SimpleNamespace(
+        checkpointing={"enabled": enabled, "save_period": save_period}
+    )
+    controller._save_state = SFTV2SaveState(total_steps, 0, 0, "hash")
+    controller._max_steps = 1000
+    return controller
+
+
+def test_should_save_on_timeout_off_period() -> None:
+    controller = _save_controller(enabled=True, total_steps=7, save_period=100)
+
+    assert controller._should_save(save_by_timeout=False) is False
+    assert controller._should_save(save_by_timeout=True) is True
+
+
+def test_timeout_cannot_save_when_checkpointing_disabled() -> None:
+    controller = _save_controller(enabled=False, total_steps=7, save_period=100)
+
+    assert controller._should_save(save_by_timeout=True) is False
+
+
+def test_timeout_checker_fires_once_after_budget() -> None:
+    from nemo_rl.utils.timer import TimeoutChecker
+
+    timeout = TimeoutChecker(timeout="00:00:00:00")
+    timeout.start_iterations()
+
+    assert timeout.check_save() is True
+    # Latches, so the loop breaks instead of re-saving every subsequent step.
+    assert timeout.check_save() is False
+
+
+def test_timeout_checker_disabled_when_unset() -> None:
+    from nemo_rl.utils.timer import TimeoutChecker
+
+    timeout = TimeoutChecker(timeout=None)
+    timeout.start_iterations()
+
+    assert timeout.check_save() is False

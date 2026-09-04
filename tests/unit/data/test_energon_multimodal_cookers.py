@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sqlite3
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
@@ -21,6 +22,7 @@ from megatron.energon import Cooker
 from nemo_rl.data.energon.multimodal.cookers.generic import cook_conversation
 from nemo_rl.data.energon.multimodal.cookers.nemotron import (
     GRANARY_ENGLISH_PROMPT,
+    _media_metadata,
     cook_general_conversations_jsonl,
     cook_general_conversations_webdataset,
     cook_granary_english_jsonl,
@@ -311,3 +313,27 @@ def test_new_cookers_declare_nemotron_support():
         cook_nemotron_conversation,
     ):
         assert get_supported_model_families(cooker) == frozenset({"nemotron"})
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        sqlite3.OperationalError("unable to open database file"),
+        sqlite3.DatabaseError("file is not a database"),
+    ],
+)
+def test_media_metadata_falls_back_when_sqlite_index_is_unreadable(error):
+    """A sqlite failure means "no prepared metadata", not "drop the sample".
+
+    Energon backs ``get_media_metadata`` with a sqlite index, and ``sqlite3.Error``
+    descends from ``Exception`` rather than ``OSError``. Read-only DSS caches raise
+    ``OperationalError`` here, which used to escape ``_media_metadata`` and make
+    Energon discard the whole sample instead of decoding the media to derive the
+    dimensions.
+    """
+
+    class _UnreadableIndexStore(_FakeMediaStore):
+        def get_media_metadata(self, path):
+            raise error
+
+    assert _media_metadata(_UnreadableIndexStore(), "data/example.png") == ()

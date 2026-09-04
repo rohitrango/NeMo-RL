@@ -21,6 +21,7 @@ import time
 import warnings
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
+from datetime import timedelta
 from functools import partial
 from typing import Any, Callable, Optional, TypeVar
 
@@ -337,8 +338,21 @@ def setup_distributed() -> None:
     configure_dynamo_cache()
     # Ensure clean slate before import
     destroy_parallel_state()
-    # Initialize process group
-    torch.distributed.init_process_group("nccl")
+    # Initialize process group.
+    #
+    # Torch defaults the collective watchdog to 10 minutes, which is too tight
+    # for long-sequence MoE runs: a single slow alltoall or a cold data batch
+    # trips it and the watchdog tears down every rank. Megatron exposes the same
+    # knob as --distributed-timeout-minutes (the reference Nemotron production
+    # SFT run sets 120). Raise it per recipe via NRL_DIST_TIMEOUT_MINUTES in
+    # policy.megatron_cfg.env_vars; unset keeps torch's default.
+    timeout_minutes = os.environ.get("NRL_DIST_TIMEOUT_MINUTES")
+    init_kwargs = (
+        {"timeout": timedelta(minutes=float(timeout_minutes))}
+        if timeout_minutes
+        else {}
+    )
+    torch.distributed.init_process_group("nccl", **init_kwargs)
 
 
 def validate_and_set_config(

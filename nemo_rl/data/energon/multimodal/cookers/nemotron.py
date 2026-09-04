@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sqlite3
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
@@ -145,14 +146,17 @@ def _metadata_values(metadata: object) -> Mapping[str, Any]:
 def _media_metadata(store: FileStore, path: str) -> FrozenMediaMetadata:
     try:
         metadata = store.get_media_metadata(path)
-    except (
-        AttributeError,
-        FileNotFoundError,
-        KeyError,
-        OSError,
-        RuntimeError,
-        ValueError,
-    ):
+    # except (
+    #     AttributeError,
+    #     FileNotFoundError,
+    #     KeyError,
+    #     OSError,
+    #     RuntimeError,
+    #     ValueError,
+    #     sqlite3.Error,  # sqlite3.Error is not OSError, so the samples are not dropped
+    # ):
+    except Exception as e:
+        _LOG.error(f"Error getting media metadata for {path}: {e}")
         store_path = str(store.get_path())
         if store_path not in _WARNED_METADATA_STORES:
             _LOG.warning(

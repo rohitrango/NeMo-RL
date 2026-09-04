@@ -4,7 +4,7 @@ sft:
   max_num_steps: 1000000
   max_consecutive_step_failures: 3
 policy:
-  model_name: /mnt/rl-workspace/rohitkumarj/data/models/NVIDIA-Nemotron-3.5-Super-midtrain-67B-vision-pretrained
+  model_name: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/rohitkumarj/data/models/NVIDIA-Nemotron-3.5-Super-midtrain-67B-vision-pretrained
   train_global_batch_size: 2
   train_micro_batch_size: 1
   max_total_sequence_length: 524288
@@ -21,7 +21,6 @@ policy:
     moe_router_load_balancing_type: seq_aux_loss
     moe_aux_loss_coeff: 0.0001
     activation_checkpointing: true
-    recompute_granularity: selective
     optimizer:
       lr: 1.0e-05
       min_lr: 2.0e-06
@@ -29,6 +28,10 @@ policy:
       optimizer_offload_fraction: 0.0
     scheduler:
       lr_warmup_iters: 10
+    #### DDP config parameters increase step time by a lot in conjunction with recompute_vision!!!! Disable this for now
+    # distributed_data_parallel_config:
+    #   overlap_grad_reduce: true
+    #   overlap_param_gather: true
     moe_token_dispatcher_type: alltoall
     moe_permute_fusion: true
     env_vars:
@@ -37,13 +40,34 @@ policy:
       NRL_MEDIA_PATCH_DIM: '16'
       NRL_MEDIA_PREPROCESSING_MODE: patchify
       NRL_LOADDIAG: '1'
-      NCCL_DEBUG: WARN
-    recompute_vision: false
+      # --- Runtime settings from the reference Nemotron prod SFT launcher
+      # (sft_from_super35_..._generalist.sh:105-122). Kept in the same order.
+      #
+      # PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+      # Reserve SMs in TE's LayerNorm kernels so overlapped NCCL has SMs free.
+      # NVTE_FWD_LAYERNORM_SM_MARGIN: '16'
+      # NVTE_BWD_LAYERNORM_SM_MARGIN: '16'
+      # Userbuffers bootstrap timeout (seconds); inert unless UB is enabled.
+      UB_TIMEOUT: '720'
+      # Cap OpenMP threads per process: 4 workers x 144 cores would otherwise
+      # oversubscribe the node.
+      # OMP_NUM_THREADS: '16'
+      # TORCHINDUCTOR_WORKER_START: fork
+      # Transport settings tuned for this GB200 fabric by the reference run.
+      # NCCL_DEBUG: WARN
+      # NCCL_NVLS_ENABLE: '0'
+      # NCCL_PROTO: simple
+      # NCCL_SHM_DISABLE: '1'
+      # NCCL_P2P_NET_CHUNKSIZE: '2097152'
+      # NCCL_IB_SL: '1'
+      # NCCL_IB_TIMEOUT: '19'
+    recompute_vision: false #### DO NOT ENABLE THIS
     vision_recompute_granularity: full
     vision_recompute_method: block
     vision_recompute_num_layers: 30
     radio_force_eval_mode: false
     radio_force_cpe_eval_mode: true
+    recompute_granularity: selective
     recompute_modules:
     - moe
   sequence_packing:
@@ -54,21 +78,21 @@ policy:
 data:
   energon:
     nvdataset_cache_dir: /home/svc-dss/cache/nemotron
-    watchdog_timeout_seconds: 1800
-    num_workers: 4
+    watchdog_timeout_seconds: 1200
+    num_workers: 8
     prefetch_factor: 2
     cache_pool_num_workers: 8
     gc_collect_every_n_steps: 100000
     model_family: nemotron
     task_encoder:
       options:
-        allow_large_videos: true
-        video_max_num_frames: 64
+        allow_large_videos: false  # this param seemed to be fixing the OOMs
+        video_max_num_frames: 32
         video_aug_scale_frames_up: 4
         video_aug_scale_resolution_only: true
       packing:
         name: balanced_greedy_knapsack
-        buffer_size: 2048
+        buffer_size: 5000   # DO NOT CHANGE THIS agents
         options:
           max_sequence_length: ${policy.max_total_sequence_length}
           sequence_length_pad_multiple: 64
@@ -88,18 +112,18 @@ data:
         cook: openai_messages_jsonl
     seed_offset: 1234
   train:
-    path: /mnt/rl-workspace/rohitkumarj/data/subset_cook_v2/subset.yaml
+    path: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/rohitkumarj/code/RL/nemo-rl-energon-sft-prodrun/examples/configs/sft_v2_tests/sft_super35_generalist_full_no_fs12.yaml
     split: train
     virtual_epoch_length: 10000000
   validation: null
 logger:
   wandb_enabled: true
-  log_dir: /mnt/rl-workspace/rohitkumarj/logs/sft-super67b-n16-seq524288-soak
+  log_dir: logs/sft-super67b-n16-dss-generalist
   wandb:
     project: nemotron-super-sft
-    name: sft-super67b-n16-seq524288-v2
+    name: sft-super67b-n16-dss-generalist
   tensorboard:
-    log_dir: /mnt/rl-workspace/rohitkumarj/logs/tb-sft-super67b-n16-seq524288-soak
+    log_dir: logs/sft-super67b-n16-dss-generalist
 cluster:
   gpus_per_node: 4
   num_nodes: 16
@@ -109,8 +133,9 @@ data_plane:
   max_partitions: 2
 checkpointing:
   enabled: true
-  checkpoint_dir: /mnt/rl-workspace/rohitkumarj/results/sft-super67b-n16-soak
+  checkpoint_dir: /data/nemorl-runs/sft-super67b-n16-dss-generalist
   metric_name: null
   higher_is_better: false
   keep_top_k: 5
-  save_period: 2000
+  save_period: 100
+  checkpoint_must_save_by: "00:03:40:00"

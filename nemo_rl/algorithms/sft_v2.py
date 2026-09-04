@@ -52,6 +52,7 @@ from nemo_rl.models.policy.packing import ENERGON_PACKING_META_KEY, NoOpPacker
 from nemo_rl.models.policy.tq_policy import TQPolicy
 from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
 from nemo_rl.utils.logger import Logger, LoggerConfig
+from nemo_rl.utils.timer import TimeoutChecker
 
 
 class MasterConfig(BaseModel, extra="allow"):
@@ -138,6 +139,13 @@ class SFTSingleControllerActor:
         self._logger = Logger(master_config.logger)  # type: ignore[arg-type]
         self._logger.log_hyperparams(master_config.model_dump())
         self._checkpointer = CheckpointManager(master_config.checkpointing)
+        # Built here rather than on the driver: the timeout measures wall clock
+        # from the start of training, and driver setup happens well before it.
+        self._timeout = TimeoutChecker(
+            timeout=master_config.checkpointing["checkpoint_must_save_by"],
+            fit_last_save_time=True,
+        )
+        self._timeout.start_iterations()
         self._setup_loaders()
 
     def run(self) -> dict[str, Any]:
@@ -146,9 +154,16 @@ class SFTSingleControllerActor:
             self._trainer.prepare_for_training()
             while self._save_state.total_steps < self._max_steps:
                 metrics = self._run_train_step()
+                self._timeout.mark_iteration()
                 self._logger.log_metrics(metrics, self._save_state.total_steps)
-                if self._should_save():
+                save_by_timeout = self._timeout.check_save()
+                if self._should_save(save_by_timeout=save_by_timeout):
                     self._save_checkpoint()
+                if save_by_timeout:
+                    print(
+                        "Timeout has been reached, stopping training early", flush=True
+                    )
+                    break
             return vars(self._save_state).copy()
         finally:
             for cleanup, name in (
@@ -352,10 +367,18 @@ class SFTSingleControllerActor:
     def _loader_state_dicts(self) -> list[dict[str, Any]]:
         return self._owner_call("sft_dataloader_state_dict")
 
-    def _should_save(self) -> bool:
+    def _should_save(self, save_by_timeout: bool = False) -> bool:
+        """Whether to checkpoint after the step that just finished.
+
+        ``save_by_timeout`` covers the walltime-bounded case: a scheduler is
+        about to reclaim the job, so save regardless of where the step count
+        sits relative to ``save_period``. The ``enabled`` guard stays outermost
+        so a timeout can never force a save the recipe disabled.
+        """
         config = self._master_config.checkpointing
         return bool(config["enabled"]) and (
-            self._save_state.total_steps == self._max_steps
+            save_by_timeout
+            or self._save_state.total_steps == self._max_steps
             or self._save_state.total_steps % config["save_period"] == 0
         )
 
