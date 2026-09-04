@@ -149,7 +149,16 @@ def test_model_cp_slicing_capability_is_detected():
     assert not _model_slices_context_parallel_inputs(object())
 
 
-def test_model_cp_slicing_rejects_transfer_queue_setup():
+def test_model_cp_slicing_accepts_data_plane_setup():
+    """Models that slice CP inputs themselves are no longer fenced off here.
+
+    ``setup_data_plane`` used to reject them outright. The train path now
+    forwards ``model_slices_context_parallel_inputs`` into
+    ``get_microbatch_iterator``, so such a worker builds a client like any
+    other. The second call pins the documented idempotence.
+    """
+    from nemo_rl.data_plane.adapters.local import LocalDataPlaneClient
+    from nemo_rl.data_plane.interfaces import LocalDataPlaneConfig
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
     )
@@ -157,10 +166,12 @@ def test_model_cp_slicing_rejects_transfer_queue_setup():
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker.model_slices_context_parallel_inputs = True
 
-    with pytest.raises(
-        NotImplementedError, match="TransferQueue/SingleController does not yet support"
-    ):
-        worker.setup_data_plane(MagicMock())
+    worker.setup_data_plane(LocalDataPlaneConfig())
+    client = worker._dp_client
+    assert isinstance(client, LocalDataPlaneClient)
+
+    worker.setup_data_plane(LocalDataPlaneConfig())
+    assert worker._dp_client is client
 
 
 def test_refit_size_estimate_preserves_integral_buffer_dtype():
