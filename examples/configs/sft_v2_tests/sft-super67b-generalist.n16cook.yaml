@@ -22,7 +22,8 @@ policy:
     moe_aux_loss_coeff: 0.0001
     activation_checkpointing: true
     recompute_granularity: selective
-    gradient_accumulation_fusion: true
+    # The NeMo-RL image does not include Apex's fused_weight_gradient_mlp_cuda.
+    gradient_accumulation_fusion: false
     freeze_vision_model: false
     optimizer:
       lr: 1.0e-05
