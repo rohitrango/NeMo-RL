@@ -93,12 +93,6 @@ def _broadcast_batched_data_dict(
                         (k, "tensor", str(v.dtype), tuple(v.shape), str(v.device))
                     )
                 elif isinstance(v, PackedTensor):
-                    # A PackedTensor on the ``raw`` branch would be pickled by
-                    # ``broadcast_object_list`` into one contiguous *device* tensor
-                    # -- 26.25 GiB for a VLM batch (job 17648488). Ship it the way
-                    # the wire already does: payload as one flat tensor, geometry as
-                    # ints. Densifying instead loses the row boundaries the model
-                    # needs to match media to placeholders (job 17652563).
                     nested, shapes = v.to_wire()
                     if nested is None:
                         # Every row empty -- a shard holding only media-free
@@ -138,11 +132,6 @@ def _broadcast_batched_data_dict(
                     # small, and cheap to pickle into the object list.
                     descriptor.append((k, "raw", v))
                 else:
-                    # Mirrors the write-side gate in ``column_io.kv_first_write``:
-                    # an unknown wrapper on the ``raw`` branch is pickled into
-                    # device memory by ``broadcast_object_list``, which is how the
-                    # PackedTensor payload became a 26 GiB allocation. Fail at the
-                    # boundary instead of discovering it as an OOM.
                     raise TypeError(
                         f"Field {k!r}: unexpected broadcast type "
                         f"{type(v).__name__}. "
