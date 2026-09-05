@@ -49,8 +49,6 @@ from nemo_rl.data.energon.multimodal.types import CanonicalSFTSample
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 _V2_STATE_FORMAT_VERSION = 2
-# Cleared after the viewer hint is printed once; must start True or it never is.
-_FIRST_SAMPLE_ASSERTION = True
 
 
 def compact_sample_error_handler(
@@ -59,8 +57,6 @@ def compact_sample_error_handler(
     sources: list[SourceInfo] | None = None,
 ) -> None:
     """Log a sample-processing error and let Energon request another sample."""
-    global _FIRST_SAMPLE_ASSERTION
-
     if isinstance(exception, AssertionError):
         if sources is None:
             print(f"Assertion error in sample {str(sample)[:100]}: {exception}")

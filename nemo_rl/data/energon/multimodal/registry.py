@@ -97,7 +97,9 @@ class LazyRegistry:
             ) from error
         if supports_model_family(resolved, model_family):
             return resolved
-        supported_names = ", ".join(sorted(supported - {ALL_MODEL_FAMILIES}))
+        supported_names = ", ".join(
+            sorted(name for name in supported if name != ALL_MODEL_FAMILIES)
+        )
         raise ValueError(
             f"{self.kind.replace('_', ' ').capitalize()} registry key {key!r} "
             f"does not support model family {model_family!r}; supported model "

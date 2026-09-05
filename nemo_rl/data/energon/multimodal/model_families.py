@@ -22,7 +22,9 @@ AllModelFamilies = Literal["*"]
 SupportedModelFamily = ModelFamily | AllModelFamilies
 
 ALL_MODEL_FAMILIES: Final[AllModelFamilies] = "*"
-KNOWN_MODEL_FAMILIES: Final[frozenset[ModelFamily]] = frozenset({"nemotron", "qwen"})
+KNOWN_MODEL_FAMILIES: Final = cast(
+    frozenset[ModelFamily], frozenset({"nemotron", "qwen"})
+)
 _MODEL_FAMILIES_ATTRIBUTE = "__nemo_rl_supported_model_families__"
 
 ComponentT = TypeVar("ComponentT")
