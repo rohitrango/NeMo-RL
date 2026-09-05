@@ -332,11 +332,36 @@ def prepare_sft_batch(
 ) -> BatchedDataDict:
     """Normalize a tokenized message-log batch or an already prepared batch."""
     if "message_log" in batch:
-        add_loss_mask_to_message_log(
-            batch["message_log"],
-            roles_to_train_on=["assistant"],
-            only_unmask_final=only_unmask_final,
-        )
+        loss_mask_mode = batch.get("loss_mask_mode")
+        if loss_mask_mode == "precomputed":
+            if only_unmask_final:
+                raise ValueError(
+                    "only_unmask_final cannot override precomputed SFT loss masks."
+                )
+            for message_log in batch["message_log"]:
+                for message in message_log:
+                    tokens = message.get("token_ids")
+                    mask = message.get("token_loss_mask")
+                    if (
+                        not isinstance(tokens, torch.Tensor)
+                        or not isinstance(mask, torch.Tensor)
+                        or tokens.ndim != 1
+                        or mask.ndim != 1
+                        or tokens.shape != mask.shape
+                        or bool(((mask != 0) & (mask != 1)).any())
+                    ):
+                        raise ValueError(
+                            "Precomputed SFT masks must be binary vectors matching "
+                            "each token vector."
+                        )
+        elif loss_mask_mode is None:
+            add_loss_mask_to_message_log(
+                batch["message_log"],
+                roles_to_train_on=["assistant"],
+                only_unmask_final=only_unmask_final,
+            )
+        else:
+            raise ValueError(f"Unsupported SFT loss_mask_mode={loss_mask_mode!r}.")
         cat_and_padded, input_lengths = batched_message_log_to_flat_message(
             batch["message_log"],
             pad_value_dict={"token_ids": tokenizer.pad_token_id},

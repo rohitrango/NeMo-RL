@@ -16,7 +16,7 @@ from nemo_rl.data_plane import KVBatchMeta
 _ACTOR_CLS = SFTSingleControllerActor.__ray_metadata__.modified_class
 
 
-def _envelope(rank: int) -> StepEnvelope:
+def _envelope(rank: int, *, source_count: int = 1) -> StepEnvelope:
     return StepEnvelope(
         meta=KVBatchMeta(
             partition_id=f"p{rank}",
@@ -27,10 +27,11 @@ def _envelope(rank: int) -> StepEnvelope:
         ),
         logical_rank=rank,
         logical_world_size=2,
-        source_ids=(f"source-{rank}",),
+        source_ids=tuple(
+            f"source-{rank}-{source_index}" for source_index in range(source_count)
+        ),
         field_names=("input_ids",),
         sequence_lengths=(8,),
-        field_fingerprints={"input_ids": {"hash": f"hash-{rank}"}},
         load_seconds=0.1 + rank * 0.1,
         valid_tokens=4,
     )
@@ -54,6 +55,10 @@ def _controller() -> object:
 
 def test_train_step_orders_split_policy_lifecycle_and_commit() -> None:
     controller = _controller()
+    controller._load_envelopes.return_value = [
+        _envelope(0, source_count=2),
+        _envelope(1),
+    ]
 
     metrics = controller._run_train_step()
 
@@ -62,8 +67,10 @@ def test_train_step_orders_split_policy_lifecycle_and_commit() -> None:
     controller._trainer.finish_train_step.assert_called_once_with()
     controller._owner_call.assert_called_once_with("commit_sft_batch")
     assert controller._save_state.total_steps == 1
-    assert controller._save_state.consumed_samples == 2
+    assert controller._save_state.consumed_samples == 3
     assert metrics["valid_tokens"] == 8
+    assert metrics["source_samples"] == 3
+    assert metrics["physical_packs"] == 2
 
 
 def test_train_step_aborts_policy_and_loader_on_training_failure() -> None:
@@ -74,7 +81,7 @@ def test_train_step_aborts_policy_and_loader_on_training_failure() -> None:
         controller._run_train_step()
 
     controller._trainer.abort_train_step.assert_called_once_with()
-    controller._owner_call.assert_called_once_with("abort_sft_batch")
+    controller._owner_call.assert_any_call("abort_sft_batch")
     assert controller._save_state.total_steps == 0
 
 
@@ -100,3 +107,46 @@ def test_max_steps_is_bounded_by_virtual_epochs() -> None:
     )
 
     assert _max_train_steps(config) == 21
+
+
+def _save_controller(*, enabled: bool, total_steps: int, save_period: int) -> object:
+    controller = object.__new__(_ACTOR_CLS)
+    controller._master_config = SimpleNamespace(
+        checkpointing={"enabled": enabled, "save_period": save_period}
+    )
+    controller._save_state = SFTV2SaveState(total_steps, 0, 0, "hash")
+    controller._max_steps = 1000
+    return controller
+
+
+def test_should_save_on_timeout_off_period() -> None:
+    controller = _save_controller(enabled=True, total_steps=7, save_period=100)
+
+    assert controller._should_save(save_by_timeout=False) is False
+    assert controller._should_save(save_by_timeout=True) is True
+
+
+def test_timeout_cannot_save_when_checkpointing_disabled() -> None:
+    controller = _save_controller(enabled=False, total_steps=7, save_period=100)
+
+    assert controller._should_save(save_by_timeout=True) is False
+
+
+def test_timeout_checker_fires_once_after_budget() -> None:
+    from nemo_rl.utils.timer import TimeoutChecker
+
+    timeout = TimeoutChecker(timeout="00:00:00:00")
+    timeout.start_iterations()
+
+    assert timeout.check_save() is True
+    # Latches, so the loop breaks instead of re-saving every subsequent step.
+    assert timeout.check_save() is False
+
+
+def test_timeout_checker_disabled_when_unset() -> None:
+    from nemo_rl.utils.timer import TimeoutChecker
+
+    timeout = TimeoutChecker(timeout=None)
+    timeout.start_iterations()
+
+    assert timeout.check_save() is False

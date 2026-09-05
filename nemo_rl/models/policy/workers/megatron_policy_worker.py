@@ -64,7 +64,7 @@ from nemo_rl.models.generation.megatron.megatron_worker import (
     MegatronGenerationRefitMixin,
 )
 from nemo_rl.models.generation.vllm.config import VllmConfig
-from nemo_rl.models.megatron.common import get_moe_metrics
+from nemo_rl.models.megatron.common import count_moe_layers, get_moe_metrics
 from nemo_rl.models.megatron.data import (
     get_microbatch_iterator,
     process_global_batch,
@@ -1090,6 +1090,7 @@ class MegatronPolicyWorkerImpl(
             moe_metrics = get_moe_metrics(
                 loss_scale=moe_loss_scale,
                 per_layer_logging=self.cfg["megatron_cfg"]["moe_per_layer_logging"],
+                num_moe_layers=count_moe_layers(self.model, model_config),
             )
             if moe_metrics:
                 metrics["moe_metrics"] = moe_metrics
@@ -1430,6 +1431,15 @@ class MegatronPolicyWorkerImpl(
         state["local_valid_seqs"] = state["local_valid_seqs"] + call_local_seqs
         state["local_valid_toks"] = state["local_valid_toks"] + call_local_toks
 
+        # Pre-compute the MTP loss mask so process_microbatch can pack it.
+        model_config = self._get_model_config()
+        mtp_num_layers = getattr(model_config, "mtp_num_layers", None)
+        mtp_enabled = mtp_num_layers is not None and mtp_num_layers > 0
+        if mtp_enabled and "token_mask" in data and "sample_mask" in data:
+            data["mtp_loss_mask"] = data["token_mask"] * data["sample_mask"].unsqueeze(
+                -1
+            )
+
         # The number of chunks per optimizer step is a first-class property of
         # this path — it decides how many times gradients are accumulated before
         # a single reduce — but it was previously only recoverable by calibrating
@@ -1466,6 +1476,9 @@ class MegatronPolicyWorkerImpl(
             self.cfg,
             state["mbs"],
             straggler_timer=self.mcore_state.straggler_timer,
+            delegate_pack_to_model=self.delegate_pack_to_model,
+            delegate_mtp_loss_mask_to_model=self.delegate_mtp_loss_mask_to_model,
+            model_slices_context_parallel_inputs=self.model_slices_context_parallel_inputs,
         )
         state["total_num_microbatches"] += int(num_microbatches)
 
@@ -1788,9 +1801,24 @@ class MegatronPolicyWorkerImpl(
             moe_metrics = get_moe_metrics(
                 loss_scale=moe_loss_scale,
                 per_layer_logging=self.cfg["megatron_cfg"]["moe_per_layer_logging"],
+                num_moe_layers=count_moe_layers(self.model, model_config),
             )
             if moe_metrics:
                 metrics["moe_metrics"] = moe_metrics
+
+        # MTP metrics are collected in train() (the sync path, ~line 1098) but
+        # were missing from this split path, so SFTv2 -- which drives
+        # begin_train_step / train_microbatches_from_meta / finish_train_step --
+        # never logged mtp_{i}_loss or mtp_{i}_acceptance_rate even with
+        # mtp_num_layers set. mcore populates MTPLossLoggingHelper.tracker every
+        # step regardless; nothing was draining it here.
+        #
+        # mtp_grad_norm is not computed on this path (it only applies when
+        # mtp_detach_heads=False), so pass None -- the collector takes it as
+        # Optional. get_mtp_metrics() broadcasts from the last pipeline stage, a
+        # collective, so this must run on every rank: it sits outside any
+        # rank-conditional block, exactly like the moe_metrics call above.
+        self._collect_mtp_metrics(metrics, state["total_num_microbatches"], None)
 
         self._train_step_state = None
         return metrics

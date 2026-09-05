@@ -74,6 +74,13 @@ def _aggregate_train_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
     if "moe_metrics" in results[0]:
         out["moe_metrics"] = results[0]["moe_metrics"]
+    # MTP mirrors MoE: the worker collects it in finish_train_step
+    # (_collect_mtp_metrics), but this aggregator only forwarded moe_metrics,
+    # so the split path -- which SFTv2 drives via finish_train_step --
+    # dropped mtp_{i}_loss / mtp_{i}_acceptance_rate before any logger saw
+    # them. lm_policy.train() (the non-split path) already forwards both.
+    if "mtp_metrics" in results[0]:
+        out["mtp_metrics"] = results[0]["mtp_metrics"]
     all_mb_metrics: dict[str, list[Any]] = defaultdict(list)
     for r in results:
         for k, v in r["all_mb_metrics"].items():

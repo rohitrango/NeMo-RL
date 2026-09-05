@@ -17,21 +17,27 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
+import traceback
+import urllib.parse
 from collections.abc import Callable
 from typing import Any, Iterator, Literal, Mapping, Protocol, cast
 
 import torch
 from megatron.energon import (
+    Cooker,
     CrudeSample,
+    FileStoreCachePool,
+    SourceInfo,
     WorkerConfig,
     get_savable_loader,
     get_train_dataset,
     get_val_dataset,
-    reraise_exception,
 )
+from megatron.energon.epathlib import epath as energon_epath
 
 from nemo_rl.data.energon.config import EnergonLoaderConfig, EnergonSourceConfig
-from nemo_rl.data.energon.multimodal.packing import EnergonPackingFactory
+from nemo_rl.data.energon.multimodal.packing import build_packing_hooks
 from nemo_rl.data.energon.multimodal.registry import (
     COOKER_REGISTRY,
     PACKING_REGISTRY,
@@ -43,10 +49,67 @@ from nemo_rl.data.energon.multimodal.task_encoders import (
     build_processor_adapter,
 )
 from nemo_rl.data.energon.multimodal.types import CanonicalSFTSample
+from nemo_rl.data.packing import SequencePacker
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 _V1_STATE_FORMAT_VERSION = 1
 _V2_STATE_FORMAT_VERSION = 2
+_FIRST_SAMPLE_ASSERTION = False
+
+
+def _set_nvdataset_cache_dir(path: str) -> None:
+    """Point Energon's ``dss://`` resolution at ``path`` for this process.
+
+    Energon snapshots ``NVDATASET_CACHE_DIR`` into a module global at import
+    time (``megatron/energon/epathlib/epath.py``), and every ``dss://`` lookup
+    reads that global rather than the environment. This module imports
+    ``megatron.energon`` at the top, so setting the env var alone would be a
+    silent no-op -- rebind the global too. The env var is still set so forked
+    Energon loader workers inherit it.
+    """
+    os.environ["NVDATASET_CACHE_DIR"] = path
+    energon_epath.NVDATASET_CACHE_DIR = energon_epath.EPath(path)
+
+
+def compact_sample_error_handler(
+    exception: Exception,
+    sample: Any | list[Any],
+    sources: list[SourceInfo] | None = None,
+) -> None:
+    """Log a sample-processing error and let Energon request another sample."""
+    global _FIRST_SAMPLE_ASSERTION
+
+    if isinstance(exception, AssertionError):
+        if sources is None:
+            print(f"Assertion error in sample {str(sample)[:100]}: {exception}")
+            return
+
+        data = [
+            {
+                "dataset_path": str(source.dataset_path),
+                "index": source.index,
+                "shard_name": source.shard_name,
+                "file_names": list(source.file_names),
+            }
+            for source in sources
+        ]
+        url = (
+            "vscode://nvidia.energon-sample-viewer/open?data="
+            f"{urllib.parse.quote(json.dumps(data))}"
+        )
+        print(f"Assertion error: {exception}")
+        print(f"(Ctrl+)Click to view sample in energon viewer: {url}")
+        if _FIRST_SAMPLE_ASSERTION:
+            print(
+                "If not installed yet, install energon sample viewer from "
+                "https://gitlab-master.nvidia.com/lvoegtle/"
+                "vscode-energon-sample-viewer"
+            )
+            _FIRST_SAMPLE_ASSERTION = False
+        return
+
+    print("Ignoring error processing sample:")
+    traceback.print_exc()
 
 
 class SFTDataLoader(Protocol):
@@ -139,18 +202,51 @@ def _loader_config(value: Any) -> EnergonLoaderConfig:
         raise ValueError(
             f"Unknown data-loader topology mapper {config.topology_mapper!r}."
         )
-    if config.task_encoder.options:
-        raise ValueError("The Stage 1 generic SFT task encoder has no options.")
+    configured_encoder_options = config.task_encoder.options.model_fields_set
+    if config.task_encoder.name == "generic_sft":
+        if configured_encoder_options:
+            raise ValueError(
+                f"Task encoder {config.task_encoder.name!r} has no configurable "
+                "options."
+            )
     if not config.cookers:
         raise ValueError("At least one Energon cooker must be configured.")
     if any(cooker.options for cooker in config.cookers):
         raise ValueError("The Stage 1 generic conversation cooker has no options.")
+    fallback_cookers = [
+        index
+        for index, cooker in enumerate(config.cookers)
+        if cooker.has_subflavors is None
+    ]
+    if len(fallback_cookers) > 1:
+        raise ValueError(
+            "At most one Energon cooker can omit has_subflavors when several "
+            "cookers are configured."
+        )
+    if fallback_cookers and fallback_cookers[0] != len(config.cookers) - 1:
+        raise ValueError("An Energon fallback cooker must be the final cooker.")
+    filters = [
+        cooker.has_subflavors
+        for cooker in config.cookers
+        if cooker.has_subflavors is not None
+    ]
+    if any(current in filters[:index] for index, current in enumerate(filters)):
+        raise ValueError("Energon cooker has_subflavors filters must be unique.")
+    TASK_ENCODER_REGISTRY.resolve_for_model_family(
+        config.task_encoder.name,
+        model_family=config.model_family,
+    )
+    for cooker in config.cookers:
+        COOKER_REGISTRY.resolve_for_model_family(
+            cooker.name,
+            model_family=config.model_family,
+        )
     return config
 
 
 def _v1_loader_projection(config: EnergonLoaderConfig) -> dict[str, Any]:
-    """Return exactly the fields used by the former V1 fingerprint."""
-    return {
+    """Preserve legacy V1 state while identifying Stage 3 components."""
+    projection: dict[str, Any] = {
         "num_workers": config.num_workers,
         "shuffle_buffer_size": config.shuffle_buffer_size,
         "max_samples_per_sequence": config.max_samples_per_sequence,
@@ -162,6 +258,33 @@ def _v1_loader_projection(config: EnergonLoaderConfig) -> dict[str, Any]:
         "checkpoint_every_sec": config.checkpoint_every_sec,
         "watchdog_timeout_seconds": config.watchdog_timeout_seconds,
     }
+    legacy_components = (
+        config.task_encoder.name == "generic_sft"
+        and not config.task_encoder.options.model_fields_set
+        and config.task_encoder.packing is None
+        and len(config.cookers) == 1
+        and config.cookers[0].name == "generic_conversation"
+        and not config.cookers[0].options
+        and config.cookers[0].has_subflavors is None
+    )
+    if legacy_components:
+        return projection
+
+    projection["stage3"] = {
+        "model_family": config.model_family,
+        "task_encoder": config.task_encoder.model_dump(mode="json"),
+        "cookers": [cooker.model_dump(mode="json") for cooker in config.cookers],
+        "registries": selected_registry_identity(
+            task_encoder=config.task_encoder.name,
+            cookers=[cooker.name for cooker in config.cookers],
+            packing=(
+                None
+                if config.task_encoder.packing is None
+                else config.task_encoder.packing.name
+            ),
+        ),
+    }
+    return projection
 
 
 def _v1_fingerprint(
@@ -231,7 +354,8 @@ def _worker_config(
         world_size=logical_world_size,
         num_workers=config.num_workers,
         seed_offset=config.seed_offset,
-        global_error_handler=reraise_exception,
+        global_error_handler=compact_sample_error_handler,
+        restore_error_handler=compact_sample_error_handler,
     )
 
 
@@ -240,30 +364,38 @@ def _task_encoder(
     loader_config: EnergonLoaderConfig,
     adapter: Any,
     include_source_ids: bool,
+    tokenizer: Any | None = None,
+    only_unmask_final: bool = False,
 ) -> BaseSFTTaskEncoder:
     cooker_functions = [
-        cast(
-            Callable[[CrudeSample], CanonicalSFTSample],
-            COOKER_REGISTRY.resolve(cooker.name),
+        Cooker(
+            cast(
+                Callable[[CrudeSample], CanonicalSFTSample],
+                COOKER_REGISTRY.resolve(cooker.name),
+            ),
+            has_subflavors=cooker.has_subflavors,
         )
         for cooker in loader_config.cookers
     ]
     encoder_type = cast(
         Any, TASK_ENCODER_REGISTRY.resolve(loader_config.task_encoder.name)
     )
+    encoder_options: dict[str, Any] = {}
+    if loader_config.task_encoder.name == "nemotron_multimodal":
+        encoder_options = loader_config.task_encoder.options.model_dump()
     packing_config = loader_config.task_encoder.packing
     packing_hooks = None
     if packing_config is not None:
-        packing_factory = cast(
-            EnergonPackingFactory,
+        packer_type = cast(
+            type[SequencePacker],
             PACKING_REGISTRY.resolve(packing_config.name),
         )
-        packing_hooks = packing_factory(packing_config.options)
-        if packing_hooks.key != packing_config.name:
-            raise ValueError(
-                f"Energon packing factory {packing_config.name!r} returned "
-                f"hooks for {packing_hooks.key!r}."
-            )
+        packing_hooks = build_packing_hooks(
+            packing_config.options,
+            algorithm=packing_config.name,
+            version=PACKING_REGISTRY.identity(packing_config.name)["version"],
+            packer_type=packer_type,
+        )
     return cast(
         BaseSFTTaskEncoder,
         encoder_type(
@@ -271,6 +403,9 @@ def _task_encoder(
             cooker_functions=cooker_functions,
             packing_hooks=packing_hooks,
             include_source_ids=include_source_ids,
+            tokenizer=tokenizer,
+            only_unmask_final=only_unmask_final,
+            **encoder_options,
         ),
     )
 
@@ -287,6 +422,7 @@ def _build_energon_sft_loader(
     logical_world_size: int,
     placement_fingerprint: str | None,
     state_format_version: Literal[1, 2],
+    only_unmask_final: bool,
 ) -> EnergonSFTDataLoader:
     if processor is None:
         raise ValueError("data.backend=energon requires a multimodal processor.")
@@ -296,6 +432,8 @@ def _build_energon_sft_loader(
         raise ValueError("SFTv2 requires a non-empty placement fingerprint.")
 
     loader_config = _loader_config(data_config["energon"])
+    if loader_config.nvdataset_cache_dir is not None:
+        _set_nvdataset_cache_dir(loader_config.nvdataset_cache_dir)
     if (
         state_format_version == _V1_STATE_FORMAT_VERSION
         and loader_config.task_encoder.packing is not None
@@ -321,6 +459,8 @@ def _build_energon_sft_loader(
         loader_config=loader_config,
         adapter=adapter,
         include_source_ids=state_format_version == _V2_STATE_FORMAT_VERSION,
+        tokenizer=processor.tokenizer,
+        only_unmask_final=only_unmask_final,
     )
     worker_config = _worker_config(
         loader_config,
@@ -347,7 +487,7 @@ def _build_energon_sft_loader(
             shuffle_buffer_size=(
                 loader_config.shuffle_buffer_size if data_config["shuffle"] else None
             ),
-            max_samples_per_sequence=None,
+            max_samples_per_sequence=loader_config.max_samples_per_sequence,
             virtual_epoch_length=source.virtual_epoch_length,
             task_encoder=task_encoder,
         )
@@ -367,11 +507,44 @@ def _build_energon_sft_loader(
             task_encoder=task_encoder,
         )
 
+    # FileStoreCachePool defaults to max_cache_size_gbytes=1024 (1 TB) and
+    # num_workers=8. On a node whose whole memory cgroup is 900Gi that default
+    # is effectively unbounded, and the cache-worker IPC shows up as Shmem
+    # charged to the cgroup. The reference bounds it explicitly
+    # (energon-megatron-lm examples/multimodal/iter_data.py:
+    #  FileStoreCachePool(num_workers=8, max_cache_size_gbytes=8, method="raw")).
+    # Let the recipe set both, and bound the default instead of inheriting 1 TB.
+    def _loader_opt(name, default=None):
+        if isinstance(loader_config, dict):
+            return loader_config.get(name, default)
+        return getattr(loader_config, name, default)
+
+    _cache_kwargs = {"method": "raw"}
+    _cache_gb = _loader_opt("cache_pool_max_gbytes", None)
+    if _cache_gb is not None:
+        _cache_kwargs["max_cache_size_gbytes"] = _cache_gb
+    _cache_workers = _loader_opt("cache_pool_num_workers", 1)
+    if _cache_workers is not None:
+        _cache_kwargs["num_workers"] = _cache_workers
+
+    cache_pool = (
+        FileStoreCachePool(**_cache_kwargs)
+        if any(cooker.need_cache for cooker in task_encoder.cookers)
+        else None
+    )
+    # Reference (energon-megatron-lm examples/multimodal/iter_data.py) leaves
+    # this at its high default (100000) rather than the SavableDataLoader
+    # default -- gc.collect() on the shuffle/packing buffers is expensive at
+    # buffer_size=5000+, so only force it rarely. Let the recipe override.
+    _gc_every_n_steps = _loader_opt("gc_collect_every_n_steps", 100000)
+
     loader = get_savable_loader(
         dataset,
+        cache_pool=cache_pool,
         checkpoint_every_sec=loader_config.checkpoint_every_sec,
         prefetch_factor=loader_config.prefetch_factor,
         watchdog_timeout_seconds=loader_config.watchdog_timeout_seconds,
+        gc_collect_every_n_steps=_gc_every_n_steps,
         fail_on_timeout=True,
     )
     if state_format_version == _V1_STATE_FORMAT_VERSION:
@@ -410,6 +583,7 @@ def build_energon_sft_loader(
     logical_rank: int,
     logical_world_size: int,
     placement_fingerprint: str,
+    only_unmask_final: bool = False,
 ) -> EnergonSFTDataLoader:
     """Build one V2 loader for an explicit logical data shard and split."""
     if "energon" not in data_config:
@@ -426,6 +600,7 @@ def build_energon_sft_loader(
         logical_world_size=logical_world_size,
         placement_fingerprint=placement_fingerprint,
         state_format_version=_V2_STATE_FORMAT_VERSION,
+        only_unmask_final=only_unmask_final,
     )
 
 
@@ -458,6 +633,7 @@ def build_energon_sft_dataloaders(
         logical_world_size=1,
         placement_fingerprint=None,
         state_format_version=_V1_STATE_FORMAT_VERSION,
+        only_unmask_final=False,
     )
 
     validation = data_config.get("validation")
@@ -480,6 +656,7 @@ def build_energon_sft_dataloaders(
         logical_world_size=1,
         placement_fingerprint=None,
         state_format_version=_V1_STATE_FORMAT_VERSION,
+        only_unmask_final=False,
     )
     return train_loader, val_loader
 

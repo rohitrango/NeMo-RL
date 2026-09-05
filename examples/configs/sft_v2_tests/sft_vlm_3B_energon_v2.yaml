@@ -13,12 +13,6 @@ sft:
   seed: 42
   only_unmask_final: false
 
-sft_v2:
-  loader_only: false
-  loader_warmup_steps: 2
-  loader_measurement_steps: 10
-  measurement_output: results/sft_v2_loader_metrics.pt
-
 policy:
   sequence_packing:
     enabled: false
@@ -32,6 +26,10 @@ checkpointing:
   higher_is_better: false
   keep_top_k: 1
   save_period: 10
+  # Walltime budget as DD:HH:MM:SS. When reached, checkpoint after the current
+  # step and stop; null disables the timeout. Set below the scheduler's job
+  # limit so the save has room to finish.
+  checkpoint_must_save_by: null
 
 data:
   _override_: true
@@ -43,10 +41,15 @@ data:
   shuffle: true
   num_workers: 0
   energon:
+    model_family: qwen
     num_workers: 8
     shuffle_buffer_size: 1000
     processor_adapter: hf_multimodal
     topology_mapper: default
+    # Root of the DSS cache that `dss://` metadataset paths resolve against.
+    # null keeps whatever the environment already exports as
+    # NVDATASET_CACHE_DIR.
+    nvdataset_cache_dir: null
     task_encoder:
       name: generic_sft
       packing: null

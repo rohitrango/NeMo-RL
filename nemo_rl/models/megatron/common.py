@@ -121,10 +121,83 @@ def broadcast_tensor(
     return tensor
 
 
+def count_moe_layers(model: Any = None, model_config: Any = None) -> Optional[int]:
+    """Number of layers Megatron divides the summed MoE aux loss by.
+
+    Mirrors Megatron-LM ``training.py``::
+
+        if <hybrid>:
+            layers = get_hybrid_layer_counts(args.hybrid_layer_pattern)[Symbols.MOE]
+        else:
+            layers = args.num_layers
+        num_moe_layers = _count_moe_layers(layers, moe_layer_freq, mtp_num_layers)
+
+    which for ``moe_layer_freq == 1`` reduces to ``layers + mtp_num_layers``.
+
+    Note ``get_hybrid_layer_counts`` already counts the MTP pattern's own MoE
+    layers, so Megatron's trailing ``+ mtp_num_layers`` double-counts them. That
+    is reproduced deliberately: the point is to match Megatron's logged value,
+    not to be independently correct. For Nemotron-Super this yields
+    ``42 + 2 = 44``.
+
+    Returns None when the count cannot be determined, so callers fall back to the
+    aux-loss tracker length. That fallback is exact for dense MoE models, where
+    every layer hosts a router and the two counts coincide; it is only wrong for
+    hybrid models, which is what this helper exists to fix.
+    """
+    if model_config is None and model is None:
+        return None
+
+    pattern = None
+    for src in (model_config, model):
+        if src is None:
+            continue
+        for attr in ("hybrid_layer_pattern", "hybrid_override_pattern"):
+            pattern = getattr(src, attr, None)
+            if pattern:
+                break
+        if pattern:
+            break
+
+    # The pattern lives on the HybridModel instance, which for a VLM sits under
+    # .language_model and may be wrapped by DDP/Float16Module.
+    if not pattern and model is not None:
+        node = model
+        for _ in range(4):
+            node = getattr(node, "module", None) or getattr(node, "language_model", None)
+            if node is None:
+                break
+            pattern = getattr(node, "hybrid_layer_pattern", None)
+            if pattern:
+                break
+
+    layers = None
+    if pattern:
+        try:
+            from megatron.core.models.hybrid.hybrid_layer_allocation import (
+                Symbols,
+                get_hybrid_layer_counts,
+            )
+
+            layers = get_hybrid_layer_counts(pattern)[Symbols.MOE]
+        except Exception:
+            layers = None
+
+    if layers is None:
+        layers = getattr(model_config, "num_layers", None)
+    if layers is None:
+        return None
+
+    mtp = getattr(model_config, "mtp_num_layers", None) or 0
+    total = int(layers) + int(mtp)
+    return total if total > 0 else None
+
+
 def get_moe_metrics(
     loss_scale: float,
     total_loss_dict: Optional[dict] = None,
     per_layer_logging: bool = False,
+    num_moe_layers: Optional[int] = None,
 ) -> dict[str, Any]:
     """Returns Mixture of Experts (MoE) auxiliary-loss metrics.
 
@@ -135,6 +208,11 @@ def get_moe_metrics(
         loss_scale: Scale factor to apply to each auxiliary loss (e.g., 1/num_microbatches).
         total_loss_dict: If provided, accumulate means into this dict (by name).
         per_layer_logging: If True, include per-layer values in the returned dict.
+        num_moe_layers: Divisor for the across-layer mean, from count_moe_layers().
+            Defaults to the tracker tensor length, which is
+            num_layers + mtp_num_layers and therefore counts layers that host no
+            router. On a hybrid Mamba/MoE model that under-reports the aux loss by
+            the ratio of total to MoE layers (90/44 = 2.05x for Nemotron-Super).
 
     Returns:
         dict[str, Any]: A flat dict of aggregated metrics. For each aux loss name,
@@ -149,9 +227,14 @@ def get_moe_metrics(
     if len(tracker) > 0:
         aux_losses = {k: v["values"].float() * loss_scale for k, v in tracker.items()}
         for name, loss_list in aux_losses.items():
-            # Megatron-LM aggregates aux losses across layers and normalizes by number of MoE layers
-            num_layers = int(loss_list.numel()) if loss_list.numel() > 0 else 1
-            aggregated_value = loss_list.sum() / num_layers
+            # Megatron-LM aggregates aux losses across layers and normalizes by number of
+            # MoE layers (moe_logging.py: values.sum() / num_moe_layers). Non-MoE layers
+            # contribute zero to the sum, so only the divisor matters -- the tracker length
+            # counts every layer and is correct only when every layer hosts a router.
+            divisor = num_moe_layers
+            if not divisor:
+                divisor = int(loss_list.numel()) if loss_list.numel() > 0 else 1
+            aggregated_value = loss_list.sum() / divisor
             metrics[name] = float(aggregated_value.item())
             if total_loss_dict is not None:
                 if name not in total_loss_dict:

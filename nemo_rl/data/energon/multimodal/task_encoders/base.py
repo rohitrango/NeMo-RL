@@ -14,7 +14,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeAlias
 
 from megatron.energon import Cooker, CrudeSample, DefaultTaskEncoder
 
@@ -28,6 +28,10 @@ from nemo_rl.data.energon.multimodal.types import (
     PackedSFTSample,
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+
+SFTCooker: TypeAlias = (
+    Cooker[CanonicalSFTSample] | Callable[[CrudeSample], CanonicalSFTSample]
+)
 
 
 class BaseSFTTaskEncoder(
@@ -46,11 +50,14 @@ class BaseSFTTaskEncoder(
     def __init__(
         self,
         *,
-        cooker_functions: Sequence[Callable[[CrudeSample], CanonicalSFTSample]],
+        cooker_functions: Sequence[SFTCooker],
         packing_hooks: EnergonPackingHooks[Any, Any, Any] | None,
     ) -> None:
         super().__init__()
-        self.cookers = tuple(Cooker(cooker) for cooker in cooker_functions)
+        self.cookers = tuple(
+            cooker if isinstance(cooker, Cooker) else Cooker(cooker)
+            for cooker in cooker_functions
+        )
         self._packing_hooks: EnergonPackingHooks[Any, Any, Any] | None = None
         self._packing_is_bound = False
         self.register_packing(packing_hooks)
@@ -98,4 +105,4 @@ class BaseSFTTaskEncoder(
         """Finish one minibatch before the loader emits it."""
 
 
-__all__ = ["BaseSFTTaskEncoder"]
+__all__ = ["BaseSFTTaskEncoder", "SFTCooker"]

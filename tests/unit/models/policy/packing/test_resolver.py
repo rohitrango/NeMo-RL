@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from nemo_rl.models.policy.packing import NeMoRLPacker, Packer, resolve_packer
+from nemo_rl.models.policy.packing import (
+    NeMoRLPacker,
+    NoOpPacker,
+    Packer,
+    resolve_packer,
+)
 
 
 def _resolve(name: str) -> Packer:
@@ -20,6 +25,10 @@ def test_resolver_returns_nemo_rl_packer() -> None:
     assert isinstance(_resolve("nemo_rl"), NeMoRLPacker)
 
 
+def test_resolver_returns_no_op_packer() -> None:
+    assert isinstance(_resolve("no_op"), NoOpPacker)
+
+
 def test_resolver_rejects_unknown_packer() -> None:
-    with pytest.raises(ValueError, match="Stage 1 supports only 'nemo_rl'"):
+    with pytest.raises(ValueError, match="Supported packers"):
         _resolve("energon")

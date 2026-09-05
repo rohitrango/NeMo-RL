@@ -259,7 +259,7 @@ def test_task_encoder_batches_heterogeneous_message_logs():
     assert prepared["pixel_values"].tensors[1] is None
 
 
-def test_task_encoder_runs_all_five_lifecycle_methods():
+def test_task_encoder_runs_split_encode_and_batch_lifecycle_methods():
     adapter = _adapter(_FakeQwenProcessor())
     encoder = _encoder(adapter, include_source_ids=True)
 
@@ -267,7 +267,6 @@ def test_task_encoder_runs_all_five_lifecycle_methods():
     postencoded = encoder.postencode_sample(preencoded)
     batch = encoder.batch([postencoded])
 
-    assert encoder.encode_sample(_sample()).sample_key == postencoded.sample_key
     assert encoder.encode_batch(batch) is batch
     assert batch["source_ids"] == ["sample-0"]
     with pytest.raises(RuntimeError, match="No Energon packing"):
@@ -315,7 +314,8 @@ def test_loader_state_is_fingerprinted_and_restored_before_iteration():
 
 
 def test_energon_config_disables_sequence_packing():
-    config = EnergonLoaderConfig()
+    config = EnergonLoaderConfig(model_family="qwen")
+    assert config.model_family == "qwen"
     assert config.packing_buffer_size is None
     assert config.max_samples_per_sequence is None
     assert config.processor_adapter == "hf_multimodal"
@@ -329,16 +329,25 @@ def test_energon_config_disables_sequence_packing():
     )
     assert source.virtual_epoch_length == 10
     with pytest.raises(ValueError):
-        EnergonLoaderConfig(packing_buffer_size=10)
+        EnergonLoaderConfig(model_family="qwen", packing_buffer_size=10)
+    assert (
+        EnergonLoaderConfig(model_family="qwen", max_samples_per_sequence=2)
+        .max_samples_per_sequence
+        == 2
+    )
     with pytest.raises(ValueError):
-        EnergonLoaderConfig(max_samples_per_sequence=2)
+        EnergonLoaderConfig(model_family="qwen", max_samples_per_sequence=0)
+    with pytest.raises(ValueError):
+        EnergonLoaderConfig.model_validate({})
+    with pytest.raises(ValueError):
+        EnergonLoaderConfig.model_validate({"model_family": "unsupported"})
 
 
 def test_v1_fingerprint_uses_the_former_loader_fields_only():
     source = EnergonSourceConfig(
         path="/data/prepared", split="train", virtual_epoch_length=10
     )
-    config = EnergonLoaderConfig()
+    config = EnergonLoaderConfig(model_family="qwen")
     former_loader_config = {
         "num_workers": 8,
         "shuffle_buffer_size": 1000,
@@ -372,15 +381,84 @@ def test_v1_fingerprint_uses_the_former_loader_fields_only():
     )
 
 
-def test_stage1_config_parses_registry_keys_and_rejects_legacy_packing_values():
+def test_v1_fingerprint_identifies_stage3_component_selection():
+    source = EnergonSourceConfig(path="/data/prepared", split="train")
+    generic = EnergonLoaderConfig(model_family="qwen")
+    nemotron = EnergonLoaderConfig.model_validate(
+        {
+            "model_family": "nemotron",
+            "task_encoder": "nemotron_multimodal",
+        }
+    )
+
+    fingerprints = {
+        _v1_fingerprint(
+            source=source,
+            loader_config=config,
+            adapter_fingerprint="same-processor",
+            split_role="train",
+        )
+        for config in (generic, nemotron)
+    }
+
+    assert len(fingerprints) == 2
+
+
+def test_config_parses_registry_keys_and_validates_packing_options():
     config = EnergonLoaderConfig.model_validate(
-        {"task_encoder": "generic_sft", "cookers": ["generic_conversation"]}
+        {
+            "model_family": "qwen",
+            "task_encoder": "generic_sft",
+            "cookers": ["generic_conversation"],
+        }
     )
     assert config.task_encoder.name == "generic_sft"
     assert config.cookers[0].name == "generic_conversation"
     with pytest.raises(ValueError):
         EnergonPackingConfig(name="future", buffer_size=0)
-    with pytest.raises(ValueError, match="not supported"):
+    packed = _loader_config(
+        {
+            "model_family": "qwen",
+            "task_encoder": {
+                "packing": {
+                    "name": "first_fit_decreasing",
+                    "buffer_size": 16,
+                    "options": {
+                        "max_sequence_length": 1024,
+                        "sequence_length_pad_multiple": 8,
+                    },
+                }
+            },
+        }
+    )
+    assert packed.task_encoder.packing is not None
+    assert packed.task_encoder.packing.options.max_sequence_length == 1024
+
+
+def test_config_validates_typed_task_encoder_options():
+    nemotron = _loader_config(
+        {
+            "model_family": "nemotron",
+            "task_encoder": {
+                "name": "nemotron_multimodal",
+                "options": {
+                    "audio_subsampling_factor": 4,
+                    "audio_clip_duration_seconds": 30.0,
+                    "max_audio_duration_seconds": 300.0,
+                },
+            },
+        }
+    )
+    assert nemotron.task_encoder.options.audio_subsampling_factor == 4
+    assert nemotron.task_encoder.options.audio_clip_duration_seconds == 30.0
+
+    with pytest.raises(ValueError, match="has no configurable options"):
         _loader_config(
-            {"task_encoder": {"packing": {"name": "future", "buffer_size": 16}}}
+            {
+                "model_family": "qwen",
+                "task_encoder": {
+                    "name": "generic_sft",
+                    "options": {"patch_dim": 14},
+                },
+            }
         )

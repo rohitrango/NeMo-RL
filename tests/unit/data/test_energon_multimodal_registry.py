@@ -5,6 +5,7 @@ import pytest
 
 from nemo_rl.data.energon.multimodal.registry import (
     COOKER_REGISTRY,
+    PACKING_REGISTRY,
     TASK_ENCODER_REGISTRY,
     LazyRegistry,
     selected_registry_identity,
@@ -18,6 +19,10 @@ def test_builtin_registries_resolve_lazily_with_stable_versions():
     }
     assert TASK_ENCODER_REGISTRY.identity("generic_sft") == {
         "key": "generic_sft",
+        "version": "1",
+    }
+    assert PACKING_REGISTRY.identity("first_fit_decreasing") == {
+        "key": "first_fit_decreasing",
         "version": "1",
     }
     assert selected_registry_identity(
@@ -54,7 +59,7 @@ def test_registry_rejects_invalid_resolved_type(monkeypatch):
         version="1",
     )
 
-    with pytest.raises(TypeError, match="must resolve to a callable"):
+    with pytest.raises(TypeError, match="SequencePacker subclass"):
         registry.resolve("invalid")
 
 

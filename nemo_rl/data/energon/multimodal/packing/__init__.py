@@ -14,14 +14,14 @@
 
 from nemo_rl.data.energon.multimodal.packing.base import (
     ENERGON_PACKED_SCHEMA_VERSION,
-    EnergonPackingFactory,
     EnergonPackingHooks,
     validate_packing_schema,
 )
+from nemo_rl.data.energon.multimodal.packing.sft import build_packing_hooks
 
 __all__ = [
     "ENERGON_PACKED_SCHEMA_VERSION",
-    "EnergonPackingFactory",
     "EnergonPackingHooks",
+    "build_packing_hooks",
     "validate_packing_schema",
 ]

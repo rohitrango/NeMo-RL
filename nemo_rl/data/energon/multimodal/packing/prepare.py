@@ -113,6 +113,15 @@ def prepare_energon_packed_batch(
     cu_seqlens_padded: list[torch.Tensor] = []
     side_rows: dict[str, list[torch.Tensor | None]] = {}
     media_rows: dict[str, list[PackedTensor | None]] = {}
+    loss_mask_mode = batch.get("loss_mask_mode")
+    if loss_mask_mode not in (None, "precomputed"):
+        raise ValueError(
+            f"Unsupported packed SFT loss_mask_mode={loss_mask_mode!r}."
+        )
+    if loss_mask_mode == "precomputed" and only_unmask_final:
+        raise ValueError(
+            "only_unmask_final cannot override precomputed packed SFT loss masks."
+        )
 
     for pack_index, source_logs_value in enumerate(packed_logs):
         if not isinstance(source_logs_value, list) or not source_logs_value:
@@ -132,11 +141,29 @@ def prepare_energon_packed_batch(
             raise ValueError("One Energon physical pack has inconsistent source metadata.")
 
         source_logs = deepcopy(source_logs_value)
-        add_loss_mask_to_message_log(
-            source_logs,
-            roles_to_train_on=["assistant"],
-            only_unmask_final=only_unmask_final,
-        )
+        if loss_mask_mode == "precomputed":
+            for source_log in source_logs:
+                for message in source_log:
+                    tokens = message.get("token_ids")
+                    mask = message.get("token_loss_mask")
+                    if (
+                        not isinstance(tokens, torch.Tensor)
+                        or not isinstance(mask, torch.Tensor)
+                        or tokens.ndim != 1
+                        or mask.ndim != 1
+                        or tokens.shape != mask.shape
+                        or bool(((mask != 0) & (mask != 1)).any())
+                    ):
+                        raise ValueError(
+                            "Precomputed packed SFT masks must be binary vectors "
+                            "matching each token vector."
+                        )
+        else:
+            add_loss_mask_to_message_log(
+                source_logs,
+                roles_to_train_on=["assistant"],
+                only_unmask_final=only_unmask_final,
+            )
         flattened = [message_log_to_flat_messages(log) for log in source_logs]
         source_lengths: list[int] = []
         for source_index, (flat, padded_length, multiplier) in enumerate(
@@ -246,7 +273,7 @@ def prepare_energon_packed_batch(
                 PackedTensor(
                     [materialized],
                     merged.dim_to_pack,
-                    pad_to_max_shape=merged.pad_to_max_shape,
+                    preprocessing_mode=merged.preprocessing_mode,
                 )
             )
         for key in media_rows.keys() - media_keys:

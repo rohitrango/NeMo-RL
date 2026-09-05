@@ -15,7 +15,6 @@
 """Lightweight value types shared by the SFTv2 driver and policy workers."""
 
 from dataclasses import dataclass
-from typing import Any
 
 from nemo_rl.data_plane.interfaces import KVBatchMeta
 
@@ -30,7 +29,6 @@ class StepEnvelope:
     source_ids: tuple[str, ...]
     field_names: tuple[str, ...]
     sequence_lengths: tuple[int, ...]
-    field_fingerprints: dict[str, Any]
     load_seconds: float
     valid_tokens: int
 

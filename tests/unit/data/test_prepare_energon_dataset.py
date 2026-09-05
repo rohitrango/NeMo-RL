@@ -90,17 +90,23 @@ def test_prepare_writes_equivalent_conversation_image_and_metadata(
             },
             {"role": "assistant", "content": "2"},
         ],
-        "media": [{"type": "image", "member": "png"}],
+        "media": [
+            {
+                "type": "image",
+                "member": "png",
+                "metadata": {"width": 4, "height": 3},
+            }
+        ],
     }
     assert archived_image_bytes == expected_image_bytes
     assert image.size == (4, 3)
     assert image.getpixel((0, 0)) == (10, 20, 30)
-    assert "CrudeWebdataset" in (
-        output_dir / ".nv-meta" / "dataset.yaml"
-    ).read_text(encoding="utf-8")
-    split_yaml = (output_dir / ".nv-meta" / "split.yaml").read_text(
+    dataset_yaml = (output_dir / ".nv-meta" / "dataset.yaml").read_text(
         encoding="utf-8"
     )
+    assert "CrudeWebdataset" in dataset_yaml
+    assert "decoder: null" in dataset_yaml
+    split_yaml = (output_dir / ".nv-meta" / "split.yaml").read_text(encoding="utf-8")
     assert "train:" in split_yaml
     assert "train-shard-000000.tar" in split_yaml
 
@@ -108,16 +114,15 @@ def test_prepare_writes_equivalent_conversation_image_and_metadata(
 def test_raw_image_header_detects_jpeg_without_a_path():
     module = _load_script()
     image_buffer = io.BytesIO()
-    Image.new("RGB", (4, 3), color=(10, 20, 30)).save(
-        image_buffer, format="JPEG"
-    )
+    Image.new("RGB", (4, 3), color=(10, 20, 30)).save(image_buffer, format="JPEG")
 
-    image_bytes, extension = module["_image_bytes_and_extension"](
+    image_bytes, extension, width, height = module["_image_bytes_extension_and_size"](
         {"bytes": image_buffer.getvalue(), "path": None}
     )
 
     assert image_bytes == image_buffer.getvalue()
     assert extension == "jpg"
+    assert (width, height) == (4, 3)
 
 
 def test_prepare_rejects_invalid_or_nonempty_destinations(tmp_path: Path):
@@ -133,7 +138,9 @@ def test_prepare_rejects_invalid_or_nonempty_destinations(tmp_path: Path):
     }
 
     with pytest.raises(ValueError, match="max_samples_per_shard"):
-        prepare(output_dir=tmp_path / "invalid", **(kwargs | {"max_samples_per_shard": 0}))
+        prepare(
+            output_dir=tmp_path / "invalid", **(kwargs | {"max_samples_per_shard": 0})
+        )
     with pytest.raises(ValueError, match="download_workers"):
         prepare(output_dir=tmp_path / "invalid", **(kwargs | {"download_workers": 0}))
 

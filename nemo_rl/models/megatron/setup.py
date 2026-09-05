@@ -21,6 +21,7 @@ import time
 import warnings
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
+from datetime import timedelta
 from functools import partial
 from typing import Any, Callable, Optional, TypeVar
 
@@ -337,8 +338,21 @@ def setup_distributed() -> None:
     configure_dynamo_cache()
     # Ensure clean slate before import
     destroy_parallel_state()
-    # Initialize process group
-    torch.distributed.init_process_group("nccl")
+    # Initialize process group.
+    #
+    # Torch defaults the collective watchdog to 10 minutes, which is too tight
+    # for long-sequence MoE runs: a single slow alltoall or a cold data batch
+    # trips it and the watchdog tears down every rank. Megatron exposes the same
+    # knob as --distributed-timeout-minutes (the reference Nemotron production
+    # SFT run sets 120). Raise it per recipe via NRL_DIST_TIMEOUT_MINUTES in
+    # policy.megatron_cfg.env_vars; unset keeps torch's default.
+    timeout_minutes = os.environ.get("NRL_DIST_TIMEOUT_MINUTES")
+    init_kwargs = (
+        {"timeout": timedelta(minutes=float(timeout_minutes))}
+        if timeout_minutes
+        else {}
+    )
+    torch.distributed.init_process_group("nccl", **init_kwargs)
 
 
 def validate_and_set_config(
@@ -920,6 +934,14 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
         "moe_router_bias_update_rate"
     ]
 
+    # Coefficient on the MoE load-balancing (aux) loss. Deliberately applied
+    # only when the recipe sets it: model providers supply their own default
+    # (e.g. nemotron_omni_provider.py:62 = 1e-4), and an unconditional
+    # setdefault(0.0) here would silently zero the aux loss for every model
+    # that relies on that provider value.
+    if "moe_aux_loss_coeff" in config["megatron_cfg"]:
+        model_cfg.moe_aux_loss_coeff = config["megatron_cfg"]["moe_aux_loss_coeff"]
+
     model_cfg.moe_enable_deepep = config["megatron_cfg"]["moe_enable_deepep"]
     model_cfg.moe_token_dispatcher_type = config["megatron_cfg"][
         "moe_token_dispatcher_type"
@@ -1096,6 +1118,45 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
                 f"Invalid recompute_granularity: {granularity!r}. "
                 "Valid options are 'full' or 'selective'."
             )
+
+    # Vision-backbone recomputation. Only multimodal providers (e.g.
+    # NemotronOmniProvider) define these fields, so each key is applied only
+    # when the recipe sets it -- same rule as moe_aux_loss_coeff above: an
+    # unconditional default here would override provider defaults for every
+    # model that never asked for vision recompute.
+    # Reference (generalist.sh:313):
+    #   --recompute-vision --recompute-method-vision block
+    #   --recompute-granularity-vision full --recompute-vision-num-layers 30
+    for _key in (
+        "recompute_vision",
+        "vision_recompute_granularity",
+        "vision_recompute_modules",
+        "vision_recompute_method",
+        "vision_recompute_num_layers",
+    ):
+        if _key in config["megatron_cfg"]:
+            if not hasattr(model_cfg, _key):
+                raise ValueError(
+                    f"megatron_cfg.{_key} is set but provider "
+                    f"{type(model_cfg).__name__} has no such field; vision "
+                    "recompute is only available on multimodal providers."
+                )
+            setattr(model_cfg, _key, config["megatron_cfg"][_key])
+
+    # RADIO backbone train/eval mode. The provider forces eval by default
+    # (nemotron_omni_provider.py:88) and _build_vision_config raises
+    # "Vision recompute requires radio_force_eval_mode=False." -- so enabling
+    # recompute_vision requires putting the backbone into train mode.
+    # The reference passes --radio-force-cpe-eval-mode but NOT
+    # --radio-force-eval-mode: backbone trains, CPE stays in eval.
+    for _key in ("radio_force_eval_mode", "radio_force_cpe_eval_mode"):
+        if _key in config["megatron_cfg"]:
+            if not hasattr(model_cfg, _key):
+                raise ValueError(
+                    f"megatron_cfg.{_key} is set but provider "
+                    f"{type(model_cfg).__name__} has no such field."
+                )
+            setattr(model_cfg, _key, config["megatron_cfg"][_key])
 
     # Activation function validation
     if not model_cfg.gated_linear_unit:

@@ -1,0 +1,130 @@
+defaults: sft_vlm_nemotron_omni_30B_energon_tp4etp4_v2.yaml
+
+sft:
+  max_num_epochs: 1
+  max_num_steps: 100
+
+policy:
+  # Overrides the 30B-A3B path in the inherited
+  # sft_vlm_nemotron_omni_30B_energon_tp4etp4_v2.yaml:8.
+  model_name: /data/models/NVIDIA-Nemotron-3.5-Super-midtrain-67B-vision-pretrained
+  # generalist.sh:187  BZ=32
+  train_global_batch_size: 32
+  # generalist.sh:142  MBZ=1
+  train_micro_batch_size: 1
+  # generalist.sh:184  PACKING_SEQ_LEN=DECODER_SEQ_LEN=524288
+  max_total_sequence_length: 524288
+  megatron_cfg:
+    tensor_model_parallel_size: 4
+    expert_model_parallel_size: 2
+    context_parallel_size: 4
+    sequence_parallel: true
+    activation_checkpointing: true
+    recompute_granularity: selective
+    recompute_modules: [ "moe" ]
+    optimizer:
+      # generalist.sh:188  LR=1e-5
+      lr: 1.0e-5
+      # generalist.sh:189  MIN_LR=2e-6. lr_decay_style is "constant"
+      # (generalist.sh:440), so min_lr only has to satisfy min_lr <= lr.
+      min_lr: 2.0e-6
+    scheduler:
+      lr_warmup_iters: 10
+  sequence_packing:
+    enabled: true
+    fuse_loss: true
+  tokenizer:
+    chat_template: default
+
+data:
+  energon:
+    watchdog_timeout_seconds: 1800
+    # generalist.sh:143  NW=4, passed as --num-workers (line 468).
+    num_workers: 4
+    # generalist.sh sets no prefetch factor, so Megatron takes the PyTorch
+    # default of 2.
+    prefetch_factor: 2
+    model_family: nemotron
+    task_encoder:
+      options:
+        allow_large_videos: true
+        # Match the reference production run. The library defaults mirror the
+        # Megatron argparse defaults (32 / null / false), which the launch
+        # script overrides:
+        # examples/multimodal/v3p5_super_prod_run/
+        #   sft_from_super35_dualds_4k_1of8_recover_iter366_radio_v4_h_full_generalist.sh
+        #   lines 288-304. Without these the two stacks sample a different
+        #   number of video frames (64 vs 32) and emit different token
+        #   sequences. See config-divergence.md.
+        video_max_num_frames: 64
+        video_aug_scale_frames_up: 4
+        video_aug_scale_resolution_only: true
+      packing:
+        # Match the reference production run, which selects
+        # balanced_greedy_knapsack with balanced_knapsack_delta=5
+        # (launch script lines 163-164, 186, 264-265; USE_BUCKETING defaults
+        # to 0, so it takes the balanced branch). greedy_knapsack fills one
+        # bin to the brim before opening the next; balanced sorts descending
+        # and always places into the least-full bin, so the fill is spread.
+        name: balanced_greedy_knapsack
+        # generalist.sh:185 uses PBS=5000, passed as --packing-buffer-size
+        # (:260). Walking up from the 32 this recipe used before, rather than
+        # jumping straight there.
+        #
+        # Measured on this node, 4 workers, prefetch 2, batch 32:
+        #     32  -> 52.0 s per 32-pack batch  (2 workers, prefetch 1)
+        #    128  ->  4.9 s per 32-pack batch
+        #
+        # Each dataloader worker holds its own packing buffer AND its own
+        # unbounded FileStoreCachePool of raw media bytes, and this blend
+        # carries clips up to 162MB. A 128-sample buffer OOM'd the worker node
+        # once before, at 8 workers with prefetch 2; 4 workers held it fine.
+        # If it OOMs, drop this value rather than num_workers.
+        buffer_size: 196
+        options:
+          max_sequence_length: ${policy.max_total_sequence_length}
+          # 16, not 8. The reference pads with get_padding(), which under
+          # CP + SP uses max(tp_size * cp_size, cp_size * 2) =
+          # max(4 * 4, 4 * 2) = 16 (megatron/core/models/multimodal/
+          # context_parallel.py:46). The earlier "2 * context_parallel_size"
+          # value picks the cp_size * 2 branch, which only applies when
+          # sequence_parallel is off; this recipe sets it true with TP=4, so
+          # the tensor-parallel term wins. Measured: get_padding(n) ==
+          # round_up(n, 16) for all n in 1..4999, and == round_up(n, 8) for
+          # only 2496 of them. See config-divergence.md.
+          sequence_length_pad_multiple: 16
+          balanced_knapsack_delta: 5
+    cookers:
+      - name: nemotron_conversation
+        has_subflavors:
+          cook: conversation
+      - name: nemotron_general_conversations_jsonl
+        has_subflavors:
+          cook: general_conversations_jsonl
+      - name: nemotron_general_conversations_webdataset
+        has_subflavors:
+          cook: general_conversations_webdataset
+      - name: nemotron_nano_openai_messages_jsonl
+        has_subflavors:
+          cook: openai_messages_jsonl
+  train:
+    path: /data/super-test-blend/cook_subset_v2/subset_container.yaml
+    split: train
+    virtual_epoch_length: 487
+  validation: null
+
+logger:
+  wandb_enabled: false
+  log_dir: logs/sft-nemotron-omni-30b-super-test-blend-energon-v2
+  wandb:
+    name: sft-nemotron-omni-30b-super-test-blend-energon-v2
+  tensorboard:
+    log_dir: tb_logs-sft-nemotron-omni-30b-super-test-blend-energon-v2
+  swanlab:
+    name: sft-nemotron-omni-30b-super-test-blend-energon-v2
+  mlflow:
+    run_name: sft-nemotron-omni-30b-super-test-blend-energon-v2
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 2

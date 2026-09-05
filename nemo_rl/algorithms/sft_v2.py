@@ -27,7 +27,7 @@ from typing import Any, Optional, cast
 import ray
 import numpy as np
 import torch
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.loss.loss_functions import NLLLossFn
@@ -52,15 +52,7 @@ from nemo_rl.models.policy.packing import ENERGON_PACKING_META_KEY, NoOpPacker
 from nemo_rl.models.policy.tq_policy import TQPolicy
 from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
 from nemo_rl.utils.logger import Logger, LoggerConfig
-
-
-class SFTV2Config(BaseModel, extra="allow"):
-    """SFTv2 controller and loader measurement settings."""
-
-    loader_only: bool = False
-    loader_warmup_steps: int = Field(default=2, ge=0)
-    loader_measurement_steps: int = Field(default=10, ge=1)
-    measurement_output: str = "results/sft_v2_loader_metrics.pt"
+from nemo_rl.utils.timer import TimeoutChecker
 
 
 class MasterConfig(BaseModel, extra="allow"):
@@ -69,7 +61,6 @@ class MasterConfig(BaseModel, extra="allow"):
     policy: PolicyConfig
     data: DataConfig
     sft: SFTConfig
-    sft_v2: SFTV2Config
     data_plane: LocalDataPlaneConfig
     logger: LoggerConfig
     cluster: ClusterConfig
@@ -148,19 +139,31 @@ class SFTSingleControllerActor:
         self._logger = Logger(master_config.logger)  # type: ignore[arg-type]
         self._logger.log_hyperparams(master_config.model_dump())
         self._checkpointer = CheckpointManager(master_config.checkpointing)
+        # Built here rather than on the driver: the timeout measures wall clock
+        # from the start of training, and driver setup happens well before it.
+        self._timeout = TimeoutChecker(
+            timeout=master_config.checkpointing["checkpoint_must_save_by"],
+            fit_last_save_time=True,
+        )
+        self._timeout.start_iterations()
         self._setup_loaders()
 
     def run(self) -> dict[str, Any]:
-        """Run loader measurement or SFT training."""
+        """Run SFT training."""
         try:
-            if self._master_config.sft_v2.loader_only:
-                return self._run_loader_measurement()
             self._trainer.prepare_for_training()
             while self._save_state.total_steps < self._max_steps:
                 metrics = self._run_train_step()
+                self._timeout.mark_iteration()
                 self._logger.log_metrics(metrics, self._save_state.total_steps)
-                if self._should_save():
+                save_by_timeout = self._timeout.check_save()
+                if self._should_save(save_by_timeout=save_by_timeout):
                     self._save_checkpoint()
+                if save_by_timeout:
+                    print(
+                        "Timeout has been reached, stopping training early", flush=True
+                    )
+                    break
             return vars(self._save_state).copy()
         finally:
             for cleanup, name in (
@@ -181,6 +184,7 @@ class SFTSingleControllerActor:
             // self._placement_plan.logical_world_size,
             "max_sequence_length": config.data["max_input_seq_length"],
             "placement_fingerprint": self._placement_plan.placement_hash,
+            "only_unmask_final": config.sft.only_unmask_final,
         }
         if self._loader_states is None:
             futures = self._trainer.worker_group.run_all_workers_single_data(
@@ -202,6 +206,47 @@ class SFTSingleControllerActor:
         results = ray.get(futures)
         if results != [True] * self._placement_plan.logical_world_size:
             raise RuntimeError(f"Unexpected SFT loader setup results: {results!r}.")
+
+    def _record_failed_step(self, envelopes, error) -> None:
+        """Append a JSON record naming every sample in the failing batch."""
+        import json
+        import traceback
+
+        record = {
+            "step": self._save_state.total_steps,
+            "error_type": type(error).__name__,
+            "error": str(error)[:2000],
+            "traceback": traceback.format_exc()[-4000:],
+            "copies": [
+                {
+                    "logical_rank": envelope.logical_rank,
+                    "source_ids": list(envelope.source_ids),
+                    "sequence_lengths": list(envelope.sequence_lengths),
+                    "valid_tokens": envelope.valid_tokens,
+                }
+                for envelope in envelopes
+            ],
+        }
+        # Ask the loader owners to decode and write the actual batch contents.
+        try:
+            record["batch_dumps"] = self._owner_call("dump_failed_batch")
+        except Exception as dump_error:  # noqa: BLE001
+            record["batch_dumps"] = f"dump call failed: {dump_error}"
+
+        try:
+            out = Path(self._master_config.logger["log_dir"]) / "failed_steps.jsonl"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with open(out, "a") as handle:
+                handle.write(json.dumps(record) + "\n")
+            warnings.warn(
+                f"SFTv2 step {record['step']} failed ({record['error_type']}); "
+                f"sample ids recorded in {out}",
+                stacklevel=2,
+            )
+        except Exception as write_error:  # never let logging mask the real failure
+            warnings.warn(
+                f"SFTv2 could not record the failed step: {write_error}", stacklevel=2
+            )
 
     def _load_envelopes(self) -> list[StepEnvelope]:
         futures = self._trainer.worker_group.run_all_workers_single_data(
@@ -225,27 +270,12 @@ class SFTSingleControllerActor:
         started = time.monotonic()
         envelopes = self._load_envelopes()
         train_started = time.monotonic()
-        step_open = False
-        try:
-            self._trainer.begin_train_step(self._loss_fn)
-            step_open = True
-            self._trainer.train_placed_microbatches(
-                [envelope.meta for envelope in envelopes]
-            )
-            train_results = self._trainer.finish_train_step()
-            step_open = False
-            self._owner_call("commit_sft_batch")
-        except Exception:
-            if step_open:
-                try:
-                    self._trainer.abort_train_step()
-                except Exception as error:  # preserve the policy-step failure
-                    warnings.warn(f"SFTv2 policy abort failed: {error}", stacklevel=2)
-            try:
-                self._owner_call("abort_sft_batch")
-            except Exception as error:  # preserve the policy-step failure
-                warnings.warn(f"SFTv2 loader abort failed: {error}", stacklevel=2)
-            raise
+        self._trainer.begin_train_step(self._loss_fn)
+        self._trainer.train_placed_microbatches(
+            [envelope.meta for envelope in envelopes]
+        )
+        train_results = self._trainer.finish_train_step()
+        self._owner_call("commit_sft_batch")
 
         policy_seconds = time.monotonic() - train_started
         valid_tokens = sum(envelope.valid_tokens for envelope in envelopes)
@@ -316,95 +346,17 @@ class SFTSingleControllerActor:
                 metrics[key] = np.sum(values).item()
         for key, value in train_results.get("moe_metrics", {}).items():
             metrics[f"moe/{key}"] = value
+        # MTP metrics are collected by the worker (_collect_mtp_metrics) and
+        # aggregated by lm_policy, but SFTv2 was the only algorithm that never
+        # drained them here, so mtp_{i}_loss / mtp_{i}_acceptance_rate never
+        # reached the logger. Mirrors grpo.py and
+        # single_controller_utils.utils, which namespace both moe/ and mtp/.
+        for key, value in train_results.get("mtp_metrics", {}).items():
+            metrics[f"mtp/{key}"] = value
         for key in ("total_flops", "num_ranks", "theoretical_tflops"):
             if key in train_results:
                 metrics[key] = train_results[key]
         return metrics
-
-    def _run_loader_measurement(self) -> dict[str, Any]:
-        config = self._master_config.sft_v2
-        measured: list[dict[str, Any]] = []
-        total = config.loader_warmup_steps + config.loader_measurement_steps
-        for step in range(total):
-            started = time.monotonic()
-            envelopes = self._load_envelopes()
-            self._owner_call("commit_sft_batch")
-            if step < config.loader_warmup_steps:
-                continue
-            elapsed = time.monotonic() - started
-            rows = sum(len(envelope.source_ids) for envelope in envelopes)
-            valid_tokens = sum(envelope.valid_tokens for envelope in envelopes)
-            measured.append(
-                {
-                    "rows_per_second": rows / max(elapsed, 1e-12),
-                    "valid_tokens_per_second": valid_tokens / max(elapsed, 1e-12),
-                    "envelope_seconds": elapsed,
-                    "slowest_copy_seconds": max(
-                        envelope.load_seconds for envelope in envelopes
-                    ),
-                    "loader_wait_seconds": max(
-                        envelope.load_seconds for envelope in envelopes
-                    ),
-                    "gpu_idle_seconds": max(
-                        envelope.load_seconds for envelope in envelopes
-                    ),
-                    "queue_depth": 1,
-                    "copy_imbalance_seconds": max(
-                        envelope.load_seconds for envelope in envelopes
-                    )
-                    - min(envelope.load_seconds for envelope in envelopes),
-                    "source_ids": [
-                        source_id
-                        for envelope in envelopes
-                        for source_id in envelope.source_ids
-                    ],
-                    "copies": [
-                        {
-                            "logical_rank": envelope.logical_rank,
-                            "source_ids": list(envelope.source_ids),
-                            "fields": list(envelope.field_names),
-                            "sequence_lengths": list(envelope.sequence_lengths),
-                            "values": envelope.field_fingerprints,
-                            "valid_tokens": envelope.valid_tokens,
-                        }
-                        for envelope in envelopes
-                    ],
-                }
-            )
-        output = Path(config.measurement_output)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(measured, output)
-        summary = {
-            "logical_dp_size": self._placement_plan.logical_world_size,
-            "measurement_steps": len(measured),
-            "rows_per_second": statistics.fmean(
-                item["rows_per_second"] for item in measured
-            ),
-            "valid_tokens_per_second": statistics.fmean(
-                item["valid_tokens_per_second"] for item in measured
-            ),
-            "envelope_p50_seconds": float(
-                np.percentile([item["envelope_seconds"] for item in measured], 50)
-            ),
-            "envelope_p95_seconds": float(
-                np.percentile([item["envelope_seconds"] for item in measured], 95)
-            ),
-            "slowest_copy_seconds": max(
-                item["slowest_copy_seconds"] for item in measured
-            ),
-            "loader_wait_seconds": statistics.fmean(
-                item["loader_wait_seconds"] for item in measured
-            ),
-            "gpu_idle_seconds": statistics.fmean(
-                item["gpu_idle_seconds"] for item in measured
-            ),
-            "source_coverage": len(
-                {source_id for item in measured for source_id in item["source_ids"]}
-            ),
-            "measurement_output": str(output),
-        }
-        self._logger.log_metrics(summary, self._save_state.total_steps)
-        return summary
 
     def _owner_call(self, method_name: str) -> list[Any]:
         futures = self._trainer.worker_group.run_all_workers_single_data(
@@ -416,10 +368,18 @@ class SFTSingleControllerActor:
     def _loader_state_dicts(self) -> list[dict[str, Any]]:
         return self._owner_call("sft_dataloader_state_dict")
 
-    def _should_save(self) -> bool:
+    def _should_save(self, save_by_timeout: bool = False) -> bool:
+        """Whether to checkpoint after the step that just finished.
+
+        ``save_by_timeout`` covers the walltime-bounded case: a scheduler is
+        about to reclaim the job, so save regardless of where the step count
+        sits relative to ``save_period``. The ``enabled`` guard stays outermost
+        so a timeout can never force a save the recipe disabled.
+        """
         config = self._master_config.checkpointing
         return bool(config["enabled"]) and (
-            self._save_state.total_steps == self._max_steps
+            save_by_timeout
+            or self._save_state.total_steps == self._max_steps
             or self._save_state.total_steps % config["save_period"] == 0
         )
 
@@ -533,7 +493,15 @@ def setup_sft_v2(
         cluster=cluster,
         config=master_config.policy,
         tokenizer=tokenizer,
-        processor=processor,
+        # Do NOT pass the processor object: it is a Ray actor constructor kwarg,
+        # so it gets pickled into every worker. For trust_remote_code models its
+        # class lives in transformers_modules.<repo>.<mod>, generated at runtime,
+        # and workers cannot resolve that name at unpickle time:
+        #   ModuleNotFoundError: No module named 'transformers_modules...'
+        # SFTMegatronPolicyWorker rebuilds it from self.cfg["tokenizer"] instead
+        # (see sft_worker.setup_sft_dataloader), which is what every SLURM/SPMD
+        # rank does anyway. The config dict pickles fine; the processor does not.
+        processor=None,
         weights_path=weights_path,
         optimizer_path=optimizer_path,
         init_optimizer=True,
@@ -581,7 +549,6 @@ __all__ = [
     "MasterConfig",
     "SFTSingleControllerActor",
     "SFTV2ActorArgs",
-    "SFTV2Config",
     "SFTV2SaveState",
     "setup_sft_v2",
 ]

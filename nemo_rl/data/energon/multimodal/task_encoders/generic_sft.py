@@ -16,18 +16,31 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from copy import deepcopy
 from typing import Any, Protocol, cast
 
 import torch
-from megatron.energon import CrudeSample, SampleDecoder, stateless
+from megatron.energon import SampleDecoder, stateless
 
 from nemo_rl.data.energon.multimodal.packing import (
     ENERGON_PACKED_SCHEMA_VERSION,
     EnergonPackingHooks,
 )
-from nemo_rl.data.energon.multimodal.task_encoders.base import BaseSFTTaskEncoder
+from nemo_rl.data.energon.multimodal.packing.prepare import (
+    prepare_energon_packed_batch,
+)
+from nemo_rl.data.energon.multimodal.model_families import (
+    ALL_MODEL_FAMILIES,
+    supports_model_families,
+)
+from nemo_rl.data.energon.multimodal.task_encoders.base import (
+    BaseSFTTaskEncoder,
+    SFTCooker,
+)
+from nemo_rl.data.energon.multimodal.task_encoders.media import (
+    materialize_media_value,
+)
 from nemo_rl.data.energon.multimodal.types import (
     CanonicalSFTSample,
     EncodedSFTSample,
@@ -35,7 +48,6 @@ from nemo_rl.data.energon.multimodal.types import (
 )
 from nemo_rl.data.interfaces import TaskDataSpec
 from nemo_rl.data.llm_message_utils import get_formatted_message_log
-from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 
@@ -48,7 +60,26 @@ class SFTProcessorAdapter(Protocol):
     def encode(self, sample: CanonicalSFTSample) -> EncodedSFTSample: ...
 
 
-def _normalize_messages(sample: CanonicalSFTSample) -> list[dict[str, Any]]:
+def _normalize_messages(
+    sample: CanonicalSFTSample, *, materialize: bool = True
+) -> list[dict[str, Any]]:
+    """Validate the message structure and attach each part's media.
+
+    Args:
+        sample: The cooked conversation.
+        materialize: Decode each media value and attach the payload. Set False
+            to attach the ``MediaRef`` instead.
+
+    The Nemotron renderers replace every media part with text built from
+    metadata and then overwrite ``message["content"]`` wholesale, so decoding
+    for them is pure waste. It is also waste paid at the wrong time: this runs
+    in pre-encode, before ``select_samples_to_pack``, so rows that selection
+    discards are decoded too. Measured on video rows at 2771 ms against the
+    Megatron reference's 4.7 ms, which defers all frame work to post-encode.
+
+    Only ``GenericSFTTaskEncoder.encode`` consumes the payload, via
+    ``get_formatted_message_log``, so it keeps the default.
+    """
     messages = deepcopy(sample.messages)
     used_media: list[int] = []
     tool_call_ids: set[str] = set()
@@ -97,7 +128,15 @@ def _normalize_messages(sample: CanonicalSFTSample) -> list[dict[str, Any]]:
                         f"to {media_ref.modality!r} media."
                     )
                 part["type"] = media_ref.modality
-                part[media_ref.modality] = media_ref.value
+                part[media_ref.modality] = (
+                    materialize_media_value(
+                        media_ref.value,
+                        modality=media_ref.modality,
+                        sample=sample,
+                    )
+                    if materialize
+                    else media_ref
+                )
                 used_media.append(media_index)
             normalized_content.append(part)
         message["content"] = normalized_content
@@ -189,38 +228,23 @@ class HFMultimodalSFTProcessorAdapter:
                 ]
             loss_multiplier = 0.0
 
-        model_input_keys = tuple(
-            sorted(
-                {
-                    key
-                    for message in message_log
-                    for key, value in message.items()
-                    if key != "token_ids"
-                    and isinstance(value, (PackedTensor, torch.Tensor))
-                }
-            )
-        )
-        media_cost = sum(
-            tensor.numel()
-            for message in message_log
-            for value in message.values()
-            if isinstance(value, PackedTensor)
-            for tensor in value.tensors
-            if tensor is not None
-        )
-        media_cost_bucket = (
-            0 if media_cost <= 8_000_000 else 1 if media_cost <= 64_000_000 else 2
-        )
+        # The fingerprint alone; see nemotron_visual.py for the measurement.
+        # This path derived the key from the tensor names actually present in
+        # message_log, so it split on any difference in model inputs, not only
+        # on media. batch() puts those tensors in the per-message dicts rather
+        # than in a stacked batch tensor, so the split bought nothing.
         return EncodedSFTSample.derive_from(
             sample,
             message_log=message_log,
             length=length,
+            packing_cost=length,
             loss_multiplier=loss_multiplier,
-            group_key=(self.fingerprint, model_input_keys, media_cost_bucket),
+            group_key=(self.fingerprint,),
             sample_key=sample.__key__,
         )
 
 
+@supports_model_families(ALL_MODEL_FAMILIES)
 class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
     """Encode, group, and batch complete multimodal SFT conversations."""
 
@@ -233,9 +257,11 @@ class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
         self,
         *,
         adapter: SFTProcessorAdapter,
-        cooker_functions: Sequence[Callable[[CrudeSample], CanonicalSFTSample]],
+        cooker_functions: Sequence[SFTCooker],
         packing_hooks: EnergonPackingHooks[Any, Any, Any] | None,
         include_source_ids: bool,
+        tokenizer: Any | None = None,
+        only_unmask_final: bool = False,
     ) -> None:
         super().__init__(
             cooker_functions=cooker_functions,
@@ -243,6 +269,8 @@ class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
         )
         self.adapter = adapter
         self.include_source_ids = include_source_ids
+        self.tokenizer = tokenizer
+        self.only_unmask_final = only_unmask_final
 
     @stateless
     def preencode_sample(self, sample: CanonicalSFTSample) -> EncodedSFTSample:
@@ -263,7 +291,9 @@ class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
     ) -> BatchedDataDict[Any]:
         if samples and isinstance(samples[0], PackedSFTSample):
             if not all(isinstance(sample, PackedSFTSample) for sample in samples):
-                raise TypeError("Energon SFT batches cannot mix packed and unpacked rows.")
+                raise TypeError(
+                    "Energon SFT batches cannot mix packed and unpacked rows."
+                )
             packed_samples = cast(list[PackedSFTSample], samples)
             capacities = {sample.pack_capacity for sample in packed_samples}
             if len(capacities) != 1:
@@ -302,7 +332,15 @@ class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
 
     @stateless
     def encode_batch(self, batch: BatchedDataDict[Any]) -> BatchedDataDict[Any]:
-        return batch
+        if "packed_message_log" not in batch:
+            return batch
+        if self.tokenizer is None:
+            raise RuntimeError("Packed SFT batch preparation requires a tokenizer.")
+        return prepare_energon_packed_batch(
+            batch,
+            tokenizer=self.tokenizer,
+            only_unmask_final=self.only_unmask_final,
+        )
 
 
 def build_processor_adapter(

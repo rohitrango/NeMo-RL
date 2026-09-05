@@ -1,5 +1,5 @@
   defaults:
-    - sft_vlm_3B.yaml
+    - ../sft_vlm_3B.yaml
 
   sft:
     max_num_epochs: 1

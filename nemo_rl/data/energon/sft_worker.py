@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
-import hashlib
+import gc
+import os as _ld_os
+import threading as _ld_threading
 import time
 from dataclasses import replace
 from typing import Any, Mapping, Optional
@@ -37,7 +39,6 @@ from nemo_rl.data.energon.sft_dataloader import (
 from nemo_rl.data.energon.sft_types import StepEnvelope
 from nemo_rl.data_plane.adapters.local import local_batch_to_tensordict
 from nemo_rl.data_plane.schema import MICRO_BATCH_INDICES, MICRO_BATCH_LENGTHS
-from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.models.policy.packing import ENERGON_PACKING_META_KEY
 from nemo_rl.models.policy.utils import get_runtime_env_for_policy_worker
 from nemo_rl.models.policy.workers.megatron_policy_worker import (
@@ -68,6 +69,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         batch_size: int,
         max_sequence_length: int,
         placement_fingerprint: str,
+        only_unmask_final: bool,
         restored_state: Optional[dict[str, Any]] = None,
     ) -> bool:
         """Build the train loader on the TP0/PP0/CP0 rank of this DP replica."""
@@ -76,7 +78,60 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         if self._sft_loader is not None:
             raise RuntimeError("The SFT Energon loader is already configured.")
         if self._sft_processor is None:
-            raise ValueError("SFTv2 requires a multimodal processor on policy workers.")
+            # Build the processor in-worker instead of receiving a pickled one.
+            #
+            # trust_remote_code processor classes (e.g. NemotronH_Omni) live in
+            # transformers_modules.<repo>.<mod>, which transformers generates at
+            # runtime under HF_MODULES_CACHE. Pickling such an object across the
+            # Ray actor boundary stores it by qualified name, so every worker must
+            # resolve that dynamically-created module before it can deserialise:
+            #   ModuleNotFoundError: No module named
+            #     'transformers_modules.<repo>.processing_nemotron_h_omni'
+            # SLURM/SPMD never hits this because each rank constructs its own
+            # processor; only the driver->actor hop makes it a pickle problem.
+            #
+            # self.cfg is the policy config (megatron_policy_worker.py:451) and
+            # carries the same tokenizer block the driver used, so rebuilding here
+            # is equivalent and needs nothing extra shipped over the wire.
+            tok_cfg = (self.cfg or {}).get("tokenizer")
+            if tok_cfg is None:
+                raise ValueError(
+                    "SFTv2 requires a multimodal processor on policy workers, and "
+                    "policy.tokenizer was not available to build one locally."
+                )
+            from nemo_rl.algorithms.utils import get_tokenizer
+
+            self._sft_processor = get_tokenizer(tok_cfg, get_processor=True)
+
+        # Megatron's prepacked CP path requires every padded sub-sequence to be
+        # divisible by 2 * cp_size. Nothing in EnergonPackingOptions ties the pad
+        # multiple to CP, so a mismatch otherwise surfaces as a ValueError deep in
+        # the first forward pass instead of here, where the fix is obvious.
+        cp_size = parallel_state.get_context_parallel_world_size()
+        # data_config["energon"] is a parsed EnergonLoaderConfig here but a plain
+        # dict on other call paths, so walk it without assuming either shape.
+        def _field(obj: Any, key: str) -> Any:
+            if obj is None:
+                return None
+            if isinstance(obj, Mapping):
+                return obj.get(key)
+            return getattr(obj, key, None)
+
+        pad_multiple = _field(
+            _field(
+                _field(_field(data_config, "energon"), "task_encoder"), "packing"
+            ),
+            "options",
+        )
+        pad_multiple = _field(pad_multiple, "sequence_length_pad_multiple")
+        if cp_size > 1 and pad_multiple is not None:
+            if pad_multiple % (2 * cp_size):
+                raise ValueError(
+                    "Energon packing sequence_length_pad_multiple "
+                    f"({pad_multiple}) must be divisible by 2 * "
+                    f"context_parallel_size ({2 * cp_size}); Megatron slices each "
+                    "padded sub-sequence across CP ranks in two halves."
+                )
 
         logical_rank = parallel_state.get_data_parallel_rank()
         logical_world_size = parallel_state.get_data_parallel_world_size()
@@ -90,6 +145,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             logical_rank=logical_rank,
             logical_world_size=logical_world_size,
             placement_fingerprint=placement_fingerprint,
+            only_unmask_final=only_unmask_final,
         )
         if restored_state is not None:
             self._sft_loader.load_state_dict(restored_state)
@@ -97,6 +153,64 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         self._sft_logical_rank = logical_rank
         self._sft_logical_world_size = logical_world_size
         return True
+
+    def _ld_mark(self, phase: str) -> None:
+        """Record the phase now being entered, for the stall watchdog."""
+        if getattr(self, "_ld_on", None) is None:
+            self._ld_on = _ld_os.environ.get("NRL_LOADDIAG") == "1"
+        if not self._ld_on:
+            return
+        now = time.monotonic()
+        previous = getattr(self, "_ld_phase", None)
+        if previous is not None:
+            print(
+                "[LOADDIAG] batch=%d %s done in %.3fs -> %s"
+                % (
+                    getattr(self, "_sft_next_batch_index", -1),
+                    previous,
+                    now - getattr(self, "_ld_t0", now),
+                    phase,
+                ),
+                flush=True,
+            )
+        self._ld_phase = None if phase == "idle" else phase
+        self._ld_t0 = now
+        if getattr(self, "_ld_watchdog", None) is None:
+            self._ld_watchdog = _ld_threading.Thread(
+                target=self._ld_watch, name="sft-loaddiag", daemon=True
+            )
+            self._ld_watchdog.start()
+
+    def _ld_watch(self) -> None:
+        """Print the in-flight phase every 30s so a stall names itself."""
+        while True:
+            time.sleep(15)
+            phase = getattr(self, "_ld_phase", None)
+            if phase is None:
+                continue
+            elapsed = time.monotonic() - getattr(self, "_ld_t0", time.monotonic())
+            if elapsed < 30:
+                continue
+            try:
+                workers = sum(
+                    1
+                    for pid in _ld_os.listdir("/proc")
+                    if pid.isdigit()
+                    and "pt_data_worker"
+                    in open("/proc/%s/comm" % pid, errors="ignore").read()
+                )
+            except Exception:  # noqa: BLE001
+                workers = -1
+            print(
+                "[LOADDIAG] STUCK batch=%d phase=%s elapsed=%.0fs data_workers=%d"
+                % (
+                    getattr(self, "_sft_next_batch_index", -1),
+                    phase,
+                    elapsed,
+                    workers,
+                ),
+                flush=True,
+            )
 
     def load_next_sft_batch(
         self,
@@ -115,23 +229,45 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             raise RuntimeError("The SFT logical loader identity is missing.")
 
         started = time.monotonic()
+        self._ld_mark("iter")
         batch = next(self._sft_loader_iterator)
+        self._ld_mark("prepare")
         packed_schema_version = batch.get("packed_schema_version")
         energon_packed = packed_schema_version is not None
-        if (
-            energon_packed
-            and packed_schema_version != ENERGON_PACKED_SCHEMA_VERSION
-        ):
-            raise ValueError(
-                "Unsupported Energon packed SFT schema version "
-                f"{packed_schema_version!r}; expected "
-                f"{ENERGON_PACKED_SCHEMA_VERSION}."
-            )
-        if energon_packed:
+        if "packed_message_log" in batch:
+            if (
+                type(packed_schema_version) is not int
+                or packed_schema_version != ENERGON_PACKED_SCHEMA_VERSION
+            ):
+                raise ValueError(
+                    "Unsupported raw Energon packed SFT schema version "
+                    f"{packed_schema_version!r}; expected "
+                    f"{ENERGON_PACKED_SCHEMA_VERSION}."
+                )
             prepared = prepare_energon_packed_batch(
                 batch,
                 tokenizer=self.tokenizer,
                 only_unmask_final=only_unmask_final,
+            )
+        elif energon_packed:
+            if (
+                not isinstance(packed_schema_version, torch.Tensor)
+                or packed_schema_version.ndim != 1
+                or packed_schema_version.numel() == 0
+                or bool(
+                    torch.any(packed_schema_version != ENERGON_PACKED_SCHEMA_VERSION)
+                )
+            ):
+                raise ValueError(
+                    "Unsupported prepared Energon packed SFT schema version "
+                    f"{packed_schema_version!r}; expected a non-empty vector of "
+                    f"{ENERGON_PACKED_SCHEMA_VERSION}."
+                )
+            prepared = prepare_sft_batch(
+                batch,
+                tokenizer=self.tokenizer,
+                only_unmask_final=only_unmask_final,
+                make_sequence_length_divisible_by=make_sequence_length_divisible_by,
             )
         else:
             prepared = prepare_sft_batch(
@@ -142,6 +278,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
                     make_sequence_length_divisible_by
                 ),
             )
+        self._ld_mark("post-prepare")
         load_seconds = time.monotonic() - started
         batch_size = prepared.size
         source_ids = self._source_ids(prepared, batch_size=batch_size)
@@ -149,7 +286,10 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             f"sft_v2_dp{self._sft_logical_rank}_batch{self._sft_next_batch_index}"
         )
         sample_ids = [f"{partition_id}_row{row}" for row in range(batch_size)]
+        self._ld_mark("tensordict")
         fields = local_batch_to_tensordict(prepared, batch_size=batch_size)
+
+        self._ld_mark("publish")
         field_names = list(fields.keys())
         client = self._require_dp_client()
         client.register_partition(
@@ -195,13 +335,102 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             source_ids=source_ids,
             field_names=tuple(field_names),
             sequence_lengths=lengths,
-            field_fingerprints=self._field_fingerprints(prepared),
             load_seconds=load_seconds,
             valid_tokens=valid_tokens,
         )
+        # The controller blocks on this entire call, so load_seconds -- which
+        # surfaces as loader_wait and gpu_idle_time -- has to span all of it.
+        # Measured after prepare() alone it missed publish and envelope
+        # construction, under-reporting real GPU idle by about half.
+        envelope = replace(envelope, load_seconds=time.monotonic() - started)
+
+        self._ld_mark("idle")
+        # Keep a light copy so a failed step can dump what was actually fed in.
+        # int64 [rows, seq] at 524288 is ~8MB each; two of them is acceptable
+        # against the alternative of not knowing which data killed the run.
+        try:
+            self._sft_last_batch = {
+                "batch_index": self._sft_next_batch_index,
+                "input_ids": prepared["input_ids"].detach().to("cpu").clone(),
+                "token_mask": prepared["token_mask"].detach().to("cpu").clone(),
+                "input_lengths": prepared["input_lengths"].detach().to("cpu").clone(),
+                "source_ids": source_ids,
+                "source_lengths": prepared["source_lengths"],
+            }
+        except Exception:  # never let bookkeeping break the data path
+            self._sft_last_batch = None
+
         self._sft_active_envelope = envelope
         self._sft_next_batch_index += 1
         return envelope
+
+    def dump_failed_batch(self) -> str:
+        """Decode and write the last batch handed to the trainer.
+
+        Called by the controller after a step fails. Returns the path written,
+        or a short reason if nothing could be dumped.
+        """
+        import json
+        import os
+
+        batch = getattr(self, "_sft_last_batch", None)
+        if batch is None:
+            return "no retained batch"
+        try:
+            out_dir = os.environ.get(
+                "NRL_FAILED_BATCH_DIR", "/mnt/rl-workspace/rohitkumarj/failed_batches"
+            )
+            os.makedirs(out_dir, exist_ok=True)
+            rank = self._sft_logical_rank
+            path = os.path.join(
+                out_dir, f"batch{batch['batch_index']:06d}_dp{rank}.json"
+            )
+
+            ids = batch["input_ids"]
+            mask = batch["token_mask"]
+            rows = []
+            for row in range(ids.shape[0]):
+                row_len = int(batch["input_lengths"][row])
+                tok = ids[row][:row_len]
+                msk = mask[row][:row_len]
+                # decode mask-runs so the trained vs untrained split is visible
+                spans = []
+                start = 0
+                for i in range(1, row_len + 1):
+                    if i == row_len or bool(msk[i]) != bool(msk[start]):
+                        chunk = [int(t) for t in tok[start:i]]
+                        text = self.tokenizer.decode(chunk, skip_special_tokens=False)
+                        spans.append(
+                            {
+                                "trained": bool(msk[start]),
+                                "n_tokens": len(chunk),
+                                "text": text[:400],
+                            }
+                        )
+                        start = i
+                rows.append(
+                    {
+                        "row": row,
+                        "length": row_len,
+                        "source_ids": list(batch["source_ids"][row]),
+                        "source_lengths": [int(x) for x in batch["source_lengths"][row]],
+                        "n_trained_tokens": int((msk != 0).sum()),
+                        "min_token_id": int(tok.min()),
+                        "max_token_id": int(tok.max()),
+                        "spans": spans[:40],
+                    }
+                )
+
+            with open(path, "w") as handle:
+                json.dump(
+                    {"batch_index": batch["batch_index"], "dp_rank": rank, "rows": rows},
+                    handle,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            return path
+        except Exception as error:  # noqa: BLE001
+            return f"dump failed: {error}"
 
     def commit_sft_batch(self) -> None:
         """Release the active process-local batch after a successful step."""
@@ -211,6 +440,13 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             partition_id=envelope.meta.partition_id,
         )
         self._sft_active_envelope = None
+
+        # Reclaim the batch we just released before the loader produces the
+        # next one. Without this the run stalls inside next() on the energon
+        # iterator within a handful of steps -- the data workers stay alive but
+        # stop yielding. This was previously happening only as a side effect of
+        # the LEAKPROBE diagnostics; it is load-bearing, so it is explicit now.
+        gc.collect()
 
     def abort_sft_batch(self) -> None:
         """Release the active batch after a failed policy step."""
@@ -296,32 +532,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
                 )
             ],
         }
-
-    @classmethod
-    def _field_fingerprints(cls, batch: Mapping[str, Any]) -> dict[str, Any]:
-        fingerprints: dict[str, Any] = {}
-        for name, value in batch.items():
-            if isinstance(value, torch.Tensor):
-                fingerprints[name] = {
-                    "kind": "tensor",
-                    "dtype": str(value.dtype),
-                    "shape": tuple(value.shape),
-                    "hash": cls._tensor_hash(value),
-                }
-            elif isinstance(value, PackedTensor):
-                tensors = [tensor for tensor in value.tensors if tensor is not None]
-                fingerprints[name] = {
-                    "kind": "packed_tensor",
-                    "rows": len(value),
-                    "tensor_shapes": [tuple(tensor.shape) for tensor in tensors],
-                    "tensor_hashes": [cls._tensor_hash(tensor) for tensor in tensors],
-                }
-        return fingerprints
-
-    @staticmethod
-    def _tensor_hash(tensor: torch.Tensor) -> str:
-        value = tensor.detach().cpu().contiguous()
-        return hashlib.sha256(value.view(torch.uint8).numpy().tobytes()).hexdigest()
 
 
 __all__ = ["SFTMegatronPolicyWorker", "StepEnvelope"]
