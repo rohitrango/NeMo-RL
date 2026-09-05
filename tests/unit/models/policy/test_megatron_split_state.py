@@ -85,6 +85,7 @@ def _make_mock_model():
     # hook need to be able to clear it to a real None.
     model.config.finalize_model_grads_func = MagicMock(name="ORIGINAL_FINALIZE")
     model.config.num_moe_experts = None  # disable MoE branch
+    model.config.mtp_num_layers = None  # disable MTP unless a test enables it
     # no_sync() is a context manager — return a MagicMock that supports
     # __enter__/__exit__ so the `with self.model.no_sync():` block works.
     model.no_sync = MagicMock(
@@ -345,6 +346,24 @@ class TestAssertStepOpen:
 
 
 class TestTrainMicrobatch:
+    def test_adds_mtp_loss_mask_before_building_iterator(self, mock_module_symbols):
+        from nemo_rl.algorithms.loss.interfaces import LossType
+
+        w = _make_worker(LossType.TOKEN_LEVEL)
+        w.model.config.mtp_num_layers = 2
+        w.delegate_pack_to_model = False
+        w.delegate_mtp_loss_mask_to_model = False
+        w.model_slices_context_parallel_inputs = False
+        batch = _fake_batch()
+        batch["sample_mask"][1] = 0
+
+        w.begin_train_step(loss_fn=w._test_loss_fn)
+        w.train_microbatch(batch)
+
+        iterator_batch = mock_module_symbols["gmi"].call_args.args[0]
+        expected = batch["token_mask"] * batch["sample_mask"].unsqueeze(-1)
+        torch.testing.assert_close(iterator_batch["mtp_loss_mask"], expected)
+
     def test_wraps_forward_backward_in_no_sync(self, mock_module_symbols):
         """The single most important assertion in this file. Without the
         no_sync wrap, mcore DDP dispatches a per-call cross-DP reduce on

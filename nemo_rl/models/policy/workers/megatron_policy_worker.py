@@ -1431,6 +1431,15 @@ class MegatronPolicyWorkerImpl(
         state["local_valid_seqs"] = state["local_valid_seqs"] + call_local_seqs
         state["local_valid_toks"] = state["local_valid_toks"] + call_local_toks
 
+        # Pre-compute the MTP loss mask so process_microbatch can pack it.
+        model_config = self._get_model_config()
+        mtp_num_layers = getattr(model_config, "mtp_num_layers", None)
+        mtp_enabled = mtp_num_layers is not None and mtp_num_layers > 0
+        if mtp_enabled and "token_mask" in data and "sample_mask" in data:
+            data["mtp_loss_mask"] = data["token_mask"] * data["sample_mask"].unsqueeze(
+                -1
+            )
+
         # The number of chunks per optimizer step is a first-class property of
         # this path — it decides how many times gradients are accumulated before
         # a single reduce — but it was previously only recoverable by calibrating
