@@ -52,7 +52,8 @@ from pathlib import Path
 from typing import Any
 
 import webdataset as wds  # pyrefly: ignore[import-error]  Optional mcore dependency.
-from datasets import DownloadConfig, Image as HFImage, load_dataset
+from datasets import DownloadConfig, load_dataset
+from datasets import Image as HFImage
 from megatron.energon import BaseWebdatasetFactory
 from PIL import Image as PILImage
 

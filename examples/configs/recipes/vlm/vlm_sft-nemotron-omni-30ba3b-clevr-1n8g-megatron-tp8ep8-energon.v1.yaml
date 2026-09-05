@@ -8,7 +8,6 @@ policy:
     activation_checkpointing: true
     bias_activation_fusion: false
     tensor_model_parallel_size: 8
-    expert_tensor_parallel_size: 1
     expert_model_parallel_size: 8
     sequence_parallel: true
     freeze_vision_model: true

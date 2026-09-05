@@ -15,13 +15,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
 from nemo_rl.data_plane.interfaces import (
     DataPlaneClient,
     DataPlaneConfig,
     DataPlaneRuntimeConfig,
     LocalDataPlaneConfig,
 )
-from typing import TYPE_CHECKING, Any, Callable, Optional
 
 if TYPE_CHECKING:
     from nemo_rl.algorithms.grpo import MasterConfig
