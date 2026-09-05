@@ -132,7 +132,15 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             f"sft_v2_dp{self._sft_logical_rank}_batch{self._sft_next_batch_index}"
         )
         sample_ids = [f"{partition_id}_row{row}" for row in range(batch_size)]
-        fields = local_batch_to_tensordict(prepared, batch_size=batch_size)
+        # Source IDs are controller metadata carried by the envelope and tags.
+        # Policy workers do not consume them, and replica broadcasts reject
+        # Python containers to keep bulk payloads off the object collective.
+        policy_batch = {
+            key: value
+            for key, value in prepared.items()
+            if key not in {"source_ids", "sample_keys"}
+        }
+        fields = local_batch_to_tensordict(policy_batch, batch_size=batch_size)
         field_names = list(fields.keys())
         client = self._require_dp_client()
         client.register_partition(

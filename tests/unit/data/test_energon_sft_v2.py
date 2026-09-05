@@ -140,13 +140,15 @@ def test_sft_v2_worker_publishes_sequence_alignment() -> None:
             "input_lengths": torch.tensor([3, 2], dtype=torch.int32),
             "token_mask": torch.tensor([[0.0, 1.0, 1.0, 0.0], [0.0, 1.0, 0.0, 0.0]]),
             "sample_mask": torch.ones(2),
+            "source_ids": ["source-a", "source-b"],
         }
     )
+    policy_fields = [key for key in prepared if key != "source_ids"]
     worker._dp_client.put_samples.return_value = KVBatchMeta(
         partition_id="sft_v2_dp0_batch0",
         task_name=None,
         sample_ids=["sft_v2_dp0_batch0_row0", "sft_v2_dp0_batch0_row1"],
-        fields=list(prepared.keys()),
+        fields=policy_fields,
         sequence_lengths=[3, 2],
         extra_info={"generation": 7},
     )
@@ -164,3 +166,10 @@ def test_sft_v2_worker_publishes_sequence_alignment() -> None:
         "generation": 7,
         "pad_to_multiple": 4,
     }
+    assert envelope.source_ids == ("source-a", "source-b")
+    assert envelope.field_names == tuple(policy_fields)
+    assert "source_ids" not in worker._dp_client.put_samples.call_args.kwargs["fields"]
+    assert worker._dp_client.put_samples.call_args.kwargs["tags"] == [
+        {"source_id": "source-a"},
+        {"source_id": "source-b"},
+    ]

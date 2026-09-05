@@ -81,73 +81,98 @@ def _broadcast_batched_data_dict(
     # descriptor pass so ``to_wire``'s ``torch.cat`` of the whole column runs
     # once, not once per pass (multimodal_utils.py:203 warns about exactly this).
     leader_flat: dict[str, torch.Tensor] = {}
+    leader_error: Exception | None = None
 
     if is_leader:
-        assert data is not None, "leader must provide non-None data"
-        descriptor: list[Any] = []
-        for k, v in data.items():
-            if isinstance(v, torch.Tensor):
-                descriptor.append(
-                    (k, "tensor", str(v.dtype), tuple(v.shape), str(v.device))
-                )
-            elif isinstance(v, PackedTensor):
-                # A PackedTensor on the ``raw`` branch would be pickled by
-                # ``broadcast_object_list`` into one contiguous *device* tensor
-                # -- 26.25 GiB for a VLM batch (job 17648488). Ship it the way
-                # the wire already does: payload as one flat tensor, geometry as
-                # ints. Densifying instead loses the row boundaries the model
-                # needs to match media to placeholders (job 17652563).
-                nested, shapes = v.to_wire()
-                if nested is None:
-                    # Every row empty -- a shard holding only media-free
-                    # samples. The key still has to cross: consumers branch on
-                    # the key set (``len(get_multimodal_dict(...)) > 0`` decides
-                    # whether the caller's position_ids are used), and the
-                    # independent-fetch path keeps it. Ship geometry alone.
+        try:
+            assert data is not None, "leader must provide non-None data"
+            descriptor: list[Any] = []
+            for k, v in data.items():
+                if isinstance(v, torch.Tensor):
                     descriptor.append(
-                        (k, "empty_packed", len(v), v.dim_to_pack, v.pad_to_max_shape)
+                        (k, "tensor", str(v.dtype), tuple(v.shape), str(v.device))
                     )
-                    continue
-                values = nested.values()
-                leader_flat[k] = values
-                descriptor.append(
-                    (
-                        k,
-                        "packed_wire",
-                        str(values.dtype),
-                        str(values.device),
-                        nested.offsets().tolist(),
-                        shapes,
-                        v.pad_to_max_shape,
+                elif isinstance(v, PackedTensor):
+                    # A PackedTensor on the ``raw`` branch would be pickled by
+                    # ``broadcast_object_list`` into one contiguous *device* tensor
+                    # -- 26.25 GiB for a VLM batch (job 17648488). Ship it the way
+                    # the wire already does: payload as one flat tensor, geometry as
+                    # ints. Densifying instead loses the row boundaries the model
+                    # needs to match media to placeholders (job 17652563).
+                    nested, shapes = v.to_wire()
+                    if nested is None:
+                        # Every row empty -- a shard holding only media-free
+                        # samples. The key still has to cross: consumers branch on
+                        # the key set (``len(get_multimodal_dict(...)) > 0`` decides
+                        # whether the caller's position_ids are used), and the
+                        # independent-fetch path keeps it. Ship geometry alone.
+                        descriptor.append(
+                            (
+                                k,
+                                "empty_packed",
+                                len(v),
+                                v.dim_to_pack,
+                                v.pad_to_max_shape,
+                            )
+                        )
+                        continue
+                    values = nested.values()
+                    leader_flat[k] = values
+                    descriptor.append(
+                        (
+                            k,
+                            "packed_wire",
+                            str(values.dtype),
+                            str(values.device),
+                            nested.offsets().tolist(),
+                            shapes,
+                            v.pad_to_max_shape,
+                        )
                     )
-                )
-            elif (
-                v is None
-                or isinstance(v, (str, int, float, bool))
-                or (isinstance(v, np.ndarray) and v.dtype == object)
-            ):
-                # Scalars and object arrays are what the raw branch is for:
-                # small, and cheap to pickle into the object list.
-                descriptor.append((k, "raw", v))
-            else:
-                # Mirrors the write-side gate in ``column_io.kv_first_write``:
-                # an unknown wrapper on the ``raw`` branch is pickled into
-                # device memory by ``broadcast_object_list``, which is how the
-                # PackedTensor payload became a 26 GiB allocation. Fail at the
-                # boundary instead of discovering it as an OOM.
-                raise TypeError(
-                    f"Field {k!r}: unexpected broadcast type {type(v).__name__}. "
-                    "The replica-group broadcast carries torch.Tensor, "
-                    "PackedTensor, np.ndarray[object] and scalars; a bulk "
-                    "wrapper must get its own branch rather than being pickled."
-                )
-        payload: list[Any] = [descriptor]
+                elif (
+                    v is None
+                    or isinstance(v, (str, int, float, bool))
+                    or (isinstance(v, np.ndarray) and v.dtype == object)
+                ):
+                    # Scalars and object arrays are what the raw branch is for:
+                    # small, and cheap to pickle into the object list.
+                    descriptor.append((k, "raw", v))
+                else:
+                    # Mirrors the write-side gate in ``column_io.kv_first_write``:
+                    # an unknown wrapper on the ``raw`` branch is pickled into
+                    # device memory by ``broadcast_object_list``, which is how the
+                    # PackedTensor payload became a 26 GiB allocation. Fail at the
+                    # boundary instead of discovering it as an OOM.
+                    raise TypeError(
+                        f"Field {k!r}: unexpected broadcast type "
+                        f"{type(v).__name__}. "
+                        "The replica-group broadcast carries torch.Tensor, "
+                        "PackedTensor, np.ndarray[object] and scalars; a bulk "
+                        "wrapper must get its own branch rather than being pickled."
+                    )
+        except Exception as error:
+            # Every rank must enter the first collective, even when the source
+            # cannot describe its batch. Otherwise the peers wait indefinitely.
+            leader_error = error
+            payload: list[Any] = [("error", type(error).__name__, str(error))]
+        else:
+            payload = [("ok", descriptor)]
     else:
         payload = [None]
 
     torch.distributed.broadcast_object_list(payload, src=src, group=group)
-    descriptor = payload[0]
-    assert descriptor is not None
+    status, *contents = payload[0]
+    if status == "error":
+        if leader_error is not None:
+            raise leader_error
+        error_type, error_message = contents
+        raise RuntimeError(
+            f"Broadcast source rank {src} failed while describing its batch "
+            f"({error_type}): {error_message}"
+        )
+
+    assert status == "ok"
+    descriptor = contents[0]
 
     # pyrefly: ignore  # bad-assignment
     out: BatchedDataDict[Any] = data if is_leader else BatchedDataDict()
