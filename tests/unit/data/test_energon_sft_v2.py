@@ -176,3 +176,50 @@ def test_sft_v2_worker_builds_energon_packing_metadata() -> None:
             },
         ],
     }
+
+
+def test_sft_v2_worker_does_not_prepare_worker_packed_batch_twice() -> None:
+    from nemo_rl.data.energon.sft_worker import SFTMegatronPolicyWorker
+
+    worker_cls = SFTMegatronPolicyWorker.__ray_metadata__.modified_class
+    worker = object.__new__(worker_cls)
+    prepared = BatchedDataDict(
+        {
+            "input_ids": torch.tensor([[1, 2]]),
+            "input_lengths": torch.tensor([2], dtype=torch.int32),
+            "token_mask": torch.tensor([[0.0, 1.0]]),
+            "sample_mask": torch.ones(1),
+            "source_ids": [["sample-0"]],
+            "source_lengths": [[2]],
+            "cu_seqlens": [torch.tensor([0, 2], dtype=torch.int32)],
+            "cu_seqlens_padded": [torch.tensor([0, 2], dtype=torch.int32)],
+            "pack_capacity": torch.tensor([2], dtype=torch.int32),
+            "packed_schema_version": torch.tensor([1], dtype=torch.int32),
+        }
+    )
+    worker._sft_loader = MagicMock()
+    worker._sft_loader_iterator = iter([prepared])
+    worker._sft_active_envelope = None
+    worker._sft_logical_rank = 0
+    worker._sft_logical_world_size = 1
+    worker._sft_next_batch_index = 0
+    worker.tokenizer = MagicMock(pad_token_id=0)
+    worker._dp_client = MagicMock()
+    worker._dp_client.put_samples.return_value = KVBatchMeta(
+        partition_id="sft_v2_dp0_batch0",
+        task_name=None,
+        sample_ids=["sft_v2_dp0_batch0_row0"],
+        fields=list(prepared.keys()),
+        sequence_lengths=[2],
+        extra_info={},
+    )
+
+    with patch(
+        "nemo_rl.data.energon.sft_worker.prepare_energon_packed_batch"
+    ) as prepare_packed:
+        worker.load_next_sft_batch(
+            only_unmask_final=False,
+            make_sequence_length_divisible_by=1,
+        )
+
+    prepare_packed.assert_not_called()

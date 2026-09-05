@@ -364,6 +364,8 @@ def _task_encoder(
     loader_config: EnergonLoaderConfig,
     adapter: Any,
     include_source_ids: bool,
+    tokenizer: Any | None = None,
+    only_unmask_final: bool = False,
 ) -> BaseSFTTaskEncoder:
     cooker_functions = [
         Cooker(
@@ -401,6 +403,8 @@ def _task_encoder(
             cooker_functions=cooker_functions,
             packing_hooks=packing_hooks,
             include_source_ids=include_source_ids,
+            tokenizer=tokenizer,
+            only_unmask_final=only_unmask_final,
             **encoder_options,
         ),
     )
@@ -418,6 +422,7 @@ def _build_energon_sft_loader(
     logical_world_size: int,
     placement_fingerprint: str | None,
     state_format_version: Literal[1, 2],
+    only_unmask_final: bool,
 ) -> EnergonSFTDataLoader:
     if processor is None:
         raise ValueError("data.backend=energon requires a multimodal processor.")
@@ -454,6 +459,8 @@ def _build_energon_sft_loader(
         loader_config=loader_config,
         adapter=adapter,
         include_source_ids=state_format_version == _V2_STATE_FORMAT_VERSION,
+        tokenizer=processor.tokenizer,
+        only_unmask_final=only_unmask_final,
     )
     worker_config = _worker_config(
         loader_config,
@@ -576,6 +583,7 @@ def build_energon_sft_loader(
     logical_rank: int,
     logical_world_size: int,
     placement_fingerprint: str,
+    only_unmask_final: bool = False,
 ) -> EnergonSFTDataLoader:
     """Build one V2 loader for an explicit logical data shard and split."""
     if "energon" not in data_config:
@@ -592,6 +600,7 @@ def build_energon_sft_loader(
         logical_world_size=logical_world_size,
         placement_fingerprint=placement_fingerprint,
         state_format_version=_V2_STATE_FORMAT_VERSION,
+        only_unmask_final=only_unmask_final,
     )
 
 
@@ -624,6 +633,7 @@ def build_energon_sft_dataloaders(
         logical_world_size=1,
         placement_fingerprint=None,
         state_format_version=_V1_STATE_FORMAT_VERSION,
+        only_unmask_final=False,
     )
 
     validation = data_config.get("validation")
@@ -646,6 +656,7 @@ def build_energon_sft_dataloaders(
         logical_world_size=1,
         placement_fingerprint=None,
         state_format_version=_V1_STATE_FORMAT_VERSION,
+        only_unmask_final=False,
     )
     return train_loader, val_loader
 

@@ -69,6 +69,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         batch_size: int,
         max_sequence_length: int,
         placement_fingerprint: str,
+        only_unmask_final: bool,
         restored_state: Optional[dict[str, Any]] = None,
     ) -> bool:
         """Build the train loader on the TP0/PP0/CP0 rank of this DP replica."""
@@ -144,6 +145,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             logical_rank=logical_rank,
             logical_world_size=logical_world_size,
             placement_fingerprint=placement_fingerprint,
+            only_unmask_final=only_unmask_final,
         )
         if restored_state is not None:
             self._sft_loader.load_state_dict(restored_state)
@@ -232,20 +234,40 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         self._ld_mark("prepare")
         packed_schema_version = batch.get("packed_schema_version")
         energon_packed = packed_schema_version is not None
-        if (
-            energon_packed
-            and packed_schema_version != ENERGON_PACKED_SCHEMA_VERSION
-        ):
-            raise ValueError(
-                "Unsupported Energon packed SFT schema version "
-                f"{packed_schema_version!r}; expected "
-                f"{ENERGON_PACKED_SCHEMA_VERSION}."
-            )
-        if energon_packed:
+        if "packed_message_log" in batch:
+            if (
+                type(packed_schema_version) is not int
+                or packed_schema_version != ENERGON_PACKED_SCHEMA_VERSION
+            ):
+                raise ValueError(
+                    "Unsupported raw Energon packed SFT schema version "
+                    f"{packed_schema_version!r}; expected "
+                    f"{ENERGON_PACKED_SCHEMA_VERSION}."
+                )
             prepared = prepare_energon_packed_batch(
                 batch,
                 tokenizer=self.tokenizer,
                 only_unmask_final=only_unmask_final,
+            )
+        elif energon_packed:
+            if (
+                not isinstance(packed_schema_version, torch.Tensor)
+                or packed_schema_version.ndim != 1
+                or packed_schema_version.numel() == 0
+                or bool(
+                    torch.any(packed_schema_version != ENERGON_PACKED_SCHEMA_VERSION)
+                )
+            ):
+                raise ValueError(
+                    "Unsupported prepared Energon packed SFT schema version "
+                    f"{packed_schema_version!r}; expected a non-empty vector of "
+                    f"{ENERGON_PACKED_SCHEMA_VERSION}."
+                )
+            prepared = prepare_sft_batch(
+                batch,
+                tokenizer=self.tokenizer,
+                only_unmask_final=only_unmask_final,
+                make_sequence_length_divisible_by=make_sequence_length_divisible_by,
             )
         else:
             prepared = prepare_sft_batch(

@@ -184,6 +184,7 @@ class SFTSingleControllerActor:
             // self._placement_plan.logical_world_size,
             "max_sequence_length": config.data["max_input_seq_length"],
             "placement_fingerprint": self._placement_plan.placement_hash,
+            "only_unmask_final": config.sft.only_unmask_final,
         }
         if self._loader_states is None:
             futures = self._trainer.worker_group.run_all_workers_single_data(

@@ -27,6 +27,9 @@ from nemo_rl.data.energon.multimodal.packing import (
     ENERGON_PACKED_SCHEMA_VERSION,
     EnergonPackingHooks,
 )
+from nemo_rl.data.energon.multimodal.packing.prepare import (
+    prepare_energon_packed_batch,
+)
 from nemo_rl.data.energon.multimodal.model_families import (
     ALL_MODEL_FAMILIES,
     supports_model_families,
@@ -257,6 +260,8 @@ class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
         cooker_functions: Sequence[SFTCooker],
         packing_hooks: EnergonPackingHooks[Any, Any, Any] | None,
         include_source_ids: bool,
+        tokenizer: Any | None = None,
+        only_unmask_final: bool = False,
     ) -> None:
         super().__init__(
             cooker_functions=cooker_functions,
@@ -264,6 +269,8 @@ class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
         )
         self.adapter = adapter
         self.include_source_ids = include_source_ids
+        self.tokenizer = tokenizer
+        self.only_unmask_final = only_unmask_final
 
     @stateless
     def preencode_sample(self, sample: CanonicalSFTSample) -> EncodedSFTSample:
@@ -325,7 +332,15 @@ class GenericSFTTaskEncoder(BaseSFTTaskEncoder):
 
     @stateless
     def encode_batch(self, batch: BatchedDataDict[Any]) -> BatchedDataDict[Any]:
-        return batch
+        if "packed_message_log" not in batch:
+            return batch
+        if self.tokenizer is None:
+            raise RuntimeError("Packed SFT batch preparation requires a tokenizer.")
+        return prepare_energon_packed_batch(
+            batch,
+            tokenizer=self.tokenizer,
+            only_unmask_final=self.only_unmask_final,
+        )
 
 
 def build_processor_adapter(

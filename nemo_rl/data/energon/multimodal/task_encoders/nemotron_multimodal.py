@@ -880,6 +880,8 @@ class NemotronMultiModalTaskEncoder(GenericSFTTaskEncoder):
         cooker_functions: Sequence[SFTCooker],
         packing_hooks: EnergonPackingHooks[Any, Any, Any] | None,
         include_source_ids: bool,
+        tokenizer: Any | None = None,
+        only_unmask_final: bool = False,
         packing_sequence_length: int | None = None,
         patch_dim: int = 16,
         temporal_patch_size: int = 2,
@@ -943,6 +945,8 @@ class NemotronMultiModalTaskEncoder(GenericSFTTaskEncoder):
             cooker_functions=cooker_functions,
             packing_hooks=packing_hooks,
             include_source_ids=include_source_ids,
+            tokenizer=tokenizer,
+            only_unmask_final=only_unmask_final,
         )
         self._multimodal_adapter = omni_adapter
 

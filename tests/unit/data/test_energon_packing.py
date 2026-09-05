@@ -204,6 +204,7 @@ def test_task_encoder_packed_lifecycle_and_preparation_preserve_boundaries() -> 
         cooker_functions=[],
         packing_hooks=hooks,
         include_source_ids=True,
+        tokenizer=_Tokenizer(),
     )
     sources = [
         _sample("s0", 5, with_media=True),
@@ -217,14 +218,11 @@ def test_task_encoder_packed_lifecycle_and_preparation_preserve_boundaries() -> 
         )
         for pack in selected
     ]
-    encoded_batch = encoder.encode_batch(encoder.batch(physical))
+    raw_batch = encoder.batch(physical)
+    assert "packed_message_log" in raw_batch
+    prepared = encoder.encode_batch(raw_batch)
 
-    prepared = prepare_energon_packed_batch(
-        encoded_batch,
-        tokenizer=_Tokenizer(),
-        only_unmask_final=False,
-    )
-
+    assert "packed_message_log" not in prepared
     assert prepared["packed_schema_version"].tolist() == [1]
     assert prepared["source_ids"] == [["s0", "s1"]]
     assert prepared["source_lengths"] == [[5, 3]]
@@ -269,6 +267,7 @@ def test_task_encoder_packed_lifecycle_and_preparation_preserve_boundaries() -> 
         0,
     ]
     assert len(prepared["pixel_values"]) == 1
+    assert len(prepared["pixel_values"].tensors) == 1
     assert torch.equal(
         prepared["pixel_values"].as_tensor(),
         torch.tensor([[1.0, 1.0], [2.0, 2.0]]),
@@ -319,13 +318,11 @@ def test_only_unmask_final_is_applied_per_source_before_packing() -> None:
         cooker_functions=[],
         packing_hooks=hooks,
         include_source_ids=True,
-    )
-
-    prepared = prepare_energon_packed_batch(
-        encoder.batch([packed]),
         tokenizer=_Tokenizer(),
         only_unmask_final=True,
     )
+
+    prepared = encoder.encode_batch(encoder.batch([packed]))
 
     assert prepared["token_mask"].sum().item() == 4
     assert prepared["token_mask"][0, 4:6].tolist() == [1, 1]
