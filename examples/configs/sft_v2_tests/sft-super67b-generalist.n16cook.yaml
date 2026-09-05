@@ -10,7 +10,7 @@ policy:
   max_total_sequence_length: 524288
   megatron_cfg:
     tensor_model_parallel_size: 8
-    context_parallel_size: 8
+    context_parallel_size: 16
     expert_model_parallel_size: 64
     expert_tensor_parallel_size: 1
     pipeline_model_parallel_size: 1
@@ -111,7 +111,7 @@ logger:
     log_dir: /mnt/rl-workspace/rohitkumarj/logs/tb-nemorl-cook-k8s
 cluster:
   gpus_per_node: 4
-  num_nodes: 16
+  num_nodes: 32
 data_plane:
   enabled: true
   impl: local
