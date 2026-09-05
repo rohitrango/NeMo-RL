@@ -62,7 +62,7 @@ data:
   energon:
     watchdog_timeout_seconds: 1800
     num_workers: 4
-    prefetch_factor: 8
+    prefetch_factor: 2
     cache_pool_num_workers: 8
     gc_collect_every_n_steps: 100000
     shuffle_buffer_size: 100
