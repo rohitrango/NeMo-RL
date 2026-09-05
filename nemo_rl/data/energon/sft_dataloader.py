@@ -487,7 +487,7 @@ def _build_energon_sft_loader(
             shuffle_buffer_size=(
                 loader_config.shuffle_buffer_size if data_config["shuffle"] else None
             ),
-            max_samples_per_sequence=None,
+            max_samples_per_sequence=loader_config.max_samples_per_sequence,
             virtual_epoch_length=source.virtual_epoch_length,
             task_encoder=task_encoder,
         )

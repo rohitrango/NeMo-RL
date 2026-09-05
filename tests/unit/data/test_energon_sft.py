@@ -330,8 +330,13 @@ def test_energon_config_disables_sequence_packing():
     assert source.virtual_epoch_length == 10
     with pytest.raises(ValueError):
         EnergonLoaderConfig(model_family="qwen", packing_buffer_size=10)
-    with pytest.raises(ValueError):
+    assert (
         EnergonLoaderConfig(model_family="qwen", max_samples_per_sequence=2)
+        .max_samples_per_sequence
+        == 2
+    )
+    with pytest.raises(ValueError):
+        EnergonLoaderConfig(model_family="qwen", max_samples_per_sequence=0)
     with pytest.raises(ValueError):
         EnergonLoaderConfig.model_validate({})
     with pytest.raises(ValueError):

@@ -392,6 +392,7 @@ def test_v2_loader_passes_registered_packing_buffer_to_energon(
         "shuffle": True,
         "energon": {
             "model_family": "qwen",
+            "max_samples_per_sequence": 100,
             "task_encoder": {
                 "packing": {
                     "name": "first_fit_decreasing",
@@ -422,6 +423,7 @@ def test_v2_loader_passes_registered_packing_buffer_to_energon(
     )
 
     assert get_train_dataset.call_args.kwargs["packing_buffer_size"] == 32
+    assert get_train_dataset.call_args.kwargs["max_samples_per_sequence"] == 100
     task_encoder = get_train_dataset.call_args.kwargs["task_encoder"]
     assert (
         task_encoder.select_samples_to_pack([_sample("s0", 4)])[0][0].sample_key == "s0"
