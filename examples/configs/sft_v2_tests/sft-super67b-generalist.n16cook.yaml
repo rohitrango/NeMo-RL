@@ -45,6 +45,7 @@ policy:
       NRL_MEDIA_PREPROCESSING_MODE: patchify
       NRL_LOADDIAG: '1'
       NCCL_DEBUG: WARN
+      NCCL_CUMEM_HOST_ENABLE: '0'
     recompute_vision: true
     vision_recompute_granularity: full
     vision_recompute_method: block
