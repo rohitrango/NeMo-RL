@@ -45,6 +45,7 @@ from nemo_rl.algorithms.async_utils.staleness_sampler import (
 from nemo_rl.algorithms.grpo import (
     GRPOConfig,
     GRPOSaveState,
+    RewardPenaltyConfig,
     _initial_grpo_save_state,
 )
 from nemo_rl.algorithms.loss import ClippedPGLossConfig
@@ -54,6 +55,9 @@ from nemo_rl.algorithms.single_controller_utils import (
     MasterConfig,
     SingleControllerActorArgs,
     setup_single_controller,
+)
+from nemo_rl.algorithms.single_controller_utils.config import (
+    validate_single_controller_config,
 )
 from nemo_rl.data_plane import DATA_PLANE_CHECKPOINT_SCHEMA_VERSION
 from nemo_rl.data_plane.schema import SC_ROLLOUT_SCHEMA_FIELDS
@@ -157,6 +161,7 @@ def _make_master_config(
             "save_period": 10,
             "save_optimizer": False,
         },
+        logger={"wandb_enabled": False, "wandb": {}},
         cluster={"num_nodes": 2, "gpus_per_node": 8, "segment_size": None},
         loss_fn=loss_cfg if loss_cfg is not None else ClippedPGLossConfig(),
         env=env if env is not None else {},
@@ -407,6 +412,7 @@ def test_single_controller_mopd_recipe_resolves_to_runtime_contract():
 
     assert isinstance(resolved, dict)
     config = MasterConfig.model_validate(resolved)
+    validate_single_controller_config(config)
     assert config.grpo.async_grpo is None
     assert config.grpo.adv_estimator.name == "opd"
     assert config.grpo.skip_reference_policy_logprobs_calculation is True
@@ -427,13 +433,145 @@ def test_single_controller_mopd_recipe_resolves_to_runtime_contract():
     )
 
 
+def test_single_controller_ppo_recipe_inherits_overlong_filtering():
+    """The SC nightly exercises the overlong filtering inherited from its parent."""
+    register_omegaconf_resolvers()
+    repo_root = Path(__file__).resolve().parents[3]
+    recipe = repo_root / (
+        "examples/configs/recipes/llm/"
+        "ppo-qwen2.5-1.5b-gsm8k-2n8g-megatron-valuetp2sp-dynbatch-"
+        "noncolocated-async-single-controller.yaml"
+    )
+    resolved = OmegaConf.to_container(load_config(recipe), resolve=True)
+
+    assert isinstance(resolved, dict)
+    config = MasterConfig.model_validate(resolved)
+    validate_single_controller_config(config)
+    assert config.ppo is not None
+    assert config.ppo.overlong_filtering is True
+
+
+@pytest.mark.parametrize(
+    ("reference_policy_kl_penalty", "expected_init_reference_model"),
+    [(0.0, False), (0.01, True)],
+)
+def test_build_trainer_initializes_reference_model_only_for_nonzero_kl(
+    reference_policy_kl_penalty: float,
+    expected_init_reference_model: bool,
+) -> None:
+    master_config = _make_master_config(
+        loss_cfg=ClippedPGLossConfig(
+            reference_policy_kl_penalty=reference_policy_kl_penalty
+        )
+    )
+
+    with patch.object(sc_setup_mod, "TQPolicy") as mock_policy:
+        sc_setup_mod._build_trainer(
+            MagicMock(name="train_cluster"),
+            master_config,
+            MagicMock(name="tokenizer"),
+            None,
+            weights_path=None,
+            optimizer_path=None,
+        )
+
+    assert (
+        mock_policy.call_args.kwargs["init_reference_model"]
+        is expected_init_reference_model
+    )
+
+
 class TestSetup:
     """setup arg validation + actor_args assembly."""
+
+    def test_reward_penalties_are_typed(self):
+        assert isinstance(_make_master_config().reward_penalties, RewardPenaltyConfig)
+
+    def test_reward_penalties_require_gym_before_setup_factories(
+        self, patched_factories
+    ):
+        mc = _make_master_config()
+        mc.reward_penalties = RewardPenaltyConfig(penalize_empty_final_answer=True)
+
+        with pytest.raises(ValueError, match="reward_penalties require the NeMo-Gym"):
+            setup_single_controller(mc, MagicMock(pad_token_id=0))
+
+        patched_factories["setup_response_data"].assert_not_called()
+        patched_factories["_build_clusters"].assert_not_called()
+
+    def test_invalid_reward_penalty_config_fails_before_setup_factories(
+        self, patched_factories
+    ):
+        mc = _make_master_config(env={"should_use_nemo_gym": True})
+        mc.reward_penalties = RewardPenaltyConfig.model_construct(
+            penalize_unwanted_tokens=True
+        )
+
+        with pytest.raises(ValueError, match="reward_penalties.token_ids.unwanted"):
+            setup_single_controller(mc, MagicMock(pad_token_id=0))
+
+        patched_factories["setup_response_data"].assert_not_called()
+        patched_factories["_build_clusters"].assert_not_called()
+
+    def test_resolves_and_passes_reward_penalties(self, patched_factories):
+        mc = _make_master_config()
+        tokenizer = MagicMock(pad_token_id=0)
+        thinking_tags = ["<reason>", "</reason>"]
+        resolved = {"penalize_malformed_think_tag": True}
+
+        with (
+            patch.object(
+                sc_setup_mod, "get_nemo_gym_thinking_tags", return_value=thinking_tags
+            ) as get_tags,
+            patch.object(
+                sc_setup_mod, "resolve_reward_penalty_config", return_value=resolved
+            ) as resolve_config,
+            patch.object(sc_setup_mod, "RolloutManager") as rollout_manager,
+        ):
+            actor_args, _ = setup_single_controller(mc, tokenizer)
+
+        get_tags.assert_called_once_with(mc.env)
+        resolve_config.assert_called_once_with(
+            mc.reward_penalties,
+            tokenizer,
+            thinking_tags=thinking_tags,
+        )
+        assert rollout_manager.call_args.kwargs["reward_penalty_config"] is resolved
+        assert actor_args.rollout_manager is rollout_manager.return_value
 
     def test_raises_when_data_plane_disabled(self):
         mc = _make_master_config(dp_enabled=False)
         with pytest.raises(ValueError, match="data_plane.enabled=True"):
             setup_single_controller(mc, MagicMock())
+
+    def test_nonzero_kl_rejects_skipping_reference_logprobs(self, patched_factories):
+        mc = _make_master_config(
+            loss_cfg=ClippedPGLossConfig(reference_policy_kl_penalty=0.01)
+        )
+        mc.grpo.skip_reference_policy_logprobs_calculation = True
+
+        with pytest.raises(ValueError, match="requires reference_policy_logprobs"):
+            setup_single_controller(mc, MagicMock(pad_token_id=0))
+
+        patched_factories["setup_response_data"].assert_not_called()
+        patched_factories["_build_clusters"].assert_not_called()
+        patched_factories["_build_trainer"].assert_not_called()
+
+    def test_reward_kl_rejects_skipping_policy_logprobs(self, patched_factories):
+        mc = _make_master_config(
+            loss_cfg=ClippedPGLossConfig(
+                reference_policy_kl_penalty=0.01,
+                use_kl_in_reward=True,
+                force_on_policy_ratio=True,
+            )
+        )
+
+        with pytest.raises(ValueError, match="requires policy logprobs"):
+            setup_single_controller(mc, MagicMock(pad_token_id=0))
+
+        patched_factories["setup_response_data"].assert_not_called()
+        patched_factories["_build_clusters"].assert_not_called()
+        patched_factories["_build_trainer"].assert_not_called()
 
     def test_rejects_mooncake_data_plane_checkpointing(self):
         mc = _make_master_config()
@@ -830,6 +968,29 @@ class TestSetup:
         )
 
     @pytest.mark.parametrize(
+        ("wandb_enabled", "table_flag", "expected"),
+        [(False, True, False), (True, False, False), (True, True, True)],
+    )
+    def test_full_result_table_gate_reaches_the_rollout_manager(
+        self,
+        wandb_enabled: bool,
+        table_flag: bool,
+        expected: bool,
+        patched_factories,
+    ):
+        mc = _make_master_config()
+        mc.logger = {
+            "wandb_enabled": wandb_enabled,
+            "wandb": {"log_nemo_gym_full_result_tables": table_flag},
+        }
+
+        with patch.object(sc_setup_mod, "RolloutManager") as mock_rollout_manager:
+            setup_single_controller(mc, MagicMock(pad_token_id=0))
+
+        _, call_kwargs = mock_rollout_manager.call_args
+        assert call_kwargs["log_full_result_tables"] is expected
+
+    @pytest.mark.parametrize(
         "env",
         [
             pytest.param({}, id="no_nemo_gym_section"),
@@ -992,7 +1153,6 @@ class TestSetup:
             # run_rollouts call.
             tokenizer=tokenizer,
             enable_router_replay=False,
-            routed_experts_dtype="int16",
             use_fastokens=False,
         )
         assert actor_args.env_handles["nemo_gym"] is fake_gym_actor

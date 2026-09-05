@@ -17,11 +17,13 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import threading
 from typing import Any
 
 import pytest
 import torch
+from wandb import Table
 
 import nemo_rl.algorithms.async_utils.replay_buffer as _replay_buffer_module
 from nemo_rl.algorithms.async_utils.replay_buffer import (
@@ -33,17 +35,22 @@ from nemo_rl.algorithms.async_utils.replay_buffer import (
     replay_manifest_digest,
 )
 from nemo_rl.data_plane import KVBatchMeta
+from nemo_rl.data_plane.schema import ROLLOUT_METRICS
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
-from nemo_rl.experience.interfaces import PromptGroupRecord
+from nemo_rl.experience.interfaces import Completion, PromptGroupRecord
+from nemo_rl.experience.rollout_manager import AsyncNemoGymRolloutImpl
 
 # Each record yields _N_GENS training rows.
 _N_GENS = 2
 
 
 def _stub_record_to_train_batch(
-    record: PromptGroupRecord, *, pad_value_dict: Any
+    record: PromptGroupRecord,
+    *,
+    pad_value_dict: Any,
+    include_message_violation_fields: bool,
 ) -> BatchedDataDict[Any]:
-    del record, pad_value_dict
+    del record, pad_value_dict, include_message_violation_fields
     return BatchedDataDict[Any](
         {
             "input_ids": torch.ones((_N_GENS, 3), dtype=torch.long),
@@ -161,7 +168,11 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _make_record(*, prompt_idx: int = 0) -> PromptGroupRecord:
+def _make_record(
+    rollout_metrics: dict[str, Any] | None = None,
+    *,
+    prompt_idx: int = 0,
+) -> PromptGroupRecord:
     """Opaque PromptGroupRecord — converter is stubbed, so contents are unused."""
     return PromptGroupRecord(
         prompt_idx=prompt_idx,
@@ -169,7 +180,7 @@ def _make_record(*, prompt_idx: int = 0) -> PromptGroupRecord:
         extra_env_info=None,
         metadata={},
         completions=[],
-        rollout_metrics={},
+        rollout_metrics=dict(rollout_metrics or {}),
     )
 
 
@@ -183,6 +194,7 @@ def _make_buffer(
         dp,
         partition_id="rollout_data",
         pad_value_dict={"token_ids": 0},
+        include_message_violation_fields=False,
         require_routed_experts=require_routed_experts,
     )
     buffer.set_data_plane_checkpoint_barrier(
@@ -196,6 +208,7 @@ def _add_group(
     weight: int,
     end_weight: int | None = None,
     target_step: int | None = None,
+    rollout_metrics: dict[str, Any] | None = None,
 ) -> KVBatchMeta:
     if end_weight is None:
         end_weight = weight
@@ -203,7 +216,7 @@ def _add_group(
     return _run(
         buf.commit(
             group_id,
-            _make_record(),
+            _make_record(rollout_metrics),
             start_weight_version=weight,
             end_weight_version=end_weight,
         )
@@ -377,6 +390,26 @@ class TestTQReplayBufferReserveCommit:
         assert dp.depth() == 0
         assert buf.ready_list == [False]
         assert buf.meta_list == [None]
+
+    def test_commit_retains_group_rollout_metrics(self):
+        dp = FakeDataPlaneClient()
+        buf = _make_buffer(dp)
+        record = _make_record({"gen_tokens/min": 3, "total_turns": 2})
+        group_id = buf.reserve(weight_version=3)
+
+        meta = _run(
+            buf.commit(
+                group_id,
+                record,
+                start_weight_version=3,
+                end_weight_version=4,
+            )
+        )
+        record.rollout_metrics["gen_tokens/min"] = 99
+
+        assert meta.extra_info[ROLLOUT_METRICS] == [
+            {"gen_tokens/min": 3, "total_turns": 2}
+        ]
 
     def test_commit_clears_rows_when_put_raises_after_writing(self):
         dp = FailAfterPutDataPlaneClient()
@@ -568,6 +601,7 @@ class TestTQReplayBufferRemove:
             dp,
             partition_id="rollout_data",
             pad_value_dict={"token_ids": 0},
+            include_message_violation_fields=False,
         )
 
         with pytest.raises(RuntimeError, match="must be bound"):
@@ -881,6 +915,17 @@ class TestReplayManifestDigest:
 
         assert replay_manifest_digest([first]) == replay_manifest_digest([second])
 
+    def test_ignores_rollout_metrics_logging_sidecar(self):
+        first = _make_group_entry("group-1", weight=1)
+        second = _make_group_entry("group-1", weight=1)
+        first["meta"].extra_info = {
+            "packing": [1, 2],
+            ROLLOUT_METRICS: [{"per_worker_token_counts": {0: 7}}],
+        }
+        second["meta"].extra_info = {"packing": [1, 2]}
+
+        assert replay_manifest_digest([first]) == replay_manifest_digest([second])
+
 
 class TestTQReplayBufferStateDict:
     def test_metadata_state_dict_omits_tensors_and_data_plane_reads(self):
@@ -904,7 +949,18 @@ class TestTQReplayBufferStateDict:
     def test_native_tq_round_trip_restores_index_without_reputting_rows(self):
         dp = FakeDataPlaneClient()
         buf = _make_buffer(dp)
-        metas = [_add_group(buf, weight=w) for w in (1, 2)]
+        metas = [
+            _add_group(
+                buf,
+                weight=1,
+                rollout_metrics={
+                    "gen_tokens/min": 3,
+                    "total_turns": 2,
+                    "per_worker_token_counts": {0: 7},
+                },
+            ),
+            _add_group(buf, weight=2),
+        ]
         state = buf.metadata_state_dict(saved_capacity=8)
 
         restored_dp = FakeDataPlaneClient()
@@ -921,7 +977,62 @@ class TestTQReplayBufferStateDict:
         assert [meta.sample_ids for meta in restored_buf.meta_list] == [
             list(meta.sample_ids) for meta in metas
         ]
+        assert restored_buf.meta_list[0].extra_info[ROLLOUT_METRICS] == [
+            {
+                "gen_tokens/min": 3,
+                "total_turns": 2,
+                "per_worker_token_counts": {0: 7},
+            }
+        ]
         assert restored_dp.put_calls == []
+
+    def test_checkpoint_serialization_preserves_full_result_table(self):
+        """Opt-in NeMo Gym tables remain usable after the torch checkpoint round trip."""
+        gym_impl = AsyncNemoGymRolloutImpl(
+            tokenizer=None,
+            task_to_env={},
+            num_generations_per_prompt=1,
+            max_seq_len=16,
+            max_rollout_turns=1,
+            generation_config={
+                "stop_strings": None,
+                "stop_token_ids": None,
+                "top_k": None,
+            },
+            log_full_result_tables=True,
+        )
+        rollout_metrics = gym_impl._compute_rollout_metrics(
+            [
+                Completion(
+                    message_log=[
+                        {"role": "user", "token_ids": [1]},
+                        {"role": "assistant", "token_ids": [2]},
+                    ],
+                    env_extras={"reward": 1.0, "status": "completed"},
+                    truncated=False,
+                    reward=1.0,
+                )
+            ],
+            "agent",
+        )
+        assert isinstance(rollout_metrics["agent/full_result"], Table)
+
+        buf = _make_buffer(FakeDataPlaneClient())
+        _add_group(buf, weight=1, rollout_metrics=rollout_metrics)
+
+        payload = io.BytesIO()
+        torch.save(buf.metadata_state_dict(saved_capacity=8), payload)
+        payload.seek(0)
+        restored_state = torch.load(payload, weights_only=False)
+
+        restored_buf = _make_buffer(FakeDataPlaneClient())
+        assert _load(restored_buf, restored_state) == 1
+        restored_table = restored_buf.meta_list[0].extra_info[ROLLOUT_METRICS][0][
+            "agent/full_result"
+        ]
+        assert isinstance(restored_table, Table)
+        assert restored_table.columns == ["Full result"]
+        assert restored_table.data == [['{"reward":1.0,"status":"completed"}']]
 
     def test_round_trip_preserves_end_weight_and_target_step(self):
         # start != end and a non-None target_step must survive the round-trip:

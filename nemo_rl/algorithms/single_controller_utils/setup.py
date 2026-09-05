@@ -93,7 +93,11 @@ from nemo_rl.experience.rollout_manager import (
     RolloutRetryPolicy,
     RolloutTimeouts,
 )
-from nemo_rl.experience.rollouts import should_mask_flagged_samples
+from nemo_rl.experience.rollouts import (
+    get_nemo_gym_thinking_tags,
+    resolve_reward_penalty_config,
+    should_mask_flagged_samples,
+)
 from nemo_rl.models.generation import resolve_generation_class
 from nemo_rl.models.generation.fleet_health import (
     FleetHealthPolicy,
@@ -103,9 +107,6 @@ from nemo_rl.models.generation.fleet_health import (
 from nemo_rl.models.generation.generation_router import (
     GenerationRouterActor,
     GenerationRouterImpl,
-)
-from nemo_rl.models.generation.interfaces import (
-    resolve_routed_experts_dtype_name_for_model,
 )
 from nemo_rl.models.generation.megatron.megatron_generation import MegatronGeneration
 from nemo_rl.models.generation.sglang.config import SGLangConfig
@@ -122,6 +123,7 @@ from nemo_rl.utils.checkpoint import (
     CheckpointManager,
     validate_warm_start_checkpoint,
 )
+from nemo_rl.utils.logger import should_log_nemo_gym_full_result_tables
 from nemo_rl.weight_sync import WeightSynchronizer, create_weight_synchronizer
 
 
@@ -658,18 +660,12 @@ def _spinup_gym(
     policy_config = master_config.policy
     generation_config = policy_config["generation"]
     enable_router_replay = router_replay_enabled(policy_config)
-    routed_experts_dtype = (
-        resolve_routed_experts_dtype_name_for_model(generation_config["model_name"])
-        if enable_router_replay
-        else "int16"
-    )
     actor = spinup_nemo_gym_actor(
         env_configs=master_config.env,
         base_urls=base_urls,
         model_name=generation_config["model_name"],
         tokenizer=tokenizer,
         enable_router_replay=enable_router_replay,
-        routed_experts_dtype=routed_experts_dtype,
         use_fastokens=bool(policy_config["tokenizer"].get("use_fastokens")),
     )
     return actor, time.perf_counter() - t0
@@ -708,23 +704,33 @@ def _clamp_max_num_steps(
 def _maybe_inject_megatron_train_iters(master_config: MasterConfig) -> None:
     """Set train_iters from max_num_steps after its dataloader clamp."""
     algo_cfg = algo_config(master_config)
-    is_ppo = is_ppo_run(master_config)
-    # train_iters is a scheduler-tick budget, and each PPO epoch steps both
-    # optimizers once, so the configured warmup/decay horizon has to be scaled.
-    ppo_epochs = algo_cfg.ppo_epochs if is_ppo else 1
-    train_iters = algo_cfg.max_num_steps * ppo_epochs
+    ppo_config = master_config.ppo if is_ppo_run(master_config) else None
+    # train_iters is a scheduler-tick budget. Policy and value need separate
+    # budgets when their epoch counts or training start steps differ.
+    policy_epochs = ppo_config.ppo_epochs if ppo_config is not None else 1
+    policy_training_steps = algo_cfg.max_num_steps
+    if ppo_config is not None:
+        policy_training_steps = max(
+            policy_training_steps - ppo_config.policy_training_start_step,
+            0,
+        )
+    # Megatron-Bridge requires a positive scheduler horizon at setup. A PPO
+    # policy scheduler is never advanced when critic warmup spans the whole run.
+    policy_train_iters = max(policy_training_steps * policy_epochs, 1)
 
     # policy
     policy_config = master_config.policy
     if policy_config.get("megatron_cfg", {}).get("enabled", False):
-        policy_config["megatron_cfg"]["train_iters"] = train_iters
+        policy_config["megatron_cfg"]["train_iters"] = policy_train_iters
 
     # value
-    if not is_ppo:
+    if ppo_config is None:
         return
     value_config = master_config.value
     if value_config.get("megatron_cfg", {}).get("enabled", False):
-        value_config["megatron_cfg"]["train_iters"] = train_iters  # type: ignore[index]
+        value_config["megatron_cfg"]["train_iters"] = (  # type: ignore[index]
+            algo_cfg.max_num_steps * ppo_config.critic_ppo_epochs
+        )
 
 
 def _maybe_attach_fleet_health(
@@ -881,6 +887,11 @@ def setup_single_controller(
         logged by the SC actor).
     """
     validate_single_controller_config(master_config)
+    resolved_reward_penalty_config = resolve_reward_penalty_config(
+        master_config.reward_penalties,
+        tokenizer,
+        thinking_tags=get_nemo_gym_thinking_tags(master_config.env),
+    )
 
     # short names for config sections
     algo_cfg = algo_config(master_config)
@@ -1213,7 +1224,7 @@ def setup_single_controller(
         build_tasks["nemo_gym"] = partial(
             _spinup_gym,
             master_config=master_config,
-            base_urls=gym_spinup_base_urls,
+            base_urls=cast(list[str], gym_spinup_base_urls),
             tokenizer=tokenizer,
         )
 
@@ -1393,6 +1404,10 @@ def setup_single_controller(
         dp_client,
         partition_id=partition_id,
         pad_value_dict={"token_ids": pad_id, "input_ids": pad_id},
+        include_message_violation_fields=(
+            algo_cfg.invalid_tool_call_advantage is not None
+            or algo_cfg.malformed_thinking_advantage is not None
+        ),
         require_routed_experts=router_replay_enabled(policy_config),
     )
     rollout_manager = RolloutManager(
@@ -1405,6 +1420,11 @@ def setup_single_controller(
         generation_config=generation_config,
         use_nemo_gym=use_nemo_gym,
         mask_env_flagged_samples=should_mask_flagged_samples(master_config.env),
+        log_full_result_tables=should_log_nemo_gym_full_result_tables(
+            wandb_enabled=master_config.logger["wandb_enabled"],
+            wandb_config=master_config.logger["wandb"],
+        ),
+        reward_penalty_config=resolved_reward_penalty_config,
         tq_buffer=tq_buffer,
         timeouts=RolloutTimeouts(
             rollout_s=master_config.async_rl.rollout_failure.nemo_gym.rollout_timeout_s,
