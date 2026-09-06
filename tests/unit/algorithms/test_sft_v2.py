@@ -89,6 +89,11 @@ def test_train_step_orders_split_policy_lifecycle_and_commit() -> None:
     assert metrics["loader_post_prepare_max"] == 0.03
     assert metrics["loader_tensordict_mean"] == 0.04
     assert metrics["loader_publish_max"] == 0.05
+    assert metrics["policy_time"] >= 0.0
+    assert metrics["begin_train_step"] >= 0.0
+    assert metrics["train_placed_microbatches"] >= 0.0
+    assert metrics["finish_train_step"] >= 0.0
+    assert metrics["commit_sft_batch"] >= 0.0
 
 
 def test_train_step_aborts_policy_and_loader_on_training_failure() -> None:

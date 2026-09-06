@@ -231,12 +231,20 @@ class SFTSingleControllerActor:
         loader_wait = time.monotonic() - started
         train_started = time.monotonic()
         try:
+            phase_started = time.monotonic()
             self._trainer.begin_train_step(self._loss_fn)
+            begin_train_step = time.monotonic() - phase_started
+            phase_started = time.monotonic()
             self._trainer.train_placed_microbatches(
                 [envelope.meta for envelope in envelopes]
             )
+            train_placed_microbatches = time.monotonic() - phase_started
+            phase_started = time.monotonic()
             train_results = self._trainer.finish_train_step()
+            finish_train_step = time.monotonic() - phase_started
+            phase_started = time.monotonic()
             self._owner_call("commit_sft_batch")
+            commit_sft_batch = time.monotonic() - phase_started
         except BaseException:
             self._trainer.abort_train_step()
             self._owner_call("abort_sft_batch")
@@ -259,6 +267,10 @@ class SFTSingleControllerActor:
             )
             - min(envelope.load_seconds for envelope in envelopes),
             "policy_time": policy_seconds,
+            "begin_train_step": begin_train_step,
+            "train_placed_microbatches": train_placed_microbatches,
+            "finish_train_step": finish_train_step,
+            "commit_sft_batch": commit_sft_batch,
             "loader_wait": loader_wait,
             "queue_depth": 1,
             "total_step_time": time.monotonic() - started,
