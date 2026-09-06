@@ -1234,6 +1234,7 @@ class MegatronPolicyWorkerImpl(
             "saved_grad_sync_func": None,
             "saved_no_sync_func": None,
             "saved_finalize_model_grads_func": None,
+            "step_phases": {},
         }
 
     def _assert_step_open(self) -> dict[str, Any]:
@@ -1464,6 +1465,7 @@ class MegatronPolicyWorkerImpl(
         # Build the per-call iterator. Each ``train_microbatches_from_meta``
         # call carries one DP slice; the iterator subdivides into pipeline
         # microbatches.
+        prep_started = time.monotonic()
         attach_media_token_validity_mask(data, self.media_placeholder_token_id)
         (
             data_iterator,
@@ -1502,9 +1504,11 @@ class MegatronPolicyWorkerImpl(
             stage="train",
             require=True,
         )
+        self._add_step_phase("mb_prep", time.monotonic() - prep_started)
 
         # The critical wrap: hooks fire (accumulate main_grad) but the
         # per-call reduce dispatch is gated off.
+        fwd_bwd_started = time.monotonic()
         with (
             maybe_r3_trace_stage("train", enabled=use_router_replay),
             self.model.no_sync(),
@@ -1532,15 +1536,19 @@ class MegatronPolicyWorkerImpl(
                     use_router_replay=use_router_replay,
                     router_replay_train=True,
                 )
+        self._add_step_phase("fwd_bwd", time.monotonic() - fwd_bwd_started)
 
+        empty_cache_started = time.monotonic()
         if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
             torch.cuda.empty_cache()
+        self._add_step_phase("empty_cache", time.monotonic() - empty_cache_started)
         self._log_gpu_mem("chunk_exit")
 
         # Collect per-mb metrics from the last PP stage; broadcast to all
         # PP ranks so non-last-stage ranks have something to all_reduce
         # against at finish. Metrics carry the N=1 placeholder for now —
         # ``finish_train_step`` rescales by the true 1/N.
+        metrics_started = time.monotonic()
         if parallel_state.is_pipeline_last_stage(ignore_virtual=True):
             mb_metrics_collected = []
             for x in losses_reduced:
@@ -1551,6 +1559,7 @@ class MegatronPolicyWorkerImpl(
         mb_metrics_collected = broadcast_loss_metrics_from_last_stage(
             mb_metrics_collected
         )
+        self._add_step_phase("mb_metrics", time.monotonic() - metrics_started)
 
         for m in mb_metrics_collected:
             state["all_mb_metrics"].append(m)
@@ -1581,6 +1590,7 @@ class MegatronPolicyWorkerImpl(
     def _finish_train_step_body(self, state: dict[str, Any]) -> dict[str, Any]:
         from nemo_rl.algorithms.loss.interfaces import LossType
 
+        reduce_started = time.monotonic()
         # All-reduce accumulated mask sums across DP to recover true N.
         to_reduce = torch.stack(
             [state["local_valid_seqs"], state["local_valid_toks"]]
@@ -1603,7 +1613,9 @@ class MegatronPolicyWorkerImpl(
         # global mean grad; for reduce_scatter (dist-opt) it's the shard.
         # Either way, opt.step sees the right-normalized gradient.
         self.model.scale_gradients(inv_n)
+        self._add_step_phase("finish_reduce", time.monotonic() - reduce_started)
 
+        opt_started = time.monotonic()
         # End-of-step gradient finalization, exactly once per optimizer step.
         # ``begin_train_step`` nulled ``finalize_model_grads_func`` so mcore's
         # schedule cannot fire it per streaming chunk; the real callable runs
@@ -1657,6 +1669,7 @@ class MegatronPolicyWorkerImpl(
         # opt.step clips internally (clip_grad config); operates on the
         # already-rescaled grad. Returns (success, grad_norm, num_zeros).
         update_successful, grad_norm, num_zeros_in_grad = self.optimizer.step()
+        self._add_step_phase("finish_opt", time.monotonic() - opt_started)
 
         pg_collection = get_pg_collection(self.model)
         update_successful = logical_and_across_model_parallel_group(
@@ -1820,6 +1833,7 @@ class MegatronPolicyWorkerImpl(
         # rank-conditional block, exactly like the moe_metrics call above.
         self._collect_mtp_metrics(metrics, state["total_num_microbatches"], None)
 
+        metrics["step_phases"] = dict(state.get("step_phases") or {})
         self._train_step_state = None
         return metrics
 

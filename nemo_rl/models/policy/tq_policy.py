@@ -29,6 +29,7 @@ no key minting). Workers fetch their slice from TQ via
 
 from __future__ import annotations
 
+import time
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
@@ -86,6 +87,17 @@ def _aggregate_train_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         for k, v in r["all_mb_metrics"].items():
             all_mb_metrics[k].extend(v)
     out["all_mb_metrics"] = dict(all_mb_metrics)
+    phase_names = {
+        name for result in results for name in result.get("step_phases", {})
+    }
+    if phase_names:
+        out["step_phases"] = {
+            name: max(
+                float(result.get("step_phases", {}).get(name, 0.0))
+                for result in results
+            )
+            for name in sorted(phase_names)
+        }
     return out
 
 
@@ -566,15 +578,18 @@ class TQPolicy(Policy):
         self,
         dp_metas: list[KVBatchMeta],
         timer: Optional[Timer] = None,
-    ) -> None:
+    ) -> dict[str, float]:
         """Dispatch one producer-assigned metadata batch per logical DP rank.
 
         The input order is the logical DP-rank order. Producer field lists
         remain unchanged because an SFT loader can provide a narrower schema
         than the rollout training path.
         """
+        started = time.monotonic()
         self._stamp_placed_pad_seqlen(dp_metas)
+        stamp_pad = time.monotonic() - started
         train_metas = [replace(meta, task_name="train") for meta in dp_metas]
+        started = time.monotonic()
         with timer.time("policy_training/pack_placed_meta") if timer else nullcontext():
             packing_result = self._get_packer().pack(
                 PlacedPackingInput(
@@ -583,7 +598,14 @@ class TQPolicy(Policy):
                     mb_tokens_key="train_mb_tokens",
                 )
             )
+        pack = time.monotonic() - started
+        started = time.monotonic()
         self._dispatch_train_microbatches(packing_result.dp_metas, timer=timer)
+        return {
+            "stamp_pad": stamp_pad,
+            "pack": pack,
+            "dispatch": time.monotonic() - started,
+        }
 
     def _stamp_placed_pad_seqlen(self, dp_metas: list[KVBatchMeta]) -> None:
         """Set one forward padding target across all placed DP batches."""

@@ -42,7 +42,9 @@ def test_train_placed_microbatches_keeps_fields_and_replica_delivery() -> None:
         _meta(1, ["input_ids", "image_grid_thw"]),
     ]
 
-    assert policy.train_placed_microbatches(dp_metas) is None
+    result = policy.train_placed_microbatches(dp_metas)
+    assert set(result) == {"stamp_pad", "pack", "dispatch"}
+    assert all(value >= 0.0 for value in result.values())
 
     packing_input = packer.pack.call_args.args[0]
     assert isinstance(packing_input, PlacedPackingInput)

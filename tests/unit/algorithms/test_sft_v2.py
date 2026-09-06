@@ -57,6 +57,7 @@ def _controller() -> object:
         "loss": 1.0,
         "grad_norm": 0.5,
         "all_mb_metrics": {},
+        "step_phases": {"fetch": 0.1, "fwd_bwd": 0.2},
     }
     controller._master_config = SimpleNamespace()
     controller._save_state = SFTV2SaveState(0, 0, 0, "hash")
@@ -94,6 +95,8 @@ def test_train_step_orders_split_policy_lifecycle_and_commit() -> None:
     assert metrics["train_placed_microbatches"] >= 0.0
     assert metrics["finish_train_step"] >= 0.0
     assert metrics["commit_sft_batch"] >= 0.0
+    assert metrics["worker_fetch"] == 0.1
+    assert metrics["worker_fwd_bwd"] == 0.2
 
 
 def test_train_step_aborts_policy_and_loader_on_training_failure() -> None:

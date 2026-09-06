@@ -235,7 +235,7 @@ class SFTSingleControllerActor:
             self._trainer.begin_train_step(self._loss_fn)
             begin_train_step = time.monotonic() - phase_started
             phase_started = time.monotonic()
-            self._trainer.train_placed_microbatches(
+            placed_phases = self._trainer.train_placed_microbatches(
                 [envelope.meta for envelope in envelopes]
             )
             train_placed_microbatches = time.monotonic() - phase_started
@@ -282,6 +282,9 @@ class SFTSingleControllerActor:
             "valid_tokens_per_second": valid_tokens
             / max(time.monotonic() - started, 1e-12),
         }
+        if isinstance(placed_phases, dict):
+            for key, value in placed_phases.items():
+                metrics[f"placed_{key}"] = float(value)
         phase_names = sorted(
             {
                 phase
@@ -346,6 +349,8 @@ class SFTSingleControllerActor:
         for key in ("total_flops", "num_ranks", "theoretical_tflops"):
             if key in train_results:
                 metrics[key] = train_results[key]
+        for key, value in train_results.get("step_phases", {}).items():
+            metrics[f"worker_{key}"] = float(value)
         return metrics
 
     def _owner_call(self, method_name: str) -> list[Any]:

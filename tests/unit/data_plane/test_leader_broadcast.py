@@ -25,6 +25,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
+from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.data_plane.worker_mixin import _broadcast_batched_data_dict
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
@@ -41,10 +42,23 @@ def _worker(rank: int, world_size: int, tmp_init_file: str, q):
     )
     try:
         if rank == 0:
+            packed = PackedTensor(
+                [
+                    torch.arange(6, dtype=torch.float32).reshape(2, 3),
+                    None,
+                    torch.arange(3, dtype=torch.float32).reshape(1, 3),
+                ],
+                dim_to_pack=0,
+                preprocessing_mode="patchify",
+                _row_offsets=[0, 1, 2, 4],
+                _segment_indices=[0, 1, 2, 0],
+                _segment_provenance=[b"a", b"b", b"c"],
+            )
             data = BatchedDataDict(
                 {
                     "input_ids": torch.arange(12, dtype=torch.long).reshape(3, 4),
                     "input_lengths": torch.tensor([4, 3, 2], dtype=torch.int32),
+                    "pixel_values": packed,
                     "scalar_meta": "step_42",
                 }
             )
@@ -60,6 +74,19 @@ def _worker(rank: int, world_size: int, tmp_init_file: str, q):
         )
         assert torch.equal(
             out["input_lengths"], torch.tensor([4, 3, 2], dtype=torch.int32)
+        )
+        packed = out["pixel_values"]
+        assert isinstance(packed, PackedTensor)
+        assert packed.preprocessing_mode == "patchify"
+        assert packed._row_offsets == [0, 1, 2, 4]
+        assert packed._segment_indices == [0, 1, 2, 0]
+        assert packed._segment_provenance == [b"a", b"b", b"c"]
+        assert packed.tensors[1] is None
+        assert torch.equal(
+            packed.tensors[0], torch.arange(6, dtype=torch.float32).reshape(2, 3)
+        )
+        assert torch.equal(
+            packed.tensors[2], torch.arange(3, dtype=torch.float32).reshape(1, 3)
         )
         assert out["scalar_meta"] == "step_42"
         q.put((rank, "ok"))
