@@ -34,6 +34,7 @@ from megatron.energon import (
     stateless,
 )
 from megatron.energon.av import AVDecoder
+from megatron.energon.epathlib import EPath
 
 from nemo_rl.data.energon.multimodal.model_families import supports_model_families
 from nemo_rl.data.energon.multimodal.types import (
@@ -226,6 +227,34 @@ def _derived_media_metadata(modality: str, value: Any) -> FrozenMediaMetadata:
     return freeze_media_metadata(_metadata_values(decoder.get_metadata()))
 
 
+def _load_media_metadata(
+    store: FileStore,
+    path: str,
+    *,
+    modality: str,
+    derive_missing_metadata: bool,
+) -> FrozenMediaMetadata:
+    metadata = _media_metadata(store, path)
+    if metadata or not derive_missing_metadata:
+        return metadata
+
+    media_path = EPath(store.get_path()) / path
+    with media_path.open("rb") as stream:
+        if modality == "image":
+            with Image.open(stream) as image:
+                return freeze_media_metadata(
+                    {
+                        "width": image.width,
+                        "height": image.height,
+                        "format": image.format,
+                        "mode": image.mode,
+                    }
+                )
+        return freeze_media_metadata(
+            _metadata_values(AVDecoder(stream).get_metadata())
+        )
+
+
 def _source_info(store: FileStore, path: str) -> SourceInfo:
     return SourceInfo(
         dataset_path=store.get_path(),
@@ -320,9 +349,12 @@ def _aux_media(
         return cache.to_cache(opened, cache_key), metadata, source
     if cache is None:
         raise ValueError("Auxiliary media loading requires an Energon cache pool.")
-    metadata = metadata or _media_metadata(store, media_path)
-    if not metadata and derive_missing_metadata:
-        metadata = _derived_media_metadata(modality, cache.get(store, media_path))
+    metadata = metadata or _load_media_metadata(
+        store,
+        media_path,
+        modality=modality,
+        derive_missing_metadata=derive_missing_metadata,
+    )
     return cache.get_lazy(store, media_path), metadata, _source_info(store, media_path)
 
 

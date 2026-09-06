@@ -22,6 +22,7 @@ from megatron.energon import Cooker
 from nemo_rl.data.energon.multimodal.cookers.generic import cook_conversation
 from nemo_rl.data.energon.multimodal.cookers.nemotron import (
     GRANARY_ENGLISH_PROMPT,
+    _load_media_metadata,
     _media_metadata,
     cook_general_conversations_jsonl,
     cook_general_conversations_webdataset,
@@ -355,3 +356,36 @@ def test_media_metadata_warns_once_per_unprepared_store(capsys):
     assert output.count("WARNING: Dataset /data/unprepared-media") == 1
     assert "slow metadata for data/first.png" in output
     assert "data/second.png" not in output
+
+
+def test_missing_media_metadata_is_probed_from_seekable_file(
+    monkeypatch, tmp_path
+):
+    media_path = tmp_path / "sample.mp4"
+    media_path.write_bytes(b"video")
+
+    class _UnpreparedStore(_FakeMediaStore):
+        def get_path(self):
+            return str(tmp_path)
+
+        def get_media_metadata(self, path):
+            raise RuntimeError("metadata index is missing")
+
+    class _ProbeDecoder:
+        def __init__(self, stream):
+            assert stream.seekable()
+
+        def get_metadata(self):
+            return SimpleNamespace(video_duration=10.0, video_num_frames=20)
+
+    monkeypatch.setattr(
+        "nemo_rl.data.energon.multimodal.cookers.nemotron.AVDecoder",
+        _ProbeDecoder,
+    )
+
+    assert _load_media_metadata(
+        _UnpreparedStore(),
+        media_path.name,
+        modality="video",
+        derive_missing_metadata=True,
+    ) == (("video_duration", 10.0), ("video_num_frames", 20))
