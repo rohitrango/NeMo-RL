@@ -135,6 +135,14 @@ def test_sft_v2_worker_publishes_sequence_alignment() -> None:
         "generation": 7,
         "pad_to_multiple": 4,
     }
+    assert set(envelope.load_phase_seconds) == {
+        "iter",
+        "prepare",
+        "post-prepare",
+        "tensordict",
+        "publish",
+    }
+    assert all(value >= 0.0 for value in envelope.load_phase_seconds.values())
 
 
 def test_sft_v2_worker_builds_energon_packing_metadata() -> None:

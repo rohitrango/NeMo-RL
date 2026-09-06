@@ -155,27 +155,32 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         return True
 
     def _ld_mark(self, phase: str) -> None:
-        """Record the phase now being entered, for the stall watchdog."""
-        if getattr(self, "_ld_on", None) is None:
-            self._ld_on = _ld_os.environ.get("NRL_LOADDIAG") == "1"
-        if not self._ld_on:
-            return
+        """Close the previous load phase and enter `phase`."""
         now = time.monotonic()
         previous = getattr(self, "_ld_phase", None)
+        elapsed = now - getattr(self, "_ld_t0", now)
         if previous is not None:
+            durations = getattr(self, "_ld_durations", None)
+            if durations is None:
+                durations = {}
+                self._ld_durations = durations
+            durations[previous] = elapsed
+        if getattr(self, "_ld_on", None) is None:
+            self._ld_on = _ld_os.environ.get("NRL_LOADDIAG") == "1"
+        if self._ld_on and previous is not None:
             print(
                 "[LOADDIAG] batch=%d %s done in %.3fs -> %s"
                 % (
                     getattr(self, "_sft_next_batch_index", -1),
                     previous,
-                    now - getattr(self, "_ld_t0", now),
+                    elapsed,
                     phase,
                 ),
                 flush=True,
             )
         self._ld_phase = None if phase == "idle" else phase
         self._ld_t0 = now
-        if getattr(self, "_ld_watchdog", None) is None:
+        if self._ld_on and getattr(self, "_ld_watchdog", None) is None:
             self._ld_watchdog = _ld_threading.Thread(
                 target=self._ld_watch, name="sft-loaddiag", daemon=True
             )
@@ -229,6 +234,8 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             raise RuntimeError("The SFT logical loader identity is missing.")
 
         started = time.monotonic()
+        self._ld_durations = {}
+        self._ld_phase = None
         self._ld_mark("iter")
         try:
             batch = next(self._sft_loader_iterator)
@@ -284,7 +291,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
                 ),
             )
         self._ld_mark("post-prepare")
-        load_seconds = time.monotonic() - started
 
         batch_size = prepared.size
         source_ids = self._source_ids(prepared, batch_size=batch_size)
@@ -330,6 +336,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
                 [[index, index + 1] for index in range(batch_size)]
             ]
             extra_info[MICRO_BATCH_LENGTHS] = [list(lengths)]
+        self._ld_mark("idle")
         envelope = StepEnvelope(
             meta=replace(
                 published_meta,
@@ -341,14 +348,11 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             source_ids=source_ids,
             field_names=tuple(field_names),
             sequence_lengths=lengths,
-            load_seconds=load_seconds,
+            # Controller blocks on this whole call; load_seconds is loader_wait.
+            load_seconds=time.monotonic() - started,
             valid_tokens=valid_tokens,
+            load_phase_seconds=dict(self._ld_durations),
         )
-        # The controller blocks on this entire call, so load_seconds -- which
-        # surfaces as loader_wait and gpu_idle_time -- has to span all of it.
-        # Measured after prepare() alone it missed publish and envelope
-        # construction, under-reporting real GPU idle by about half.
-        envelope = replace(envelope, load_seconds=time.monotonic() - started)
         self._sft_active_envelope = envelope
         self._sft_next_batch_index += 1
         return envelope

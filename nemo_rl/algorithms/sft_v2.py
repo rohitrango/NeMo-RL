@@ -270,6 +270,20 @@ class SFTSingleControllerActor:
             "valid_tokens_per_second": valid_tokens
             / max(time.monotonic() - started, 1e-12),
         }
+        phase_names = sorted(
+            {
+                phase
+                for envelope in envelopes
+                for phase in envelope.load_phase_seconds
+            }
+        )
+        for phase in phase_names:
+            values = [
+                envelope.load_phase_seconds.get(phase, 0.0) for envelope in envelopes
+            ]
+            metric_phase = phase.replace("-", "_")
+            metrics[f"loader_{metric_phase}_max"] = max(values)
+            metrics[f"loader_{metric_phase}_mean"] = statistics.fmean(values)
         packing_metadata = [
             envelope.meta.extra_info.get(ENERGON_PACKING_META_KEY)
             for envelope in envelopes

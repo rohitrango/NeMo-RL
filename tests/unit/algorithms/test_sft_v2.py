@@ -16,7 +16,12 @@ from nemo_rl.data_plane import KVBatchMeta
 _ACTOR_CLS = SFTSingleControllerActor.__ray_metadata__.modified_class
 
 
-def _envelope(rank: int, *, source_count: int = 1) -> StepEnvelope:
+def _envelope(
+    rank: int,
+    *,
+    source_count: int = 1,
+    load_phase_seconds: dict[str, float] | None = None,
+) -> StepEnvelope:
     return StepEnvelope(
         meta=KVBatchMeta(
             partition_id=f"p{rank}",
@@ -34,6 +39,14 @@ def _envelope(rank: int, *, source_count: int = 1) -> StepEnvelope:
         sequence_lengths=(8,),
         load_seconds=0.1 + rank * 0.1,
         valid_tokens=4,
+        load_phase_seconds=load_phase_seconds
+        or {
+            "iter": 0.01 + rank * 0.01,
+            "prepare": 0.02,
+            "post-prepare": 0.03,
+            "tensordict": 0.04,
+            "publish": 0.05,
+        },
     )
 
 
@@ -71,6 +84,11 @@ def test_train_step_orders_split_policy_lifecycle_and_commit() -> None:
     assert metrics["valid_tokens"] == 8
     assert metrics["source_samples"] == 3
     assert metrics["physical_packs"] == 2
+    assert metrics["loader_iter_max"] == 0.02
+    assert metrics["loader_prepare_mean"] == 0.02
+    assert metrics["loader_post_prepare_max"] == 0.03
+    assert metrics["loader_tensordict_mean"] == 0.04
+    assert metrics["loader_publish_max"] == 0.05
 
 
 def test_train_step_aborts_policy_and_loader_on_training_failure() -> None:
