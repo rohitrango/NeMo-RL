@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any, Mapping
 
 import torch
@@ -140,7 +139,12 @@ def prepare_energon_packed_batch(
         ):
             raise ValueError("One Energon physical pack has inconsistent source metadata.")
 
-        source_logs = deepcopy(source_logs_value)
+        # Shallow-copy each message dict so loss-mask writes stay local.
+        # Share token tensors and PackedTensor media with the source logs.
+        source_logs = [
+            [dict(message) for message in source_log]
+            for source_log in source_logs_value
+        ]
         if loss_mask_mode == "precomputed":
             for source_log in source_logs:
                 for message in source_log:

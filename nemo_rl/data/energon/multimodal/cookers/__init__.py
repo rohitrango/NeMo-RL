@@ -18,7 +18,7 @@ from typing import Any
 _EXPORT_MODULES = {
     "GRANARY_ENGLISH_PROMPT": ("nemo_rl.data.energon.multimodal.cookers.nemotron"),
     "cook_audio_conversation_jsonl": (
-        "nemo_rl.data.energon.multimodal.cookers.nemotron_legacy"
+        "nemo_rl.data.energon.multimodal.cookers.nemotron"
     ),
     "cook_conversation": "nemo_rl.data.energon.multimodal.cookers.generic",
     "cook_general_conversations_jsonl": (
@@ -38,13 +38,13 @@ _EXPORT_MODULES = {
         "nemo_rl.data.energon.multimodal.cookers.nemotron"
     ),
     "cook_nano_openai_messages_jsonl": (
-        "nemo_rl.data.energon.multimodal.cookers.nemotron_legacy"
+        "nemo_rl.data.energon.multimodal.cookers.nemotron"
     ),
     "cook_nano_openai_messages_offline_packed_jsonl": (
-        "nemo_rl.data.energon.multimodal.cookers.nemotron_legacy"
+        "nemo_rl.data.energon.multimodal.cookers.nemotron"
     ),
     "cook_omcat_legacy_conversation_monolithic": (
-        "nemo_rl.data.energon.multimodal.cookers.nemotron_legacy"
+        "nemo_rl.data.energon.multimodal.cookers.nemotron"
     ),
 }
 

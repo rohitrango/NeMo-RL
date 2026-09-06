@@ -148,8 +148,7 @@ COOKER_REGISTRY.register(
 COOKER_REGISTRY.register(
     "nemotron_conversation",
     import_path=(
-        "nemo_rl.data.energon.multimodal.cookers.nemotron:"
-        "cook_nemotron_conversation"
+        "nemo_rl.data.energon.multimodal.cookers.nemotron:cook_nemotron_conversation"
     ),
     version="1",
 )
@@ -195,7 +194,7 @@ COOKER_REGISTRY.register(
 COOKER_REGISTRY.register(
     "nemotron_nano_openai_messages_jsonl",
     import_path=(
-        "nemo_rl.data.energon.multimodal.cookers.nemotron_legacy:"
+        "nemo_rl.data.energon.multimodal.cookers.nemotron:"
         "cook_nano_openai_messages_jsonl"
     ),
     version="1",
@@ -203,7 +202,7 @@ COOKER_REGISTRY.register(
 COOKER_REGISTRY.register(
     "nemotron_nano_openai_messages_offline_packed_jsonl",
     import_path=(
-        "nemo_rl.data.energon.multimodal.cookers.nemotron_legacy:"
+        "nemo_rl.data.energon.multimodal.cookers.nemotron:"
         "cook_nano_openai_messages_offline_packed_jsonl"
     ),
     version="1",
@@ -211,15 +210,14 @@ COOKER_REGISTRY.register(
 COOKER_REGISTRY.register(
     "nemotron_audio_conversation_jsonl",
     import_path=(
-        "nemo_rl.data.energon.multimodal.cookers.nemotron_legacy:"
-        "cook_audio_conversation_jsonl"
+        "nemo_rl.data.energon.multimodal.cookers.nemotron:cook_audio_conversation_jsonl"
     ),
     version="1",
 )
 COOKER_REGISTRY.register(
     "nemotron_omcat_legacy_conversation_monolithic",
     import_path=(
-        "nemo_rl.data.energon.multimodal.cookers.nemotron_legacy:"
+        "nemo_rl.data.energon.multimodal.cookers.nemotron:"
         "cook_omcat_legacy_conversation_monolithic"
     ),
     version="1",

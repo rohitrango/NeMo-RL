@@ -207,47 +207,6 @@ class SFTSingleControllerActor:
         if results != [True] * self._placement_plan.logical_world_size:
             raise RuntimeError(f"Unexpected SFT loader setup results: {results!r}.")
 
-    def _record_failed_step(self, envelopes, error) -> None:
-        """Append a JSON record naming every sample in the failing batch."""
-        import json
-        import traceback
-
-        record = {
-            "step": self._save_state.total_steps,
-            "error_type": type(error).__name__,
-            "error": str(error)[:2000],
-            "traceback": traceback.format_exc()[-4000:],
-            "copies": [
-                {
-                    "logical_rank": envelope.logical_rank,
-                    "source_ids": list(envelope.source_ids),
-                    "sequence_lengths": list(envelope.sequence_lengths),
-                    "valid_tokens": envelope.valid_tokens,
-                }
-                for envelope in envelopes
-            ],
-        }
-        # Ask the loader owners to decode and write the actual batch contents.
-        try:
-            record["batch_dumps"] = self._owner_call("dump_failed_batch")
-        except Exception as dump_error:  # noqa: BLE001
-            record["batch_dumps"] = f"dump call failed: {dump_error}"
-
-        try:
-            out = Path(self._master_config.logger["log_dir"]) / "failed_steps.jsonl"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            with open(out, "a") as handle:
-                handle.write(json.dumps(record) + "\n")
-            warnings.warn(
-                f"SFTv2 step {record['step']} failed ({record['error_type']}); "
-                f"sample ids recorded in {out}",
-                stacklevel=2,
-            )
-        except Exception as write_error:  # never let logging mask the real failure
-            warnings.warn(
-                f"SFTv2 could not record the failed step: {write_error}", stacklevel=2
-            )
-
     def _load_envelopes(self) -> list[StepEnvelope]:
         futures = self._trainer.worker_group.run_all_workers_single_data(
             "load_next_sft_batch",
@@ -269,13 +228,19 @@ class SFTSingleControllerActor:
     def _run_train_step(self) -> dict[str, Any]:
         started = time.monotonic()
         envelopes = self._load_envelopes()
+        loader_wait = time.monotonic() - started
         train_started = time.monotonic()
-        self._trainer.begin_train_step(self._loss_fn)
-        self._trainer.train_placed_microbatches(
-            [envelope.meta for envelope in envelopes]
-        )
-        train_results = self._trainer.finish_train_step()
-        self._owner_call("commit_sft_batch")
+        try:
+            self._trainer.begin_train_step(self._loss_fn)
+            self._trainer.train_placed_microbatches(
+                [envelope.meta for envelope in envelopes]
+            )
+            train_results = self._trainer.finish_train_step()
+            self._owner_call("commit_sft_batch")
+        except BaseException:
+            self._trainer.abort_train_step()
+            self._owner_call("abort_sft_batch")
+            raise
 
         policy_seconds = time.monotonic() - train_started
         valid_tokens = sum(envelope.valid_tokens for envelope in envelopes)
@@ -294,8 +259,7 @@ class SFTSingleControllerActor:
             )
             - min(envelope.load_seconds for envelope in envelopes),
             "policy_time": policy_seconds,
-            "loader_wait": max(envelope.load_seconds for envelope in envelopes),
-            "gpu_idle_time": max(envelope.load_seconds for envelope in envelopes),
+            "loader_wait": loader_wait,
             "queue_depth": 1,
             "total_step_time": time.monotonic() - started,
             "valid_tokens": valid_tokens,

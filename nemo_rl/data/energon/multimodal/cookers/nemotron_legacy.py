@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Nemotron Nano text and legacy audio source cookers."""
+"""Reference copy of the Nemotron Nano text and legacy audio source cookers.
+
+Runtime wiring uses :mod:`nemo_rl.data.energon.multimodal.cookers.nemotron`.
+"""
 
 from __future__ import annotations
 
