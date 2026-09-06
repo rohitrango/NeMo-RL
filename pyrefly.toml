@@ -79,7 +79,6 @@ project-includes = [
   "nemo_rl/data/energon/multimodal/cookers/__init__.py",
   "nemo_rl/data/energon/multimodal/cookers/generic.py",
   "nemo_rl/data/energon/multimodal/cookers/nemotron.py",
-  "nemo_rl/data/energon/multimodal/cookers/nemotron_legacy.py",
   "nemo_rl/data/energon/multimodal/model_families.py",
   "nemo_rl/data/energon/multimodal/packing/__init__.py",
   "nemo_rl/data/energon/multimodal/packing/base.py",

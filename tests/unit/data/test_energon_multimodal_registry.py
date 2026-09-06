@@ -3,6 +3,7 @@ from types import ModuleType
 
 import pytest
 
+from nemo_rl.data.energon.multimodal.cookers import nemotron
 from nemo_rl.data.energon.multimodal.registry import (
     COOKER_REGISTRY,
     PACKING_REGISTRY,
@@ -10,6 +11,27 @@ from nemo_rl.data.energon.multimodal.registry import (
     LazyRegistry,
     selected_registry_identity,
 )
+
+
+@pytest.mark.parametrize(
+    ("key", "attribute"),
+    [
+        ("nemotron_nano_openai_messages_jsonl", "cook_nano_openai_messages_jsonl"),
+        (
+            "nemotron_nano_openai_messages_offline_packed_jsonl",
+            "cook_nano_openai_messages_offline_packed_jsonl",
+        ),
+        ("nemotron_audio_conversation_jsonl", "cook_audio_conversation_jsonl"),
+        (
+            "nemotron_omcat_legacy_conversation_monolithic",
+            "cook_omcat_legacy_conversation_monolithic",
+        ),
+    ],
+)
+def test_nemotron_cooker_registry_entries_resolve_from_consolidated_module(
+    key, attribute
+):
+    assert COOKER_REGISTRY.resolve(key) is getattr(nemotron, attribute)
 
 
 def test_builtin_registries_resolve_lazily_with_stable_versions():

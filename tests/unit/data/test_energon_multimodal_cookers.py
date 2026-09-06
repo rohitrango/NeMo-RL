@@ -337,3 +337,21 @@ def test_media_metadata_falls_back_when_sqlite_index_is_unreadable(error):
             raise error
 
     assert _media_metadata(_UnreadableIndexStore(), "data/example.png") == ()
+
+
+def test_media_metadata_warns_once_per_unprepared_store(capsys):
+    class _UnpreparedStore(_FakeMediaStore):
+        def get_path(self):
+            return "/data/unprepared-media"
+
+        def get_media_metadata(self, path):
+            raise RuntimeError("metadata index is missing")
+
+    store = _UnpreparedStore()
+    assert _media_metadata(store, "data/first.png") == ()
+    assert _media_metadata(store, "data/second.png") == ()
+
+    output = capsys.readouterr().out
+    assert output.count("WARNING: Dataset /data/unprepared-media") == 1
+    assert "slow metadata for data/first.png" in output
+    assert "data/second.png" not in output

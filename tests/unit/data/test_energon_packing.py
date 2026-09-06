@@ -274,6 +274,43 @@ def test_task_encoder_packed_lifecycle_and_preparation_preserve_boundaries() -> 
     )
 
 
+def test_prepare_packed_batch_shares_media_and_does_not_mutate_source_messages() -> None:
+    hooks = _hooks(capacity=16, alignment=4)
+    encoder = GenericSFTTaskEncoder(
+        adapter=_Adapter(),
+        cooker_functions=[],
+        packing_hooks=hooks,
+        include_source_ids=True,
+        tokenizer=_Tokenizer(),
+    )
+    packed = hooks.pack_selected_samples(
+        [
+            _sample("s0", 5, with_media=True),
+            _sample("s1", 3, with_media=True),
+        ]
+    )
+    raw_batch = encoder.batch([packed])
+    source_user = raw_batch["packed_message_log"][0][0][0]
+    original_media = source_user["pixel_values"]
+    original_tensor = original_media.tensors[0]
+    original_token_ids = source_user["token_ids"]
+
+    prepared = prepare_energon_packed_batch(
+        raw_batch,
+        tokenizer=_Tokenizer(),
+        only_unmask_final=False,
+    )
+
+    assert "token_loss_mask" not in source_user
+    assert source_user["pixel_values"] is original_media
+    assert source_user["pixel_values"].tensors[0] is original_tensor
+    assert source_user["token_ids"] is original_token_ids
+    assert torch.equal(
+        prepared["pixel_values"].as_tensor(),
+        torch.tensor([[1.0, 1.0], [2.0, 2.0]]),
+    )
+
+
 def test_expanded_packing_cost_sets_aligned_physical_boundaries() -> None:
     hooks = _hooks(capacity=12, alignment=4)
     sources = [

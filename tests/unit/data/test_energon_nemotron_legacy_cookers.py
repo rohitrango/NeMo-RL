@@ -14,7 +14,8 @@
 
 import pytest
 
-from nemo_rl.data.energon.multimodal.cookers.nemotron_legacy import (
+from nemo_rl.data.energon.multimodal.cookers import nemotron
+from nemo_rl.data.energon.multimodal.cookers.nemotron import (
     EMPTY_SYSTEM_CONTENT,
     LEGACY_SYSTEM_CONTENT,
     cook_audio_conversation_jsonl,
@@ -133,7 +134,10 @@ def test_audio_conversation_cooker_preserves_multi_audio_order_and_metadata():
                     "value": audio_one,
                     "metadata": {"audio_duration": 1.25},
                 },
-                "sound_1": audio_two,
+                "sound_1": {
+                    "value": audio_two,
+                    "metadata": {"audio_duration": 2.5},
+                },
                 "conversations": [
                     {"from": "human", "value": "Listen: <sound>"},
                     {"from": "gpt", "value": "Transcript"},
@@ -144,7 +148,10 @@ def test_audio_conversation_cooker_preserves_multi_audio_order_and_metadata():
 
     assert [media.modality for media in cooked.media] == ["audio", "audio"]
     assert [media.value for media in cooked.media] == [audio_one, audio_two]
-    assert cooked.media[0].metadata == (("audio_duration", 1.25),)
+    assert [media.metadata for media in cooked.media] == [
+        (("audio_duration", 1.25),),
+        (("audio_duration", 2.5),),
+    ]
     assert cooked.messages[0]["content"] == [
         {"type": "text", "text": "Listen: "},
         {"type": "audio", "media_index": 0},
@@ -157,8 +164,14 @@ def test_audio_conversation_cooker_expands_video_sound_in_visual_audio_order():
     cooked = cook_audio_conversation_jsonl(
         _sample(
             {
-                "vis_video_0": video,
-                "vis_sound_0": audio,
+                "vis_video_0": {
+                    "value": video,
+                    "metadata": {"width": 32, "height": 16},
+                },
+                "vis_sound_0": {
+                    "value": audio,
+                    "metadata": {"audio_duration": 1.0},
+                },
                 "conversations": [
                     {"from": "human", "value": "<video-sound>"},
                     {"from": "gpt", "value": "done"},
@@ -171,8 +184,13 @@ def test_audio_conversation_cooker_expands_video_sound_in_visual_audio_order():
     assert [media.value for media in cooked.media] == [video, audio]
 
 
-def test_omcat_legacy_cooker_maps_alias_tag_to_monolithic_member():
+def test_omcat_legacy_cooker_maps_alias_tag_to_monolithic_member(monkeypatch):
     audio = object()
+    monkeypatch.setattr(
+        nemotron,
+        "_primary_media",
+        lambda sample, member, **kwargs: (sample[member], ()),
+    )
     payload = {
         "speech": "legacy-field-value-is-not-the-member",
         "conversations": [
