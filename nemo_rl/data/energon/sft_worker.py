@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import gc
 import os as _ld_os
 import threading as _ld_threading
 import time
@@ -384,7 +383,6 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             partition_id=envelope.meta.partition_id,
         )
         self._sft_active_envelope = None
-        gc.collect()
 
     def abort_sft_batch(self) -> None:
         """Release the active batch after a failed policy step."""
