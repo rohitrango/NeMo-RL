@@ -141,6 +141,11 @@ def test_sft_v2_worker_publishes_sequence_alignment() -> None:
         "post-prepare",
         "tensordict",
         "publish",
+        "publish_setup",
+        "publish_register_partition",
+        "publish_source_tags",
+        "publish_put_samples",
+        "publish_batch_metadata",
     }
     assert all(value >= 0.0 for value in envelope.load_phase_seconds.values())
 

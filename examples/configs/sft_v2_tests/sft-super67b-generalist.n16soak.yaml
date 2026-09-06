@@ -27,6 +27,10 @@ policy:
       min_lr: 2.0e-06
       optimizer_cpu_offload: false
       optimizer_offload_fraction: 0.0
+      weight_decay: 0.1
+      adam_beta1: 0.9
+      adam_beta2: 0.95
+      adam_eps: 1.0e-08
     scheduler:
       lr_warmup_iters: 10
     moe_token_dispatcher_type: alltoall
@@ -37,7 +41,7 @@ policy:
       NRL_MEDIA_PATCH_DIM: '16'
       NRL_MEDIA_PREPROCESSING_MODE: patchify
       NRL_LOADDIAG: '1'
-      NCCL_DEBUG: WARN
+      CUDA_DEVICE_MAX_CONNECTIONS: '1'
     recompute_vision: false
     vision_recompute_granularity: full
     vision_recompute_method: block
@@ -56,7 +60,7 @@ data:
     nvdataset_cache_dir: /home/svc-dss/cache/nemotron
     watchdog_timeout_seconds: 1800
     num_workers: 4
-    prefetch_factor: 4
+    prefetch_factor: 2
     cache_pool_num_workers: 8
     gc_collect_every_n_steps: 100000
     model_family: nemotron
@@ -68,7 +72,7 @@ data:
         video_aug_scale_resolution_only: true
       packing:
         name: balanced_greedy_knapsack
-        buffer_size: 2048
+        buffer_size: 5000
         options:
           max_sequence_length: ${policy.max_total_sequence_length}
           sequence_length_pad_multiple: 64
@@ -86,7 +90,7 @@ data:
     - name: nemotron_nano_openai_messages_jsonl
       has_subflavors:
         cook: openai_messages_jsonl
-    seed_offset: 1234
+    seed_offset: 0
   train:
     path: /mnt/rl-workspace/rohitkumarj/data/subset_cook_v2/subset.yaml
     split: train
@@ -97,7 +101,7 @@ logger:
   log_dir: /mnt/rl-workspace/rohitkumarj/logs/sft-super67b-n16-seq524288-soak
   wandb:
     project: nemotron-super-sft
-    name: nemorl-k8s-soak16
+    name: nemorl-k8s-soak16-long
   tensorboard:
     log_dir: /mnt/rl-workspace/rohitkumarj/logs/tb-sft-super67b-n16-seq524288-soak
 cluster:

@@ -13,8 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Run the NeMo-RL cookers and the Megatron-LM reference cookers over one
-Energon subset and report where they disagree.
+"""Run NeMo-RL and Megatron-LM reference cookers over one Energon subset.
+
+Report where they disagree.
 
 Both cookers receive the same crude sample, the same stub ``FileStore``, and the
 same stub ``CachePool``, so any difference in the output is attributable to the
@@ -65,10 +66,7 @@ REFERENCE_MODULES = (
     "examples.multimodal.data_loading.cookers.omcat_legacy_audio_conversation",
 )
 # NeMo-RL modules searched for a cooker by name, in order.
-NEMO_RL_MODULES = (
-    "nemo_rl.data.energon.multimodal.cookers.nemotron",
-    "nemo_rl.data.energon.multimodal.cookers.nemotron_legacy",
-)
+NEMO_RL_MODULES = ("nemo_rl.data.energon.multimodal.cookers.nemotron",)
 
 _MEDIA = frozenset({"media_source", "aux"})
 _FULL = frozenset({"primary", "media_source", "aux"})
@@ -321,7 +319,8 @@ def normalize_reference(cooked: Any) -> dict[str, Any]:
                 {
                     "modality": modality,
                     "metadata": (
-                        None if fragment.metadata is None and not values
+                        None
+                        if fragment.metadata is None and not values
                         else _drop_nulls(values.items())
                     ),
                     "value": _value_repr(fragment.value),
@@ -360,9 +359,7 @@ def normalize_nemo_rl(cooked: Any) -> dict[str, Any]:
             }
             for ref in cooked.media
         ],
-        "loss_flags": [
-            message.get("train_on_message") for message in cooked.messages
-        ],
+        "loss_flags": [message.get("train_on_message") for message in cooked.messages],
         "subflavors": dict(cooked.__subflavors__ or {}),
         "sources": _norm_sources(cooked),
     }
@@ -370,8 +367,7 @@ def normalize_nemo_rl(cooked: Any) -> dict[str, Any]:
 
 def _text_only(parts: list[list[tuple[Any, ...]]]) -> list[str]:
     return [
-        "".join(part[1] for part in message if part[0] == "text")
-        for message in parts
+        "".join(part[1] for part in message if part[0] == "text") for message in parts
     ]
 
 
@@ -391,9 +387,7 @@ def classify_diff(ref: dict[str, Any], nrl: dict[str, Any]) -> list[str]:
         found.append("part_structure")
     if _text_only(ref["parts"]) != _text_only(nrl["parts"]):
         found.append("text")
-    if [m["modality"] for m in ref["media"]] != [
-        m["modality"] for m in nrl["media"]
-    ]:
+    if [m["modality"] for m in ref["media"]] != [m["modality"] for m in nrl["media"]]:
         found.append("media_modalities")
     if [m["metadata"] for m in ref["media"]] != [m["metadata"] for m in nrl["media"]]:
         found.append("media_metadata")
@@ -416,7 +410,11 @@ def _first_field_example(
             zip(_text_only(ref["parts"]), _text_only(nrl["parts"]))
         ):
             if a != b:
-                return {"message_index": index, "reference": a[:400], "nemo_rl": b[:400]}
+                return {
+                    "message_index": index,
+                    "reference": a[:400],
+                    "nemo_rl": b[:400],
+                }
     if category == "subflavors":
         keys = set(ref["subflavors"]) | set(nrl["subflavors"])
         return {
@@ -430,10 +428,20 @@ def _first_field_example(
     if category in ("media_metadata", "media_values", "media_modalities"):
         field = category.replace("media_", "")
         field = "modality" if field == "modalities" else field.rstrip("s")
-        field = {"metadata": "metadata", "value": "value", "modality": "modality"}[field]
+        field = {"metadata": "metadata", "value": "value", "modality": "modality"}[
+            field
+        ]
         for index in range(max(len(ref["media"]), len(nrl["media"]))):
-            left = ref["media"][index].get(field) if index < len(ref["media"]) else "<absent>"
-            right = nrl["media"][index].get(field) if index < len(nrl["media"]) else "<absent>"
+            left = (
+                ref["media"][index].get(field)
+                if index < len(ref["media"])
+                else "<absent>"
+            )
+            right = (
+                nrl["media"][index].get(field)
+                if index < len(nrl["media"])
+                else "<absent>"
+            )
             if left == right:
                 continue
             detail: dict[str, Any] = {"media_index": index}
@@ -441,11 +449,13 @@ def _first_field_example(
                 left_map = dict(left or ())
                 right_map = dict(right or ())
                 detail["only_reference"] = {
-                    key: value for key, value in left_map.items()
+                    key: value
+                    for key, value in left_map.items()
                     if right_map.get(key, "<absent>") != value
                 }
                 detail["only_nemo_rl"] = {
-                    key: value for key, value in right_map.items()
+                    key: value
+                    for key, value in right_map.items()
                     if left_map.get(key, "<absent>") != value
                 }
             else:
@@ -529,7 +539,9 @@ def run(args: argparse.Namespace) -> int:
     try:
         ref_modules = [import_module(name) for name in REFERENCE_MODULES]
     except ImportError as error:
-        print(f"cannot import the reference cookers from {args.reference_root}: {error}")
+        print(
+            f"cannot import the reference cookers from {args.reference_root}: {error}"
+        )
         return 2
     try:
         nrl_modules = [import_module(name) for name in NEMO_RL_MODULES]
@@ -577,7 +589,9 @@ def run(args: argparse.Namespace) -> int:
 
         stats = per_leaf[leaf["name"]]
         stats["cook_" + cook] = 0
-        media_store = None if leaf["media_root"] is None else StubStore(leaf["media_root"])
+        media_store = (
+            None if leaf["media_root"] is None else StubStore(leaf["media_root"])
+        )
         primary_store = StubStore(leaf["jsonl"].parent)
         aux_stores = {key: StubStore(path) for key, path in leaf["aux"].items()}
         consumed = CONSUMED_KEYS[_consumed_family(cook)]
@@ -677,15 +691,26 @@ def run(args: argparse.Namespace) -> int:
                     }
                 )
 
-    report(per_leaf, diff_categories, error_pairs, dropped_keys, skipped_cooks,
-           cache_stats, examples)
+    report(
+        per_leaf,
+        diff_categories,
+        error_pairs,
+        dropped_keys,
+        skipped_cooks,
+        cache_stats,
+        examples,
+    )
     if args.json:
         Path(args.json).write_text(
             json.dumps(
                 {
-                    "per_leaf": {name: dict(counter) for name, counter in per_leaf.items()},
+                    "per_leaf": {
+                        name: dict(counter) for name, counter in per_leaf.items()
+                    },
                     "diff_categories": dict(diff_categories),
-                    "error_pairs": {f"{a} / {b}": n for (a, b), n in error_pairs.items()},
+                    "error_pairs": {
+                        f"{a} / {b}": n for (a, b), n in error_pairs.items()
+                    },
                     "dropped_payload_keys": dict(dropped_keys),
                     "skipped_cooks": dict(skipped_cooks),
                     "cache_stats": dict(cache_stats),
@@ -700,14 +725,35 @@ def run(args: argparse.Namespace) -> int:
     totals = Counter()
     for counter in per_leaf.values():
         totals.update(counter)
-    return 1 if (totals["differ"] or totals["only_reference_raised"]
-                 or totals["only_nemo_rl_raised"]) else 0
+    return (
+        1
+        if (
+            totals["differ"]
+            or totals["only_reference_raised"]
+            or totals["only_nemo_rl_raised"]
+        )
+        else 0
+    )
 
 
-def report(per_leaf, diff_categories, error_pairs, dropped_keys, skipped_cooks,
-           cache_stats, examples) -> None:
-    columns = ("rows", "identical", "differ", "both_raised",
-               "only_reference_raised", "only_nemo_rl_raised", "source_unreadable")
+def report(
+    per_leaf,
+    diff_categories,
+    error_pairs,
+    dropped_keys,
+    skipped_cooks,
+    cache_stats,
+    examples,
+) -> None:
+    columns = (
+        "rows",
+        "identical",
+        "differ",
+        "both_raised",
+        "only_reference_raised",
+        "only_nemo_rl_raised",
+        "source_unreadable",
+    )
     width = max((len(name) for name in per_leaf), default=10)
     print("=" * (width + 76))
     print(f"{'leaf':<{width}}  " + "  ".join(f"{c[:9]:>9}" for c in columns))

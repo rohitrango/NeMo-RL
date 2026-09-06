@@ -203,7 +203,6 @@ def _subsampled_length(frame_count: int, subsampling_factor: int) -> int:
         length = (length + 1) // 2
     return max(1, length)
 
-
 def _audio_plan(
     ref: MediaRef,
     *,

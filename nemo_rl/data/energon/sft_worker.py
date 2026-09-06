@@ -108,6 +108,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         # multiple to CP, so a mismatch otherwise surfaces as a ValueError deep in
         # the first forward pass instead of here, where the fix is obvious.
         cp_size = parallel_state.get_context_parallel_world_size()
+
         # data_config["energon"] is a parsed EnergonLoaderConfig here but a plain
         # dict on other call paths, so walk it without assuming either shape.
         def _field(obj: Any, key: str) -> Any:
@@ -118,9 +119,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             return getattr(obj, key, None)
 
         pad_multiple = _field(
-            _field(
-                _field(_field(data_config, "energon"), "task_encoder"), "packing"
-            ),
+            _field(_field(_field(data_config, "energon"), "task_encoder"), "packing"),
             "options",
         )
         pad_multiple = _field(pad_multiple, "sequence_length_pad_multiple")
@@ -286,9 +285,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
                 batch,
                 tokenizer=self.tokenizer,
                 only_unmask_final=only_unmask_final,
-                make_sequence_length_divisible_by=(
-                    make_sequence_length_divisible_by
-                ),
+                make_sequence_length_divisible_by=(make_sequence_length_divisible_by),
             )
         self._ld_mark("post-prepare")
 
@@ -302,22 +299,34 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
         fields = local_batch_to_tensordict(prepared, batch_size=batch_size)
 
         self._ld_mark("publish")
+        publish_phase_started = time.monotonic()
         field_names = list(fields.keys())
         client = self._require_dp_client()
+        publish_setup = time.monotonic() - publish_phase_started
+
+        publish_phase_started = time.monotonic()
         client.register_partition(
             partition_id=partition_id,
             fields=field_names,
             num_samples=batch_size,
             consumer_tasks=["train"],
         )
+        publish_register_partition = time.monotonic() - publish_phase_started
+
+        publish_phase_started = time.monotonic()
         tags = self._source_tags(prepared, batch_size=batch_size)
+        publish_source_tags = time.monotonic() - publish_phase_started
+
+        publish_phase_started = time.monotonic()
         published_meta = client.put_samples(
             sample_ids=sample_ids,
             partition_id=partition_id,
             fields=fields,
             tags=tags,
         )
+        publish_put_samples = time.monotonic() - publish_phase_started
 
+        publish_phase_started = time.monotonic()
         lengths_tensor = prepared["input_lengths"]
         lengths = tuple(int(value) for value in lengths_tensor.tolist())
         sample_mask = prepared["sample_mask"]
@@ -336,7 +345,17 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
                 [[index, index + 1] for index in range(batch_size)]
             ]
             extra_info[MICRO_BATCH_LENGTHS] = [list(lengths)]
+        publish_batch_metadata = time.monotonic() - publish_phase_started
         self._ld_mark("idle")
+        self._ld_durations.update(
+            {
+                "publish_setup": publish_setup,
+                "publish_register_partition": publish_register_partition,
+                "publish_source_tags": publish_source_tags,
+                "publish_put_samples": publish_put_samples,
+                "publish_batch_metadata": publish_batch_metadata,
+            }
+        )
         envelope = StepEnvelope(
             meta=replace(
                 published_meta,
@@ -433,7 +452,9 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
             int(value) for value in batch["packed_schema_version"].tolist()
         }
         if len(capacities) != 1 or len(schema_versions) != 1:
-            raise ValueError("One Energon batch must use one packing schema and capacity.")
+            raise ValueError(
+                "One Energon batch must use one packing schema and capacity."
+            )
         return {
             "schema_version": schema_versions.pop(),
             "pack_count": len(pack_lengths),
@@ -446,9 +467,7 @@ class SFTMegatronPolicyWorker(MegatronPolicyWorkerImpl):
                     "cu_seqlens": boundaries.tolist(),
                     "cu_seqlens_padded": padded_boundaries.tolist(),
                 }
-                for boundaries, padded_boundaries in zip(
-                    cu_seqlens, cu_seqlens_padded
-                )
+                for boundaries, padded_boundaries in zip(cu_seqlens, cu_seqlens_padded)
             ],
         }
 
