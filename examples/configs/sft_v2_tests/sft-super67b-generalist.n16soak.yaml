@@ -1,7 +1,7 @@
 defaults: sft_vlm_nemotron_omni_30B_energon_tp4etp4_v2.yaml
 sft:
   max_num_epochs: 1
-  max_num_steps: 100
+  max_num_steps: 1000000
   max_consecutive_step_failures: 3
 policy:
   model_name: /mnt/rl-workspace/rohitkumarj/data/models/NVIDIA-Nemotron-3.5-Super-midtrain-67B-vision-pretrained
@@ -60,7 +60,7 @@ data:
   energon:
     nvdataset_cache_dir: /home/svc-dss/cache/nemotron
     watchdog_timeout_seconds: 1800
-    num_workers: 4
+    num_workers: 2
     prefetch_factor: 2
     cache_pool_num_workers: 8
     gc_collect_every_n_steps: 100000
@@ -102,7 +102,7 @@ logger:
   log_dir: /mnt/rl-workspace/rohitkumarj/logs/sft-super67b-n16-seq524288-soak
   wandb:
     project: nemotron-super-sft
-    name: nemorl-k8s-soak16-packedtensor-serialize
+    name: nemorl-k8s-soak16-packedtensor-serialize-workers2-long
   tensorboard:
     log_dir: /mnt/rl-workspace/rohitkumarj/logs/tb-sft-super67b-n16-seq524288-soak
 cluster:
