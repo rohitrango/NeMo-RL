@@ -41,6 +41,7 @@ def iter_vlm_config_overrides(
         "freeze_vision_projection",
         "freeze_sound_encoder",
         "freeze_sound_projection",
+        "truncate_num_layers",
     )
     for key in keys:
         if key in megatron_config:

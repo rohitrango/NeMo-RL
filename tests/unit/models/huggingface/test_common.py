@@ -12,9 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
+
 import pytest
 
+import nemo_rl.models.huggingface.common as common
 from nemo_rl.models.huggingface.common import ModelFlag, is_gemma_model
+
+
+def test_generic_nemotron_omni_uses_vllm_auto_load_format(monkeypatch):
+    monkeypatch.setattr(
+        common.AutoConfig,
+        "from_pretrained",
+        lambda *_args, **_kwargs: SimpleNamespace(model_type="nemotron_h_omni"),
+    )
+
+    assert ModelFlag.VLLM_LOAD_FORMAT_AUTO.matches("generic-nemotron-omni")
 
 
 @pytest.mark.hf_gated

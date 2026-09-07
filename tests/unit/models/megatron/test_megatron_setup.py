@@ -179,6 +179,25 @@ class TestValidateModelPaths:
         assert base_checkpoint_exists is False
         assert yarn_checkpoint_exists is False
 
+    def test_truncated_model_uses_distinct_pretrained_path(self, tmp_path):
+        from nemo_rl.models.megatron.setup import validate_model_paths
+
+        config = {
+            "model_name": "test-model",
+            "megatron_cfg": {"truncate_num_layers": 24},
+        }
+
+        with patch(
+            "nemo_rl.models.megatron.setup.get_megatron_checkpoint_dir",
+            return_value=str(tmp_path / "checkpoints"),
+        ):
+            _, pretrained_path, checkpoint_exists = validate_model_paths(config)
+
+        assert pretrained_path == (
+            f"{tmp_path}/checkpoints/test-model__truncate_layers_24"
+        )
+        assert checkpoint_exists is False
+
     def test_pretrained_checkpoint_megatron_bridge_valid(self, tmp_path):
         """megatron_bridge format: path must be an iter dir containing run_config.yaml."""
         from nemo_rl.models.megatron.setup import validate_model_paths

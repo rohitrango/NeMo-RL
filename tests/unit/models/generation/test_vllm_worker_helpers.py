@@ -14,13 +14,54 @@
 
 """Tests for vLLM worker helper functions."""
 
+from types import SimpleNamespace
+
 import pytest
 
+from nemo_rl.models.generation.vllm.vllm_worker import (
+    _apply_nemotron_omni_layer_truncation,
+)
 from nemo_rl.models.generation.vllm.worker_utils import (
     find_tokenizer_required_architectures,
     resolve_data_parallel_local_rank,
     resolve_distributed_executor_backend,
 )
+
+
+def test_nemotron_omni_layer_truncation_builds_nested_hf_override():
+    llm_config = SimpleNamespace(
+        layers_block_type=["mamba", "moe", "attention", "moe"],
+        to_dict=lambda: {
+            "layers_block_type": ["mamba", "moe", "attention", "moe"],
+            "num_nextn_predict_layers": 1,
+            "mtp_layers_block_type": ["attention", "moe"],
+        },
+    )
+    vllm_kwargs = {
+        "nemo_truncate_num_layers": 2,
+        "hf_overrides": {"max_position_embeddings": 1024},
+    }
+
+    _apply_nemotron_omni_layer_truncation(
+        vllm_kwargs, SimpleNamespace(llm_config=llm_config)
+    )
+
+    assert "nemo_truncate_num_layers" not in vllm_kwargs
+    target_llm_config = SimpleNamespace(
+        layers_block_type=["mamba", "moe", "attention", "moe"],
+        num_nextn_predict_layers=1,
+        mtp_layers_block_type=["attention", "moe"],
+    )
+    target_config = SimpleNamespace(
+        llm_config=target_llm_config,
+        update=lambda values: vars(target_config).update(values),
+    )
+    result = vllm_kwargs["hf_overrides"](target_config)
+
+    assert result.max_position_embeddings == 1024
+    assert result.llm_config.layers_block_type == ["mamba", "moe"]
+    assert result.llm_config.num_nextn_predict_layers == 0
+    assert result.llm_config.mtp_layers_block_type == []
 
 
 @pytest.mark.parametrize(

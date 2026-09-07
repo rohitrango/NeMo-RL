@@ -16,7 +16,10 @@ import pytest
 import torch
 from PIL import Image
 
-from nemo_rl.data.multimodal_utils import attach_image_model_inputs_to_message
+from nemo_rl.data.multimodal_utils import (
+    attach_image_model_inputs_to_message,
+    uses_image_placeholder,
+)
 
 # --------------------------------------------------------------------------
 # ragged pixel_values path in attach_image_model_inputs_to_message
@@ -55,6 +58,14 @@ class NemotronNanoVLV2Processor:
         if self._imgs_sizes is not None:
             processed["imgs_sizes"] = self._imgs_sizes
         return processed
+
+
+class NemotronH_Omni_Reasoning_V3Processor:
+    pass
+
+
+def test_generic_nemotron_omni_processor_uses_image_placeholders():
+    assert uses_image_placeholder(NemotronH_Omni_Reasoning_V3Processor())
 
 
 def _ragged(*shapes: tuple[int, ...]) -> NemotronNanoVLV2Processor:

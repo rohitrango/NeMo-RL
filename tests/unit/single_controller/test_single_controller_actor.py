@@ -1578,6 +1578,39 @@ def test_train_pump_prunes_stamps_older_than_the_step_that_just_closed(
     assert ctrl._batch_shortfall == {5: 1}
 
 
+def test_train_pump_profiles_training_and_generation_workers(monkeypatch) -> None:
+    meta = KVBatchMeta(
+        partition_id="rollout_data",
+        task_name="train",
+        sample_ids=["sample-0", "sample-1"],
+        fields=[],
+        sequence_lengths=[1, 1],
+        tags=[{"weight_version": 0}, {"weight_version": 0}],
+    )
+    ctrl = _train_pump_controller(sampler=_FullStepSampler(meta))
+    trainer = ctrl._trainer
+    generation = ctrl._gen
+    profile_calls: list[tuple[object, int]] = []
+
+    monkeypatch.setattr(
+        single_controller,
+        "maybe_gpu_profile_step",
+        lambda target, step: profile_calls.append((target, step)),
+    )
+    monkeypatch.setattr(single_controller.ray, "cluster_resources", lambda: {})
+    ctrl._sync_weights = AsyncMock(return_value=0)
+    ctrl._logger = MagicMock()
+
+    asyncio.run(asyncio.wait_for(ctrl._train_pump(), timeout=1.0))
+
+    assert len(profile_calls) == 2
+    assert {id(target) for target, _ in profile_calls} == {
+        id(trainer),
+        id(generation),
+    }
+    assert {step for _, step in profile_calls} == {1}
+
+
 @pytest.mark.parametrize(
     (
         "policy_logprobs_required",

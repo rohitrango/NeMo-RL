@@ -44,6 +44,35 @@ model_name = "Qwen/Qwen3-0.6B"
 
 
 @pytest.mark.mcore
+@pytest.mark.parametrize(
+    ("ignore_eos", "expected_termination_id"),
+    [(False, 42), (True, None)],
+)
+def test_sampling_params_can_ignore_eos(
+    monkeypatch, ignore_eos, expected_termination_id
+):
+    worker = object.__new__(MegatronGenerationMixin)
+    worker.cfg = {
+        "generation": {
+            "temperature": 1.0,
+            "top_k": None,
+            "top_p": 1.0,
+            "max_new_tokens": 8,
+            "ignore_eos": ignore_eos,
+        }
+    }
+    worker.megatron_tokenizer = SimpleNamespace(eod=42)
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.megatron.megatron_worker.SamplingParams",
+        lambda **kwargs: kwargs,
+    )
+
+    params = worker._build_sampling_params(greedy=False, stop_words=None)
+
+    assert params["termination_id"] is expected_termination_id
+
+
+@pytest.mark.mcore
 def test_multimodal_preprocessing_requires_policy_processor():
     class _ImageWrapper:
         supports_image = True

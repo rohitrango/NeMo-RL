@@ -18,8 +18,13 @@ import torch
 from PIL import Image
 
 from nemo_rl.environments.nemotron_utils import (
+    NEMOTRON_VIDEO_PROCESSOR_NAMES,
     _resize_and_normalize_nemotron_video_frame,
 )
+
+
+def test_generic_nemotron_omni_processor_uses_video_preprocessing() -> None:
+    assert "NemotronH_Omni_Reasoning_V3Processor" in NEMOTRON_VIDEO_PROCESSOR_NAMES
 
 
 @pytest.mark.vllm

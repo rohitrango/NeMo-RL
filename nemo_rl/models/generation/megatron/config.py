@@ -50,6 +50,11 @@ class MCoreGenerationSpecificArgs(TypedDict):
     materialize_only_last_token_logits: bool
     enable_chunked_prefill: bool
     enable_prefix_caching: bool
+    prefix_caching_mamba_gb: NotRequired[float]
+    prefix_caching_eviction_policy: NotRequired[Literal["ref_zero", "lru"]]
+    prefix_caching_coordinator_policy: NotRequired[
+        Literal["load_balanced", "first_prefix_block", "longest_prefix"]
+    ]
     async_sched_mode: NotRequired[Literal["legacy", "async"]]
     vision_embedding_cache_max_bytes: NotRequired[int]
     allow_stale_multimodal_embeddings: NotRequired[bool]
@@ -63,12 +68,6 @@ class MCoreGenerationSpecificArgs(TypedDict):
 
     mamba_inference_ssm_states_dtype: NotRequired[str]
     mamba_inference_conv_states_dtype: NotRequired[str]
-    prefix_caching_mamba_gb: NotRequired[int]
-
-    prefix_caching_eviction_policy: NotRequired[Literal["ref_zero", "lru"]]
-    prefix_caching_coordinator_policy: NotRequired[
-        Literal["load_balanced", "longest_prefix", "first_prefix_block"]
-    ]
     prefix_cache_ttl_seconds: NotRequired[float]
     prefix_caching_routing_alpha: NotRequired[float]
 

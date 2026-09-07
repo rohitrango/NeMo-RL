@@ -685,6 +685,13 @@ def validate_model_paths(config: PolicyConfig) -> tuple[str, str, bool]:
     if hf_config_overrides:
         overrides_hash = _get_hf_config_overrides_hash(hf_config_overrides)
         hf_model_subdir = f"{hf_model_subdir}__hfovr_{overrides_hash}"
+    truncate_num_layers = (config.get("megatron_cfg", {}) or {}).get(
+        "truncate_num_layers"
+    )
+    if truncate_num_layers is not None:
+        hf_model_subdir = (
+            f"{hf_model_subdir}__truncate_layers_{truncate_num_layers}"
+        )
     pretrained_path = os.path.join(get_megatron_checkpoint_dir(), hf_model_subdir)
     pt_checkpoint_exists = megatron_conversion_is_complete(pretrained_path)
     return hf_model_name, pretrained_path, pt_checkpoint_exists

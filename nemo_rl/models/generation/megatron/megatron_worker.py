@@ -849,7 +849,11 @@ class MegatronGenerationMixin:
             skip_prompt_log_probs=True,
             return_log_probs=True,
             num_tokens_to_generate=self.cfg["generation"]["max_new_tokens"],
-            termination_id=self.megatron_tokenizer.eod,
+            termination_id=(
+                None
+                if self.cfg["generation"].get("ignore_eos", False)
+                else self.megatron_tokenizer.eod
+            ),
             stop_words=stop_words,
             return_prompt_tokens=return_prompt_tokens,
             detokenize_stop_sequence=True,

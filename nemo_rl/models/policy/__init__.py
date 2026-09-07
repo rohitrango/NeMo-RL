@@ -368,6 +368,7 @@ class MegatronConfig(TypedDict):
     freeze_vision_projection: NotRequired[bool]
     freeze_sound_encoder: NotRequired[bool]
     freeze_sound_projection: NotRequired[bool]
+    truncate_num_layers: NotRequired[int | None]
     pipeline_dtype: str
     sequence_parallel: bool
     freeze_moe_router: bool
