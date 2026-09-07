@@ -1,0 +1,23 @@
+# Follow-up control: text-only data AND no vision work.
+#
+# Only run this if sft-super67b-text-only.n16.yaml still deadlocks. It changes
+# a second variable on top of the text-only blend, so it cannot be compared
+# directly against the generalist run -- it is a second bisection step, not an
+# alternative to the first.
+#
+# recompute_vision off removes the vision recompute path from backward, which
+# is where the run hangs (pt_autograd_0 -> cudaEventSynchronize).
+defaults: sft-super67b-text-only.n16.yaml
+policy:
+  megatron_cfg:
+    recompute_vision: false
+    freeze_vision_model: true
+    freeze_vision_projection: true
+logger:
+  log_dir: logs/sft-super67b-n16-text-only-novision
+  wandb:
+    name: sft-super67b-n16-text-only-novision
+  tensorboard:
+    log_dir: logs/sft-super67b-n16-text-only-novision
+checkpointing:
+  checkpoint_dir: /data/nemorl-runs/sft-super67b-n16-text-only-novision

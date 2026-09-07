@@ -1,0 +1,983 @@
+# Text-only SFT blend: flattened copy of
+#   /home/rohitkumarj/code/energon-megatron-lm-ref/examples/multimodal/v3p5_super_prod_run/sft_from_super35_dualds_4k_1of8_recover_iter366_radio_v4_h_text_only.yaml
+# which is the production text-only recipe (the 671b text branch of the
+# generalist blend, no vision or video leaves).
+#
+# Every leaf is a plain filesystem Energon dataset cooked by
+# nemotron_nano_openai_messages_jsonl. No dss:// paths, no `aux` media stores,
+# no aux_data_prefixes -- so this blend exercises no media decode path at all,
+# which is what makes it useful for isolating non-data failures.
+#
+# Flattened rather than copied because the source joins its leaves by relative
+# include; nested repetitions are multiplied down each chain the way Energon
+# does when it traverses.
+#
+# Generated 2026-09-04. Do not hand-edit; regenerate from the source.
+__module__: megatron.energon
+__class__: MetadatasetV2
+splits:
+  train:
+    blend_epochized:
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00000-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00000-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43578
+        orig_length: 43578
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00000-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00000-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41260
+        orig_length: 41260
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00000-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00000-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42483
+        orig_length: 42483
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00001-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00001-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43486
+        orig_length: 43486
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00001-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00001-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41356
+        orig_length: 41356
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00001-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00001-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42704
+        orig_length: 42704
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00002-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00002-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42630
+        orig_length: 42630
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00002-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00002-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42391
+        orig_length: 42391
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00002-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00002-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43131
+        orig_length: 43131
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00003-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00003-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42194
+        orig_length: 42194
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00003-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00003-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44553
+        orig_length: 44553
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00003-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00003-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43588
+        orig_length: 43588
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00004-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00004-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41504
+        orig_length: 41504
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00004-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00004-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42741
+        orig_length: 42741
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00004-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00004-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41634
+        orig_length: 41634
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00005-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00005-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41984
+        orig_length: 41984
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00005-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00005-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43123
+        orig_length: 43123
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00005-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00005-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43518
+        orig_length: 43518
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00006-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00006-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42505
+        orig_length: 42505
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00006-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00006-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44954
+        orig_length: 44954
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00006-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00006-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43341
+        orig_length: 43341
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00007-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00007-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43420
+        orig_length: 43420
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00007-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00007-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43988
+        orig_length: 43988
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00007-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00007-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42563
+        orig_length: 42563
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00008-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00008-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42993
+        orig_length: 42993
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00008-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00008-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42761
+        orig_length: 42761
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00008-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00008-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42062
+        orig_length: 42062
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00009-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00009-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44130
+        orig_length: 44130
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00009-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00009-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42094
+        orig_length: 42094
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00009-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00009-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42665
+        orig_length: 42665
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00010-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00010-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43333
+        orig_length: 43333
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00010-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00010-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41680
+        orig_length: 41680
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00010-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00010-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44153
+        orig_length: 44153
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00011-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00011-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42404
+        orig_length: 42404
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00011-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00011-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42422
+        orig_length: 42422
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00011-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00011-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43329
+        orig_length: 43329
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00012-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00012-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41676
+        orig_length: 41676
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00012-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00012-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41544
+        orig_length: 41544
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00012-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00012-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44538
+        orig_length: 44538
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00013-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00013-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41271
+        orig_length: 41271
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00013-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00013-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41797
+        orig_length: 41797
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00013-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00013-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 45061
+        orig_length: 45061
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00014-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00014-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42618
+        orig_length: 42618
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00014-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00014-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43361
+        orig_length: 43361
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00014-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00014-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44496
+        orig_length: 44496
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00015-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00015-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41946
+        orig_length: 41946
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00015-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00015-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41514
+        orig_length: 41514
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00015-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00015-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43233
+        orig_length: 43233
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00016-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00016-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41538
+        orig_length: 41538
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00016-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00016-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42671
+        orig_length: 42671
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00016-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00016-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43539
+        orig_length: 43539
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00017-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00017-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42929
+        orig_length: 42929
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00017-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00017-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42096
+        orig_length: 42096
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00017-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00017-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42880
+        orig_length: 42880
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00018-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00018-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41281
+        orig_length: 41281
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00018-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00018-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 46128
+        orig_length: 46128
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00018-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00018-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 45530
+        orig_length: 45530
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00019-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00019-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41629
+        orig_length: 41629
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00019-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00019-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42042
+        orig_length: 42042
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00019-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00019-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44672
+        orig_length: 44672
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00020-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00020-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42310
+        orig_length: 42310
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00020-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00020-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41741
+        orig_length: 41741
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00020-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00020-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44414
+        orig_length: 44414
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00021-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00021-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42609
+        orig_length: 42609
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00021-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00021-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43302
+        orig_length: 43302
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00021-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00021-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42953
+        orig_length: 42953
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00022-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00022-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42426
+        orig_length: 42426
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00022-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00022-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42459
+        orig_length: 42459
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00022-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00022-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42316
+        orig_length: 42316
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00023-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00023-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43261
+        orig_length: 43261
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00023-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00023-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41045
+        orig_length: 41045
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00023-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00023-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44305
+        orig_length: 44305
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00024-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00024-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41871
+        orig_length: 41871
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00024-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00024-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42776
+        orig_length: 42776
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00024-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00024-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42996
+        orig_length: 42996
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00025-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00025-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44612
+        orig_length: 44612
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00025-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00025-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43246
+        orig_length: 43246
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00025-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00025-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41768
+        orig_length: 41768
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00026-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00026-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42576
+        orig_length: 42576
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00026-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00026-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43706
+        orig_length: 43706
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00026-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00026-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42496
+        orig_length: 42496
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00027-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00027-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 45498
+        orig_length: 45498
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00027-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00027-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41685
+        orig_length: 41685
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00027-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00027-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 40266
+        orig_length: 40266
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00028-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00028-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44093
+        orig_length: 44093
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00028-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00028-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42114
+        orig_length: 42114
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00028-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00028-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44159
+        orig_length: 44159
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00029-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00029-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42214
+        orig_length: 42214
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00029-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00029-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43960
+        orig_length: 43960
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00029-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00029-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43433
+        orig_length: 43433
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00030-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00030-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43257
+        orig_length: 43257
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00030-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00030-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43139
+        orig_length: 43139
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00030-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00030-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42148
+        orig_length: 42148
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00031-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00031-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 43787
+        orig_length: 43787
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00031-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00031-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 40987
+        orig_length: 40987
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00031-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00031-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42591
+        orig_length: 42591
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00032-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00032-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44426
+        orig_length: 44426
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00032-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00032-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41774
+        orig_length: 41774
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00032-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00032-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41400
+        orig_length: 41400
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00033-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00033-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 40432
+        orig_length: 40432
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00033-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00033-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 44240
+        orig_length: 44240
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00033-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00033-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 41584
+        orig_length: 41584
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00034-000.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00034-000.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 40438
+        orig_length: 40438
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00034-001.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00034-001.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42329
+        orig_length: 42329
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/part-00034-002.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: part-00034-002.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 42753
+        orig_length: 42753
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/truncated-50k.materialized.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: truncated-50k.materialized.jsonl
+        cook: openai_messages_jsonl
+        length: 55241
+        orig_length: 55241
+        category: openai_messages_jsonl
+    - path: /lustre/fs1/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/abukharin/super3dot5/blending/blend_outputs/final_super3dot5_nocompaction/SFT-amigurumi-copperhead-671b_noncommercial/materialized_nocompaction/energon_all/jsonl_sources/alex_superv35_compaction.mat.combined.jsonl
+      repetitions: 1.0
+      subflavors:
+        skip_chat_template: true
+        name: alex_superv35_compaction.mat.combined.jsonl
+        cook: openai_messages_jsonl
+        length: 5000
+        orig_length: 5000
+        category: openai_messages_jsonl

@@ -1,0 +1,27 @@
+# Text-only control for the n16 generalist run.
+#
+# Changes exactly ONE thing against sft-super67b-generalist.n16dss.yaml: the
+# data blend. Everything else -- parallelism, sequence length, packing, NCCL
+# settings, the 30 minute collective watchdog -- is inherited unchanged, so a
+# difference in behaviour is attributable to the data and nothing else.
+#
+# Purpose: the n16 run deadlocks in backward on a CUDA event
+# (pt_autograd_0 -> cudaEventSynchronize inside a Python autograd node). This
+# blend has no media of any kind, so it never feeds the vision tower. If the
+# hang persists here, the media path is exonerated and the fault is in the
+# MoE/CP backward comm; if it clears, the vision path is implicated.
+#
+# Note the vision tower is still built and its settings still apply (see
+# sft-super67b-text-only-novision.n16.yaml for the follow-up that disables it).
+defaults: sft-super67b-generalist.n32dss.yaml
+data:
+  train:
+    path: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/rohitkumarj/code/RL/nemo-rl-energon-sft-prodrun/examples/configs/sft_v2_tests/sft_super35_text_only.yaml
+logger:
+  log_dir: logs/sft-super67b-n32-text-only
+  wandb:
+    name: sft-super67b-n32-text-only
+  tensorboard:
+    log_dir: logs/sft-super67b-n32-text-only
+checkpointing:
+  checkpoint_dir: /data/nemorl-runs/sft-super67b-n32-text-only

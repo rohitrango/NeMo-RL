@@ -44,7 +44,7 @@ policy:
       HF_MODULES_CACHE: /root/.cache/huggingface/modules
       NRL_MEDIA_PATCH_DIM: '16'
       NRL_MEDIA_PREPROCESSING_MODE: patchify
-      NRL_LOADDIAG: '1'
+      # NRL_LOADDIAG: '1'
       CUDA_DEVICE_MAX_CONNECTIONS: '1'
       # --- Runtime settings from the reference Nemotron prod SFT launcher
       # (sft_from_super35_..._generalist.sh:105-122). Kept in the same order.
