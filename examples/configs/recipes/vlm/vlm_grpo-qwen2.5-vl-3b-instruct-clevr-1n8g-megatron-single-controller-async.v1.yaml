@@ -1,0 +1,43 @@
+# Single-node multimodal SingleController smoke. The node is split between
+# Megatron training (4 GPUs) and non-colocated vLLM generation (4 GPUs).
+defaults: ./vlm_grpo-qwen2.5-vl-3b-instruct-clevr-1n8g-megatrontp2.v1.yaml
+
+grpo:
+  async_grpo: null
+  max_num_steps: 10
+  val_period: 0
+  val_at_start: false
+  val_at_end: false
+
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/vlm_grpo-qwen2.5-vl-3b-instruct-clevr-1n8g-megatron-single-controller-async
+
+data_plane:
+  enabled: true
+  backend: simple
+
+async_rl:
+  sampler:
+    name: in_order
+    max_lookahead_versions: 1
+  recompute_kv_cache_after_weight_updates: false
+  min_groups_for_streaming_train: ${grpo.num_prompts_per_step}
+  max_inflight_prompts: ${mul:${grpo.num_prompts_per_step}, 2}
+  max_buffered_rollouts: ${mul:${grpo.num_prompts_per_step}, 2}
+
+policy:
+  generation:
+    vllm_cfg:
+      async_engine: true
+      tensor_parallel_size: 4
+    colocated:
+      enabled: false
+      resources:
+        gpus_per_node: 4
+        num_nodes: 1
+
+logger:
+  log_dir: logs/vlm_grpo-qwen2.5-vl-3b-instruct-clevr-1n8g-megatron-single-controller-async
+  wandb:
+    name: vlm_grpo-qwen2.5-vl-3b-instruct-clevr-1n8g-megatron-single-controller-async
