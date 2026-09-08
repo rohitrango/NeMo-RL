@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
-from megatron.energon import FileStoreCachePool
+from megatron.energon import FileStoreCachePool, WorkerConfig
 
 from nemo_rl.data.energon.config import EnergonLoaderConfig, EnergonPackingOptions
 from nemo_rl.data.energon.multimodal.packing.sft import (
@@ -92,6 +92,25 @@ def _hooks(*, capacity: int = 8, alignment: int = 1):
     )
 
 
+def _select_with_worker(
+    encoder: GenericSFTTaskEncoder,
+    samples: list[EncodedSFTSample],
+    *,
+    sample_index: int = 0,
+) -> list[list[EncodedSFTSample]]:
+    worker_config = WorkerConfig(
+        rank=0,
+        world_size=1,
+        num_workers=0,
+        seed_offset=0,
+    )
+    worker_config.worker_activate(sample_index)
+    try:
+        return encoder.select_samples_to_pack(samples)
+    finally:
+        worker_config.worker_deactivate()
+
+
 def test_first_fit_is_deterministic_complete_and_capacity_bounded() -> None:
     samples = [
         _sample("s0", 6),
@@ -128,6 +147,31 @@ def test_first_fit_is_deterministic_complete_and_capacity_bounded() -> None:
         "s3",
     ]
     assert all(sum(sample.length for sample in pack) <= 8 for pack in first)
+
+
+def test_task_encoder_randomizes_pack_order_from_worker_seed() -> None:
+    encoder = GenericSFTTaskEncoder(
+        adapter=_Adapter(),
+        cooker_functions=[],
+        packing_hooks=_hooks(capacity=1),
+        include_source_ids=True,
+        tokenizer=_Tokenizer(),
+    )
+    sources = [_sample(f"s{index}", 1) for index in range(8)]
+
+    first = _select_with_worker(encoder, sources, sample_index=17)
+    repeated = _select_with_worker(encoder, sources, sample_index=17)
+    different_index = _select_with_worker(encoder, sources, sample_index=18)
+    unshuffled = [[sample.sample_key] for sample in sources]
+
+    first_keys = [[sample.sample_key for sample in pack] for pack in first]
+    repeated_keys = [[sample.sample_key for sample in pack] for pack in repeated]
+    different_keys = [
+        [sample.sample_key for sample in pack] for pack in different_index
+    ]
+    assert first_keys == repeated_keys
+    assert first_keys != unshuffled
+    assert first_keys != different_keys
 
 
 def test_first_fit_respects_alignment_groups_and_oversized_sources() -> None:
@@ -211,7 +255,7 @@ def test_task_encoder_packed_lifecycle_and_preparation_preserve_boundaries() -> 
         _sample("s1", 3, with_media=True),
     ]
     sources[0].message_log[0]["mm_token_type_ids"] = torch.tensor([1, 2, 3])
-    selected = encoder.select_samples_to_pack(sources)
+    selected = _select_with_worker(encoder, sources)
     physical = [
         encoder.pack_selected_samples(
             [encoder.postencode_sample(item) for item in pack]
@@ -393,7 +437,7 @@ def test_loader_resolves_hooks_and_v1_rejects_energon_packing() -> None:
         adapter=_Adapter(),
         include_source_ids=True,
     )
-    assert encoder.select_samples_to_pack([_sample("s0", 4)])[0][0].sample_key == "s0"
+    assert _select_with_worker(encoder, [_sample("s0", 4)])[0][0].sample_key == "s0"
     assert encoder.cookers[0].has_subflavors == {"source_schema": "openai"}
 
     data_config = {
@@ -463,7 +507,7 @@ def test_v2_loader_passes_registered_packing_buffer_to_energon(
     assert get_train_dataset.call_args.kwargs["max_samples_per_sequence"] == 100
     task_encoder = get_train_dataset.call_args.kwargs["task_encoder"]
     assert (
-        task_encoder.select_samples_to_pack([_sample("s0", 4)])[0][0].sample_key == "s0"
+        _select_with_worker(task_encoder, [_sample("s0", 4)])[0][0].sample_key == "s0"
     )
     assert get_savable_loader.call_args.kwargs["cache_pool"] is None
 

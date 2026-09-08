@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import random
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from typing import Any, ClassVar, TypeAlias
 
-from megatron.energon import Cooker, CrudeSample, DefaultTaskEncoder
+from megatron.energon import Cooker, CrudeSample, DefaultTaskEncoder, stateless
 
 from nemo_rl.data.energon.multimodal.packing import (
     EnergonPackingHooks,
@@ -78,9 +79,12 @@ class BaseSFTTaskEncoder(
             raise RuntimeError("No Energon packing implementation is configured.")
         return self._packing_hooks
 
+    @stateless(restore_seeds=True)
     def select_samples_to_pack(self, samples: list[Any]) -> list[list[Any]]:
-        """Forward pack selection to the configured packing implementation."""
-        return self._require_packing().select_samples_to_pack(samples)
+        """Select packs and randomize their emission order deterministically."""
+        packs = self._require_packing().select_samples_to_pack(samples)
+        random.shuffle(packs)
+        return packs
 
     def pack_selected_samples(self, samples: list[Any]) -> Any:
         """Forward physical pack construction to the configured implementation."""

@@ -5,6 +5,7 @@ from copy import deepcopy
 
 import pytest
 import torch
+from megatron.energon import WorkerConfig
 
 from nemo_rl.algorithms.sft import prepare_sft_batch
 from nemo_rl.data.energon.config import (
@@ -269,8 +270,13 @@ def test_task_encoder_runs_split_encode_and_batch_lifecycle_methods():
 
     assert encoder.encode_batch(batch) is batch
     assert batch["source_ids"] == ["sample-0"]
-    with pytest.raises(RuntimeError, match="No Energon packing"):
-        encoder.select_samples_to_pack([preencoded])
+    worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+    worker_config.worker_activate(0)
+    try:
+        with pytest.raises(RuntimeError, match="No Energon packing"):
+            encoder.select_samples_to_pack([preencoded])
+    finally:
+        worker_config.worker_deactivate()
 
 
 class _FakeLoader:
