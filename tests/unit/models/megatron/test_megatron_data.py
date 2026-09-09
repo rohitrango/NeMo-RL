@@ -353,14 +353,14 @@ class TestProcessMicrobatch:
         assert torch.equal(result.input_ids_cp_sharded, data["input_ids"])
         assert torch.equal(
             result.packed_seq_params.cu_seqlens_q,
-            torch.tensor([0, 3, 6], dtype=torch.int32),
+            torch.tensor([0, 4, 8], dtype=torch.int32),
         )
         assert torch.equal(
             result.packed_seq_params.cu_seqlens_q_padded,
             torch.tensor([0, 4, 8], dtype=torch.int32),
         )
         assert result.packed_seq_params.max_seqlen_q == 4
-        assert result.packed_seq_params.pad_between_seqs is True
+        assert result.packed_seq_params.pad_between_seqs is False
         assert result.attention_mask is None
         assert result.position_ids is None
 

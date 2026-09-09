@@ -874,13 +874,14 @@ def _prepare_prepacked_batch_for_megatron(
         input_ids if model_slices_context_parallel_inputs else local_input_ids
     )
     packed_seq_params = PackedSeqParams(
-        cu_seqlens_q=cu_seqlens,
-        cu_seqlens_kv=cu_seqlens,
+        # Match the physical-boundary convention used by the MLM Energon path.
+        cu_seqlens_q=cu_seqlens_padded,
+        cu_seqlens_kv=cu_seqlens_padded,
         cu_seqlens_q_padded=cu_seqlens_padded,
         cu_seqlens_kv_padded=cu_seqlens_padded,
         max_seqlen_q=max_seqlen,
         max_seqlen_kv=max_seqlen,
-        pad_between_seqs=not torch.equal(cu_seqlens, cu_seqlens_padded),
+        pad_between_seqs=False,
         qkv_format="thd",
         total_tokens=input_ids_cp_sharded.shape[1],
     )
