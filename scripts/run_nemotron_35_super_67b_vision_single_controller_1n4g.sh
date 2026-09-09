@@ -31,8 +31,12 @@ export IGNORE_EOS="${IGNORE_EOS:-true}"
 export TRAIN_GBS="${TRAIN_GBS:-$((NUM_PROMPTS_PER_STEP * NUM_GENERATIONS_PER_PROMPT))}"
 # Grad Accum ~ Step Tokens / (POLICY_DP * MAX_SEQUENCE_LENGTH * TRAIN_MICRO_BATCH_SIZE)
 export TRAIN_MICRO_BATCH_SIZE="${TRAIN_MICRO_BATCH_SIZE:-1}"
+# Maximum packed training tokens per microbatch.
+export TRAIN_MB_TOKENS="${TRAIN_MB_TOKENS:-$((TRAIN_MICRO_BATCH_SIZE * MAX_SEQUENCE_LENGTH))}"
+export LOGPROB_BATCH_SIZE="${LOGPROB_BATCH_SIZE:-${TRAIN_MICRO_BATCH_SIZE}}"
 # No precision-aware optimizer state. Use offloading esp. when computing logprobs.
 export USE_PRECISION_AWARE_OPTIMIZER="${USE_PRECISION_AWARE_OPTIMIZER:-false}"
+export PREFIX_CACHING_MAMBA_GB="${PREFIX_CACHING_MAMBA_GB:-20}"
 export ENABLE_NSYS="${ENABLE_NSYS:-false}"
 export MEGATRON_INFERENCE_LOGGING_STEP_INTERVAL="${MEGATRON_INFERENCE_LOGGING_STEP_INTERVAL:-100}"
 if [[ "${ENABLE_NSYS}" == "true" ]]; then
@@ -50,6 +54,8 @@ fi
 # Nemotron Super Omni Benchmarking (1-Node Full Model)
 exec bash "${SCRIPT_DIR}/run_nemotron_omni_multimodal_single_controller_1n4g.sh" \
   "${TRUNCATION_OVERRIDES[@]}" \
+  policy.sequence_packing.train_mb_tokens="${TRAIN_MB_TOKENS}" \
+  policy.logprob_batch_size="${LOGPROB_BATCH_SIZE}" \
   policy.megatron_cfg.optimizer.optimizer_cpu_offload=true \
   policy.megatron_cfg.optimizer.optimizer_offload_fraction=1.0 \
   policy.offload_optimizer_for_logprob=true \

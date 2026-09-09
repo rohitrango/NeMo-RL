@@ -120,6 +120,7 @@ EXTRA_OVERRIDES="${EXTRA_OVERRIDES:-}"
 REFIT_BACKEND="${REFIT_BACKEND:-nccl}"
 BUFFER_SIZE_GB="${BUFFER_SIZE_GB:-8}"
 OPTIMIZER_CPU_OFFLOAD="${OPTIMIZER_CPU_OFFLOAD:-false}"
+OVERLAP_CPU_OPTIMIZER_D2H_H2D="${OVERLAP_CPU_OPTIMIZER_D2H_H2D:-false}"
 OFFLOAD_OPTIMIZER_FOR_LOGPROB="${OFFLOAD_OPTIMIZER_FOR_LOGPROB:-false}"
 if [[ "${OPTIMIZER_CPU_OFFLOAD}" == "true" ]]; then
   OPTIMIZER_OFFLOAD_FRACTION="${OPTIMIZER_OFFLOAD_FRACTION:-1.0}"
@@ -151,7 +152,7 @@ MEGATRON_NUM_CUDA_GRAPHS="${MEGATRON_NUM_CUDA_GRAPHS:--1}"
 MEGATRON_USE_CUDA_GRAPHS_FOR_NON_DECODE="${MEGATRON_USE_CUDA_GRAPHS_FOR_NON_DECODE:-false}"
 MEGATRON_INFERENCE_LOGGING_STEP_INTERVAL="${MEGATRON_INFERENCE_LOGGING_STEP_INTERVAL:-100}"
 ENABLE_PREFIX_CACHING="${ENABLE_PREFIX_CACHING:-true}"
-PREFIX_CACHING_MAMBA_GB="${PREFIX_CACHING_MAMBA_GB:-4}"
+PREFIX_CACHING_MAMBA_GB="${PREFIX_CACHING_MAMBA_GB:-20}"
 PREFIX_CACHING_EVICTION_POLICY="${PREFIX_CACHING_EVICTION_POLICY:-lru}"
 PREFIX_CACHING_COORDINATOR_POLICY="${PREFIX_CACHING_COORDINATOR_POLICY:-longest_prefix}"
 MAMBA_INFERENCE_SSM_STATES_DTYPE="${MAMBA_INFERENCE_SSM_STATES_DTYPE:-float32}"
@@ -230,9 +231,6 @@ policy.megatron_cfg.moe_shared_expert_overlap=false \
 policy.megatron_cfg.radio_force_cpe_eval_mode=true \
 policy.megatron_cfg.clear_memory_caches_before_refit=true \
 policy.megatron_cfg.optimizer.params_dtype=float32 \
-policy.megatron_cfg.optimizer.use_precision_aware_optimizer=${USE_PRECISION_AWARE_OPTIMIZER} \
-policy.megatron_cfg.optimizer.optimizer_cpu_offload=${OPTIMIZER_CPU_OFFLOAD} \
-policy.megatron_cfg.optimizer.optimizer_offload_fraction=${OPTIMIZER_OFFLOAD_FRACTION} \
 policy.generation.mcore_generation_config.parsers=[nemotron-v3-reasoning,qwen3-coder-tool] \
 ++policy.generation.mcore_generation_config.video_num_frames=${NUM_FRAMES} \
 ++policy.generation.mcore_generation_config.video_temporal_patch_size=${TEMPORAL_PATCH_SIZE} \
@@ -434,6 +432,7 @@ policy.megatron_cfg.distributed_data_parallel_config.overlap_grad_reduce=${OVERL
 policy.megatron_cfg.distributed_data_parallel_config.overlap_param_gather=${OVERLAP_PARAM_GATHER} \
 policy.megatron_cfg.optimizer.optimizer_cpu_offload=${OPTIMIZER_CPU_OFFLOAD} \
 policy.megatron_cfg.optimizer.optimizer_offload_fraction=${OPTIMIZER_OFFLOAD_FRACTION} \
+policy.megatron_cfg.optimizer.overlap_cpu_optimizer_d2h_h2d=${OVERLAP_CPU_OPTIMIZER_D2H_H2D} \
 ${OPTIMIZER_PRECISION_OVERRIDES} \
 policy.offload_optimizer_for_logprob=${OFFLOAD_OPTIMIZER_FOR_LOGPROB} \
 policy.generation.backend=megatron \
@@ -520,7 +519,7 @@ echo "  sequence/inference-step/new tokens: ${MAX_SEQUENCE_LENGTH}/${INFERENCE_M
 echo "  generation: colocated=${COLOCATED} async=${ASYNC_GRPO} refit=${REFIT_BACKEND}"
 echo "  Megatron: transformer=${MEGATRON_TRANSFORMER_IMPL} chunked_prefill=${MEGATRON_ENABLE_CHUNKED_PREFILL} prefix_caching=${ENABLE_PREFIX_CACHING} logging_interval=${MEGATRON_INFERENCE_LOGGING_STEP_INTERVAL}"
 echo "  CUDA graphs: impl=${MEGATRON_CUDA_GRAPH_IMPL} scope=${MEGATRON_CUDA_GRAPH_SCOPE} count=${MEGATRON_NUM_CUDA_GRAPHS} non_decode=${MEGATRON_USE_CUDA_GRAPHS_FOR_NON_DECODE} moe_padding=${MOE_PAD_EXPERTS_FOR_CG}"
-echo "  optimizer: cpu_offload=${OPTIMIZER_CPU_OFFLOAD} offload_fraction=${OPTIMIZER_OFFLOAD_FRACTION} logprob_offload=${OFFLOAD_OPTIMIZER_FOR_LOGPROB}"
+echo "  optimizer: cpu_offload=${OPTIMIZER_CPU_OFFLOAD} offload_fraction=${OPTIMIZER_OFFLOAD_FRACTION} overlap_d2h_h2d=${OVERLAP_CPU_OPTIMIZER_D2H_H2D} logprob_offload=${OFFLOAD_OPTIMIZER_FOR_LOGPROB}"
 echo "  config: ${CONFIG}"
 if [[ "${TASK}" == "vstat" ]]; then
   echo "  VSTAT: repo=${HF_DATASET} rows=${NUM_DATA_ROWS} prepare=${PREPARE_VSTAT}"
