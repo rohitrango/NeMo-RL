@@ -717,6 +717,38 @@ def print_performance_metrics(
                     "Num Pending Samples",
                     None,
                 )
+        benchmark_metrics = vllm_logger_metrics.get("vllm_benchmark", {})
+        if benchmark_metrics:
+            print("    - vLLM workload benchmark:")
+            benchmark_display_metrics = (
+                ("Requests/s", "request_throughput_per_s"),
+                ("Input tokens/s", "input_token_throughput_per_s"),
+                ("Output tokens/s", "output_token_throughput_per_s"),
+                ("Mean TTFT (ms)", "mean_ttft_ms"),
+                ("P99 TTFT upper bound (ms)", "p99_ttft_ms_upper_bound"),
+                ("Mean TPOT (ms)", "mean_tpot_ms"),
+                ("P99 TPOT upper bound (ms)", "p99_tpot_ms_upper_bound"),
+                ("Mean ITL (ms)", "mean_itl_ms"),
+                ("P99 ITL upper bound (ms)", "p99_itl_ms_upper_bound"),
+                ("Mean E2E latency (ms)", "mean_e2e_latency_ms"),
+                (
+                    "P99 E2E latency upper bound (ms)",
+                    "p99_e2e_latency_ms_upper_bound",
+                ),
+            )
+            for label, metric_name in benchmark_display_metrics:
+                if metric_name in benchmark_metrics:
+                    print(f"      {label}: {benchmark_metrics[metric_name]:.2f}")
+        benchmark_metrics_per_dp = vllm_logger_metrics.get("vllm_benchmark_per_dp", {})
+        for dp_idx, dp_metrics in sorted(benchmark_metrics_per_dp.items()):
+            print(
+                f"    - vLLM DP {dp_idx}: "
+                f"requests/s={dp_metrics.get('request_throughput_per_s', 0):.2f}, "
+                f"input tokens/s={dp_metrics.get('input_token_throughput_per_s', 0):.2f}, "
+                f"output tokens/s={dp_metrics.get('output_token_throughput_per_s', 0):.2f}, "
+                f"mean TTFT={dp_metrics.get('mean_ttft_ms', 0):.2f} ms, "
+                f"mean E2E={dp_metrics.get('mean_e2e_latency_ms', 0):.2f} ms"
+            )
 
     # =====================================================
     # Throughputs
@@ -922,7 +954,7 @@ def print_performance_metrics(
 
 
 def log_generation_metrics(
-    generation_logger_metrics: dict[str, dict[int, list[Any]]],
+    generation_logger_metrics: dict[str, Any],
     step: int,
     timeline_interval: float,
     logger: Logger,
@@ -930,12 +962,33 @@ def log_generation_metrics(
     """Log generation metric timelines to every configured logger backend.
 
     Args:
-        generation_logger_metrics: Dictionary of generation logger metrics
+        generation_logger_metrics: Timeline metrics plus optional aggregate and
+            per-DP vLLM benchmark scalar dictionaries.
         step: Global step value
         timeline_interval: Interval between timeline points (in seconds)
         logger: Logger instance
     """
+    benchmark_metrics = generation_logger_metrics.get("vllm_benchmark")
+    if benchmark_metrics:
+        logger.log_metrics(
+            benchmark_metrics,
+            step=step,
+            prefix="generation_metrics/vllm_benchmark",
+        )
+
+    benchmark_metrics_per_dp = generation_logger_metrics.get(
+        "vllm_benchmark_per_dp", {}
+    )
+    for dp_idx, dp_metrics in sorted(benchmark_metrics_per_dp.items()):
+        logger.log_metrics(
+            dp_metrics,
+            step=step,
+            prefix=f"generation_metrics/vllm_benchmark/dp_{dp_idx}",
+        )
+
     for generation_metric in generation_logger_metrics.keys():
+        if generation_metric in {"vllm_benchmark", "vllm_benchmark_per_dp"}:
+            continue
         logger.log_plot_per_worker_timeline_metrics(
             generation_logger_metrics[generation_metric],
             step=step,

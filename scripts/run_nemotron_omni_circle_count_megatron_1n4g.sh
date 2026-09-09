@@ -20,9 +20,9 @@ set -euo pipefail
 NEMORL="${NEMORL:-/opt/nemo-rl}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-${NEMORL}/workspace}"
 GYM="${GYM:-${NEMORL}/3rdparty/Gym-workspace/Gym}"
-MODEL_NAME="${MODEL_NAME:-nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16}"
+MODEL_NAME="${MODEL_NAME:-/data/models/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16}"
 CONFIG="${CONFIG:-examples/configs/recipes/vlm/vlm_grpo-nemotron-omni-30ba3b-circle-count-1n4g-megatron_generation.v1.yaml}"
-GENERATION_BACKEND="${GENERATION_BACKEND:-megatron}"
+GENERATION_BACKEND="${GENERATION_BACKEND:-vllm}"
 COLOCATED="${COLOCATED:-false}"
 ASYNC_GRPO="${ASYNC_GRPO:-true}"
 
@@ -153,7 +153,7 @@ export FLASHINFER_DISABLE_VERSION_CHECK="${FLASHINFER_DISABLE_VERSION_CHECK:-1}"
 export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-10.0}"
 export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 
-MAX_STEPS="${MAX_STEPS:-5}"
+MAX_STEPS="${MAX_STEPS:-10}"
 MAX_SEQUENCE_LENGTH="${MAX_SEQUENCE_LENGTH:-4096}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-512}"
 NUM_PROMPTS="${NUM_PROMPTS:-2}"
@@ -165,12 +165,12 @@ if (( TRAIN_GBS != EXPECTED_TRAIN_GBS )); then
   exit 1
 fi
 REFIT_BACKEND="${REFIT_BACKEND:-nccl}"
-JOB_NAME="${JOB_NAME:-nemotron-omni-circle-count-${GENERATION_BACKEND}-1n4g}"
+JOB_NAME_SUFFIX="${JOB_NAME_SUFFIX:-}"
+JOB_NAME="${JOB_NAME:-nemotron-omni-circle-count-${GENERATION_BACKEND}-1n4g-${JOB_NAME_SUFFIX}}"
 EXP_NAME="${EXP_NAME:-${JOB_NAME}}"
 PRECISION_RECIPE="${PRECISION_RECIPE:-bf16}"
-WANDB_ENABLED="${WANDB_ENABLED:-false}"
+WANDB_ENABLED="${WANDB_ENABLED:-true}"
 WANDB_PROJ="${WANDB_PROJ:-mllm-rl-dev}"
-WANDB_GROUP="${WANDB_GROUP:-adlr}"
 WANDB_NAME="${WANDB_NAME:-${EXP_NAME}-${PRECISION_RECIPE}-internal-repo}"
 RESULTS_DIR="${RESULTS_DIR:-${WORKSPACE_ROOT}/results/nemo-rl-omni/${JOB_NAME}}"
 CHECKPOINTING_ENABLED="${CHECKPOINTING_ENABLED:-false}"
@@ -285,6 +285,7 @@ COMMON_OVERRIDES=(
   policy.megatron_cfg.optimizer.optimizer_cpu_offload="${OPTIMIZER_CPU_OFFLOAD}"
   policy.megatron_cfg.optimizer.optimizer_offload_fraction="${OPTIMIZER_OFFLOAD_FRACTION}"
   policy.offload_optimizer_for_logprob="${OFFLOAD_OPTIMIZER_FOR_LOGPROB}"
+  data.use_multiple_dataloader=false
 )
 if [[ -n "${EXP_AVG_DTYPE}" ]]; then
   COMMON_OVERRIDES+=("++policy.megatron_cfg.optimizer.exp_avg_dtype=${EXP_AVG_DTYPE}")
@@ -322,7 +323,6 @@ COMMON_OVERRIDES+=(
   logger.tensorboard_enabled=false
   logger.wandb.name="${WANDB_NAME}"
   logger.wandb.project="${WANDB_PROJ}"
-  +logger.wandb.entity="${WANDB_GROUP}"
 )
 
 GEN_OVERRIDES=()
@@ -353,9 +353,11 @@ else
   # total HBM; exported globally on purpose because producer and consumer must
   # agree on the chunk boundaries.
   export NRL_REFIT_BUFFER_MEMORY_RATIO="${NRL_REFIT_BUFFER_MEMORY_RATIO:-0.005}"
-  VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.5}"
+  VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.8}"
   VLLM_ENFORCE_EAGER="${VLLM_ENFORCE_EAGER:-true}"
   VLLM_MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-${MAX_SEQUENCE_LENGTH}}"
+  MOE_BACKEND="${MOE_BACKEND:-triton}"
+  ENABLE_PREFIX_CACHING="${ENABLE_PREFIX_CACHING:-false}"
   GEN_OVERRIDES=(
     policy.generation.vllm_cfg.async_engine="${ASYNC_GRPO}"
     policy.generation.vllm_cfg.skip_tokenizer_init=false
@@ -366,14 +368,14 @@ else
     ++policy.generation.vllm_cfg.cap_max_tokens_to_context=true
     policy.generation.vllm_cfg.gpu_memory_utilization="${VLLM_GPU_MEMORY_UTILIZATION}"
     policy.generation.vllm_cfg.enforce_eager="${VLLM_ENFORCE_EAGER}"
-    ++policy.generation.vllm_cfg.enable_prefix_caching=false
+    ++policy.generation.vllm_cfg.enable_prefix_caching="${ENABLE_PREFIX_CACHING}"
     policy.generation.vllm_cfg.logprobs_mode=raw_logprobs
     ++policy.generation.vllm_kwargs.limit_mm_per_prompt.image=1
     ++policy.generation.vllm_kwargs.max_num_batched_tokens="${VLLM_MAX_NUM_BATCHED_TOKENS}"
     ++policy.generation.vllm_kwargs.mamba_ssm_cache_dtype=float32
     ++policy.generation.vllm_kwargs.skip_mm_profiling=true
     ++policy.generation.vllm_kwargs.kernel_config.enable_flashinfer_autotune=false
-    ++policy.generation.vllm_kwargs.kernel_config.moe_backend=triton
+    ++policy.generation.vllm_kwargs.kernel_config.moe_backend="${MOE_BACKEND}"
     # vLLM bans these tokens rather than treating them as stop strings, which
     # Gym clears anyway.
     '++policy.generation.bad_words=["<image>","<img>","</img>","<so_embedding>","<so_start>","<so_end>"]'
@@ -389,7 +391,7 @@ echo "  inference world size: ${INFERENCE_WORLD_SIZE} (TP=${INFER_TP}, EP=${INFE
 echo "  data: train=${TRAIN_JSONL} ($(wc -l < "${TRAIN_JSONL}") rows) val=${VAL_JSONL} ($(wc -l < "${VAL_JSONL}") rows)"
 echo "  seq/new_tokens: ${MAX_SEQUENCE_LENGTH}/${MAX_NEW_TOKENS}"
 echo "  optimizer moments: exp_avg=${EXP_AVG_DTYPE:-<unset>} exp_avg_sq=${EXP_AVG_SQ_DTYPE:-<unset>} store_param_remainders=${STORE_PARAM_REMAINDERS:-<unset>}"
-echo "  W&B: ${WANDB_GROUP}/${WANDB_PROJ}/${WANDB_NAME} (enabled=${WANDB_ENABLED})"
+echo "  W&B: ${WANDB_PROJ}/${WANDB_NAME} (enabled=${WANDB_ENABLED})"
 
 exec env "${NSYS_ENV[@]}" uv run --no-sync python examples/nemo_gym/run_grpo_nemo_gym.py \
   --config "${CONFIG}" \

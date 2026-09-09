@@ -41,6 +41,11 @@ from nemo_rl.models.generation.interfaces import (
     GenerationInterface,
     GenerationOutputSpec,
 )
+from nemo_rl.models.generation.vllm.benchmark_metrics import (
+    VllmBenchmarkSnapshot,
+    merge_vllm_benchmark_snapshots,
+    summarize_vllm_benchmark_metrics,
+)
 from nemo_rl.models.generation.vllm.config import VllmConfig
 from nemo_rl.models.generation.vllm.utils import (
     aggregate_spec_decode_counters,
@@ -1397,7 +1402,7 @@ class VllmGeneration(GenerationInterface):
         ray.get(futures)
 
     def get_vllm_logger_metrics(self) -> dict[str, Any]:
-        """Collect vLLM logger metrics from vLLM workers (model-owner actors only)."""
+        """Collect timelines and aggregate/per-DP benchmark metrics from vLLM."""
         if not self.cfg["vllm_cfg"].get("enable_vllm_metrics_logger", False):
             return {}
         if not self.cfg["vllm_cfg"].get("async_engine", False):
@@ -1415,12 +1420,15 @@ class VllmGeneration(GenerationInterface):
             dp_indices.append(dp_idx)
 
         results = ray.get(futures)
-        vllm_logger_metrics: dict[str, dict[int, list[Any]]] = {
+        vllm_logger_metrics: dict[str, Any] = {
             "inflight_batch_sizes": {},  # dp_idx -> list[int]
             "num_pending_samples": {},  # dp_idx -> list[int]
             "kv_cache_usage_perc": {},  # dp_idx -> list[float]
             "generation_tokens": {},  # dp_idx -> list[int]
         }
+        benchmark_deltas: list[VllmBenchmarkSnapshot] = []
+        benchmark_elapsed_times: list[float] = []
+        benchmark_metrics_per_dp: dict[int, dict[str, float]] = {}
 
         for dp_idx, stats in zip(dp_indices, results):
             if not stats:
@@ -1439,6 +1447,24 @@ class VllmGeneration(GenerationInterface):
             generation_tokens = stats.get("generation_tokens")
             if generation_tokens:
                 vllm_logger_metrics["generation_tokens"][dp_idx] = generation_tokens
+            benchmark_delta = stats.get("vllm_benchmark_delta")
+            if benchmark_delta:
+                benchmark_elapsed_s = float(stats["vllm_benchmark_elapsed_s"])
+                benchmark_deltas.append(benchmark_delta)
+                benchmark_elapsed_times.append(benchmark_elapsed_s)
+                benchmark_metrics_per_dp[dp_idx] = summarize_vllm_benchmark_metrics(
+                    benchmark_delta,
+                    benchmark_elapsed_s,
+                )
+
+        if benchmark_deltas:
+            # DP engines run concurrently, so the longest per-engine interval is
+            # the wall-clock window for cluster-wide throughput.
+            vllm_logger_metrics["vllm_benchmark"] = summarize_vllm_benchmark_metrics(
+                merge_vllm_benchmark_snapshots(benchmark_deltas),
+                max(benchmark_elapsed_times),
+            )
+            vllm_logger_metrics["vllm_benchmark_per_dp"] = benchmark_metrics_per_dp
 
         return vllm_logger_metrics
 

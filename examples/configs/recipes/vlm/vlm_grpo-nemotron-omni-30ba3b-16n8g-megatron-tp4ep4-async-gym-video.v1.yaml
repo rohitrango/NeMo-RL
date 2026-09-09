@@ -62,6 +62,8 @@ policy:
       megatron_inference_wrapper: megatron.core.inference.model_inference_wrappers.multimodal.nemotron_omni_inference_wrapper.NemotronOmniInferenceWrapper
     vllm_cfg:
       reset_encoder_cache_after_weight_update: false
+      enable_vllm_metrics_logger: true
+      vllm_metrics_logger_interval: 0.5
       video:
         sampling_style: nemotron_vl
         num_frames: 32

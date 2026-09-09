@@ -76,6 +76,10 @@ class VllmSpecificArgs(TypedDict):
     enable_return_routed_experts: NotRequired[bool]
     # Whether to show a tqdm progress bar during generation. Defaults to vLLM's own default (True) when absent. Only applies when async_engine is False.
     use_tqdm: NotRequired[bool]
+    # Collect engine-level request, latency, throughput, queue, and KV-cache
+    # metrics for the full async rollout workload.
+    enable_vllm_metrics_logger: NotRequired[bool]
+    vllm_metrics_logger_interval: NotRequired[float]
     # By default, NeMo RL only has a Python handle to the vllm.LLM generation engine. The expose_http_server flag here will expose that generation engine as an HTTP server.
     # Exposing vLLM as a server is useful in instances where the multi-turn rollout is performed with utilities outside of NeMo RL, but the user still wants to take advantage of the refit logic in NeMo RL that keeps the policy and generation up to date.
     # Currently it will expose the /tokenize and /v1/chat/completions endpoints. Later on we may expose /v1/completions or /v1/responses.

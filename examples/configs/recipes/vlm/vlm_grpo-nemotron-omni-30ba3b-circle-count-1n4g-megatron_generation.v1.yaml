@@ -24,6 +24,7 @@ policy:
   max_total_sequence_length: 8192
   sequence_packing:
     enabled: true
+    train_mb_tokens: 2048
   megatron_cfg:
     env_vars:
       TORCH_CUDA_ARCH_LIST: '10.0'
@@ -62,7 +63,8 @@ data:
   _override_: true
   max_input_seq_length: null
   shuffle: false
-  num_workers: 0
+  num_workers: 1
+  use_multiple_dataloader: false
   train:
     data_path: 3rdparty/Gym-workspace/Gym/resources_servers/circle_count/data/example.jsonl
   validation:

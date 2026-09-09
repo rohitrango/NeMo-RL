@@ -41,6 +41,16 @@ from nemo_rl.models.generation.interfaces import (
     GenerationOutputSpec,
     verify_right_padding,
 )
+from nemo_rl.models.generation.openai_server_utils import (
+    replace_prefix_tokens,
+)
+from nemo_rl.models.generation.vllm.benchmark_metrics import (
+    VLLM_BENCHMARK_COUNTERS,
+    VLLM_BENCHMARK_HISTOGRAMS,
+    VllmBenchmarkSnapshot,
+    empty_vllm_benchmark_snapshot,
+    subtract_vllm_benchmark_snapshots,
+)
 from nemo_rl.models.generation.vllm.checkpoint_engine import (
     VllmAsyncCheckpointEngineRpcMixin,
 )
@@ -52,9 +62,6 @@ from nemo_rl.models.generation.vllm.utils import (
     pad_and_align_routed_expert_indices,
 )
 from nemo_rl.models.generation.vllm.vllm_worker import BaseVllmGenerationWorker
-from nemo_rl.models.generation.openai_server_utils import (
-    replace_prefix_tokens,
-)
 from nemo_rl.telemetry.setup import shutdown_telemetry
 
 LOGGER = logging.getLogger(__name__)
@@ -340,6 +347,8 @@ class VllmAsyncGenerationWorkerImpl(
         self.num_pending_samples: list[int] = []
         self.kv_cache_usage_perc: list[float] = []
         self.generation_tokens: list[int] = []
+        self._vllm_benchmark_baseline = self._read_vllm_benchmark_snapshot()
+        self._vllm_benchmark_start_time = time.monotonic()
 
         def _logger_loop():
             # Delay a little to let engine settle
@@ -379,16 +388,49 @@ class VllmAsyncGenerationWorkerImpl(
             flush=True,
         )
 
+    @staticmethod
+    def _read_vllm_benchmark_snapshot() -> VllmBenchmarkSnapshot:
+        """Read cumulative metrics from vLLM's in-process Prometheus registry."""
+        from vllm.v1.metrics.reader import Counter, Histogram, get_metrics_snapshot
+
+        snapshot = empty_vllm_benchmark_snapshot()
+        for metric in get_metrics_snapshot():
+            if isinstance(metric, Counter) and metric.name in VLLM_BENCHMARK_COUNTERS:
+                snapshot["counters"][metric.name] = (
+                    snapshot["counters"].get(metric.name, 0) + metric.value
+                )
+            elif (
+                isinstance(metric, Histogram)
+                and metric.name in VLLM_BENCHMARK_HISTOGRAMS
+            ):
+                target = snapshot["histograms"].setdefault(
+                    metric.name, {"count": 0, "sum": 0.0, "buckets": {}}
+                )
+                target["count"] += metric.count
+                target["sum"] += metric.sum
+                for bound, count in metric.buckets.items():
+                    target["buckets"][bound] = target["buckets"].get(bound, 0) + count
+        return snapshot
+
     def get_vllm_logger_metrics(self) -> dict[str, Any]:
         if not self.cfg["vllm_cfg"].get("enable_vllm_metrics_logger", False):
             return {}
 
+        current_benchmark_snapshot = self._read_vllm_benchmark_snapshot()
+        benchmark_end_time = time.monotonic()
         with self._vllm_metrics_lock:
             metric = {
                 "inflight_batch_sizes": copy.deepcopy(self.inflight_batch_sizes),
                 "num_pending_samples": copy.deepcopy(self.num_pending_samples),
                 "kv_cache_usage_perc": copy.deepcopy(self.kv_cache_usage_perc),
                 "generation_tokens": copy.deepcopy(self.generation_tokens),
+                "vllm_benchmark_delta": subtract_vllm_benchmark_snapshots(
+                    current_benchmark_snapshot,
+                    self._vllm_benchmark_baseline,
+                ),
+                "vllm_benchmark_elapsed_s": (
+                    benchmark_end_time - self._vllm_benchmark_start_time
+                ),
             }
         return metric
 
@@ -396,11 +438,15 @@ class VllmAsyncGenerationWorkerImpl(
         if not self.cfg["vllm_cfg"].get("enable_vllm_metrics_logger", False):
             return
 
+        benchmark_baseline = self._read_vllm_benchmark_snapshot()
+        benchmark_start_time = time.monotonic()
         with self._vllm_metrics_lock:
             self.inflight_batch_sizes = []
             self.num_pending_samples = []
             self.kv_cache_usage_perc = []
             self.generation_tokens = []
+            self._vllm_benchmark_baseline = benchmark_baseline
+            self._vllm_benchmark_start_time = benchmark_start_time
 
     async def post_init_async(self):
         self._engine_loop = asyncio.get_running_loop()

@@ -14,7 +14,7 @@
 
 import math
 from datetime import datetime
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 import torch
@@ -28,6 +28,7 @@ from nemo_rl.algorithms.utils import (
     WALL_CLOCK_EFFICIENCY_CATEGORIES,
     calculate_baseline_and_std_per_prompt,
     get_tokenizer,
+    log_generation_metrics,
     maybe_pad_last_batch,
     print_efficiency_summary,
     print_performance_metrics,
@@ -35,6 +36,45 @@ from nemo_rl.algorithms.utils import (
 from nemo_rl.data.chat_templates import COMMON_CHAT_TEMPLATES
 from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+
+
+def test_log_generation_metrics_separates_benchmark_scalars_from_timelines():
+    logger = MagicMock()
+    metrics = {
+        "inflight_batch_sizes": {0: [1, 2]},
+        "vllm_benchmark": {"mean_ttft_ms": 12.5},
+        "vllm_benchmark_per_dp": {
+            0: {"mean_ttft_ms": 10.0},
+            1: {"mean_ttft_ms": 15.0},
+        },
+    }
+
+    log_generation_metrics(metrics, step=3, timeline_interval=0.5, logger=logger)
+
+    assert logger.log_metrics.call_args_list == [
+        call(
+            {"mean_ttft_ms": 12.5},
+            step=3,
+            prefix="generation_metrics/vllm_benchmark",
+        ),
+        call(
+            {"mean_ttft_ms": 10.0},
+            step=3,
+            prefix="generation_metrics/vllm_benchmark/dp_0",
+        ),
+        call(
+            {"mean_ttft_ms": 15.0},
+            step=3,
+            prefix="generation_metrics/vllm_benchmark/dp_1",
+        ),
+    ]
+    logger.log_plot_per_worker_timeline_metrics.assert_called_once_with(
+        {0: [1, 2]},
+        step=3,
+        prefix="generation_metrics",
+        name="inflight_batch_sizes",
+        timeline_interval=0.5,
+    )
 
 
 @pytest.fixture
