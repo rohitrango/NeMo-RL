@@ -1,0 +1,50 @@
+# SingleController requires dedicated generation resources. The inherited
+# TP8/EP8 trainer needs two nodes for DP=2, so reserve a third 8-GPU node for
+# one async vLLM generation replica.
+defaults: ./vlm_grpo-nemotron-omni-30ba3b-clevr-2n8g-megatron-tp8ep8.v1.yaml
+
+grpo:
+  async_grpo: null
+  max_num_steps: 10
+  val_period: 0
+  val_at_start: false
+  val_at_end: false
+
+loss_fn:
+  use_importance_sampling_correction: true
+
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/vlm_grpo-nemotron-omni-30ba3b-clevr-3n8g-megatron-tp8ep8-single-controller-async
+
+data_plane:
+  enabled: true
+  backend: simple
+
+async_rl:
+  sampler:
+    name: in_order
+    max_lookahead_versions: 1
+  recompute_kv_cache_after_weight_updates: false
+  min_groups_for_streaming_train: ${grpo.num_prompts_per_step}
+  max_inflight_prompts: ${mul:${grpo.num_prompts_per_step}, 2}
+  max_buffered_rollouts: ${mul:${grpo.num_prompts_per_step}, 2}
+
+policy:
+  is_vlm: true
+  generation:
+    vllm_cfg:
+      async_engine: true
+    colocated:
+      enabled: false
+      resources:
+        gpus_per_node: 8
+        num_nodes: 1
+
+logger:
+  log_dir: logs/vlm_grpo-nemotron-omni-30ba3b-clevr-3n8g-megatron-tp8ep8-single-controller-async
+  wandb:
+    name: vlm_grpo-nemotron-omni-30ba3b-clevr-3n8g-megatron-tp8ep8-single-controller-async
+
+cluster:
+  num_nodes: 3

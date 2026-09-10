@@ -4,7 +4,7 @@ defaults: ./vlm_grpo-qwen2.5-vl-3b-instruct-clevr-1n8g-megatrontp2.v1.yaml
 
 grpo:
   async_grpo: null
-  max_num_steps: 10
+  max_num_steps: 10000
   val_period: 0
   val_at_start: false
   val_at_end: false
@@ -27,6 +27,7 @@ async_rl:
   max_buffered_rollouts: ${mul:${grpo.num_prompts_per_step}, 2}
 
 policy:
+  is_vlm: true
   generation:
     vllm_cfg:
       async_engine: true
