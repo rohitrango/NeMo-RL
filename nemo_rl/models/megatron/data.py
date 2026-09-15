@@ -414,7 +414,14 @@ def _prepare_prepacked(
     data: BatchedDataDict[Any],
     *,
     model_slices_context_parallel_inputs: bool,
-) -> tuple[torch.Tensor, torch.Tensor, PackedSeqParams, torch.Tensor]:
+    mtp_enabled: bool = False,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    PackedSeqParams,
+    torch.Tensor,
+    Optional[torch.Tensor],
+]:
     input_ids = data["input_ids"]
     if not torch.is_tensor(input_ids) or input_ids.shape[0] != 1:
         raise ValueError("Prepacked input_ids must contain one physical row.")
@@ -442,10 +449,24 @@ def _prepare_prepacked(
     input_ids_cp_sharded = (
         input_ids if model_slices_context_parallel_inputs else local_input_ids
     )
-    # Keep physical boundaries in cu_seqlens_q as well as cu_seqlens_q_padded.
-    # MTP loss rolling still has consumers that use cu_seqlens_q as the wrap
-    # boundary, so logical boundaries can roll into padding or the next source.
+    position_ids = None
+    if mtp_enabled:
+        full_position_ids = torch.zeros_like(input_ids)
+        for physical_start, source_length in zip(padded[:-1], source_lengths):
+            source_length = int(source_length)
+            physical_start = int(physical_start)
+            full_position_ids[:, physical_start : physical_start + source_length] = (
+                torch.arange(source_length, device=input_ids.device)
+            )
+        position_ids = (
+            full_position_ids
+            if model_slices_context_parallel_inputs
+            else _slice_prepacked_for_cp(full_position_ids, padded)
+        )
     params = PackedSeqParams(
+        # Keep the attention output in the physical THD layout. Transformer
+        # Engine otherwise compacts it to the logical token count, which no
+        # longer matches the sequence-parallel residual stream.
         cu_seqlens_q=padded,
         cu_seqlens_kv=padded,
         cu_seqlens_q_padded=padded,
@@ -456,7 +477,7 @@ def _prepare_prepacked(
         qkv_format="thd",
         total_tokens=input_ids_cp_sharded.shape[1],
     )
-    return input_ids, input_ids_cp_sharded, params, padded
+    return input_ids, input_ids_cp_sharded, params, padded, position_ids
 
 
 def process_microbatch(
@@ -534,11 +555,13 @@ def process_microbatch(
                     input_ids_cp_sharded,
                     packed_seq_params,
                     cu_seqlens_padded,
+                    position_ids,
                 ) = _prepare_prepacked(
                     data_dict,
                     model_slices_context_parallel_inputs=(
                         model_slices_context_parallel_inputs
                     ),
+                    mtp_enabled=mtp_enabled,
                 )
                 if "mtp_loss_mask" in data_dict:
                     mtp_loss_mask = data_dict["mtp_loss_mask"]
@@ -552,7 +575,6 @@ def process_microbatch(
                         media_token_validity_mask = _slice_prepacked_for_cp(
                             media_token_validity_mask, cu_seqlens_padded
                         )
-                position_ids = None
                 attention_mask = None
             elif delegate_pack_to_model:
                 has_mtp_loss_mask = "mtp_loss_mask" in data_dict

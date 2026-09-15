@@ -407,7 +407,7 @@ class TestProcessMicrobatch:
         "nemo_rl.models.megatron.data.get_context_parallel_world_size", return_value=1
     )
     @patch("nemo_rl.models.megatron.data._pack_sequences_for_megatron")
-    def test_process_microbatch_uses_prepacked_physical_boundaries(
+    def test_process_microbatch_uses_physical_boundaries_and_builds_mtp_positions(
         self, mock_pack, mock_cp_world, mock_cp_rank
     ):
         from nemo_rl.models.megatron.data import process_microbatch
@@ -417,6 +417,7 @@ class TestProcessMicrobatch:
             data,
             seq_length_key="input_lengths",
             pack_sequences=True,
+            mtp_enabled=True,
         )
 
         mock_pack.assert_not_called()
@@ -425,7 +426,15 @@ class TestProcessMicrobatch:
             result.packed_seq_params.cu_seqlens_q,
             torch.tensor([0, 4, 8], dtype=torch.int32),
         )
+        assert torch.equal(
+            result.packed_seq_params.cu_seqlens_q_padded,
+            torch.tensor([0, 4, 8], dtype=torch.int32),
+        )
         assert result.packed_seq_params.pad_between_seqs is False
+        assert torch.equal(
+            result.position_ids,
+            torch.tensor([[0, 1, 2, 0, 0, 1, 2, 0]]),
+        )
 
     @patch("nemo_rl.models.megatron.data.get_context_parallel_rank", return_value=0)
     @patch(
