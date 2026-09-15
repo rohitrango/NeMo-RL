@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
@@ -33,6 +34,7 @@ from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (
     GenericSFTTaskEncoder,
     HFMultimodalSFTProcessorAdapter,
     SFTProcessorAdapter,
+    log_multimodal_diagnostic,
     _normalize_messages,
 )
 from nemo_rl.data.energon.multimodal.task_encoders.media import (
@@ -450,6 +452,7 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
             add_eos=add_eos,
             add_generation_prompt=add_generation_prompt,
         )
+        self._logged_multimodal_diagnostic = False
         feature_extractor = getattr(processor, "feature_extractor", None)
         target_sampling_rate = getattr(feature_extractor, "sampling_rate", None)
         if target_sampling_rate is None:
@@ -852,6 +855,21 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
                     key: PackedTensor.merge_segments(values)
                     for key, values in keyed_inputs.items()
                 }
+            )
+        if (
+            os.environ.get("NRL_SFT_MULTIMODAL_DIAGNOSTICS") == "1"
+            and not self._logged_multimodal_diagnostic
+            and sample.visual_plans
+        ):
+            self._logged_multimodal_diagnostic = True
+            log_multimodal_diagnostic(
+                processor=self.processor,
+                sample_key=sample.sample_key,
+                message_log=message_log,
+                source_image_placeholders=len(sample.visual_plans),
+                planned_image_positions=sum(
+                    plan.total_embeddings for plan in sample.visual_plans
+                ),
             )
         return EncodedSFTSample.derive_from(
             sample,
