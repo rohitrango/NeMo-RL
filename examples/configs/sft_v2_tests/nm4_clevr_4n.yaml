@@ -3,7 +3,7 @@ defaults:
 
 sft:
   max_num_epochs: 1
-  max_num_steps: 20
+  max_num_steps: 20000
   max_consecutive_step_failures: 3
 
 policy:
@@ -12,7 +12,7 @@ policy:
   # Energon and Megatron must use the matching 262k Pixtral processor tokenizer.
   tokenizer:
     name: /data/nemotron4/processor
-    # The bundled template accepts text strings only. CLEVR uses OpenAI-style
+    # The Pixtral template accepts text strings only. CLEVR uses OpenAI-style
     # content lists, so render image parts as Pixtral placeholders first.
     chat_template: |-
       {%- macro render_content(content) -%}
@@ -43,11 +43,19 @@ policy:
   megatron_cfg:
     context_parallel_size: 1
     expert_model_parallel_size: 16
+    # Match the source NM4 training recipe: train the language model and
+    # projector, but keep the pretrained vision tower fixed.
+    freeze_vision_encoder: true
+    freeze_vision_projector: false
+    optimizer:
+      # Match the stable VLM smoke recipes while using a much smaller batch
+      # than the source NM4 training run.
+      lr: 5.0e-06
     # The checkpoint pins FlashAttention, but FA2 rejects NM4's 256-wide heads
     # on sm103. Let Transformer Engine select a supported backend per layer.
     attention_backend: auto
     env_vars:
-      # FLA's TileLang KDA backward faults on sm103; use its Triton fallback.
+      # GDP's shared TileLang gated-delta backward faults on sm103; use Triton.
       FLA_TILELANG: "0"
       # Log one encoded sample per data-parallel loader to verify image expansion.
       NRL_SFT_MULTIMODAL_DIAGNOSTICS: "1"
