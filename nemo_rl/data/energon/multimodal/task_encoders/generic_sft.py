@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import random
 from collections.abc import Sequence
 from copy import deepcopy
@@ -47,9 +49,12 @@ from nemo_rl.data.energon.multimodal.types import (
 )
 from nemo_rl.data.interfaces import TaskDataSpec
 from nemo_rl.data.llm_message_utils import get_formatted_message_log
-from nemo_rl.data.multimodal_utils import PackedTensor
+from nemo_rl.data.multimodal_utils import PackedTensor, image_patch_dim
 from nemo_rl.data.packing import SequencePacker
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+
+
+logger = logging.getLogger(__name__)
 
 
 class SFTProcessorAdapter(Protocol):
@@ -204,6 +209,7 @@ class HFMultimodalSFTProcessorAdapter:
             "utf-8"
         )
         self._fingerprint = hashlib.sha256(encoded).hexdigest()
+        self._logged_multimodal_diagnostic = False
 
     @property
     def fingerprint(self) -> str:
@@ -220,6 +226,111 @@ class HFMultimodalSFTProcessorAdapter:
             add_generation_prompt=self.add_generation_prompt,
             tools=sample.tools,
         )
+        image_parts = sum(
+            part.get("type") == "image"
+            for message in messages
+            if isinstance(message.get("content"), list)
+            for part in message["content"]
+        )
+        if (
+            os.environ.get("NRL_SFT_MULTIMODAL_DIAGNOSTICS") == "1"
+            and not self._logged_multimodal_diagnostic
+            and image_parts
+        ):
+            self._logged_multimodal_diagnostic = True
+            tokenizer = self.processor.tokenizer
+            token_ids = torch.cat(
+                [message["token_ids"].reshape(-1).cpu() for message in message_log]
+            )
+            special_token_counts = {}
+            for name in ("image_token", "image_break_token", "image_end_token"):
+                token = getattr(self.processor, name, None)
+                token_id = getattr(self.processor, f"{name}_id", None)
+                if token is not None and isinstance(token_id, int):
+                    special_token_counts[token] = {
+                        "id": token_id,
+                        "count": int((token_ids == token_id).sum().item()),
+                    }
+
+            image_sizes: list[list[int]] = []
+            multimodal_shapes: dict[str, list[list[int]]] = {}
+            for message in message_log:
+                for key, value in message.items():
+                    if not isinstance(value, PackedTensor):
+                        continue
+                    tensors = [tensor for tensor in value.tensors if tensor is not None]
+                    multimodal_shapes.setdefault(key, []).extend(
+                        [list(tensor.shape) for tensor in tensors]
+                    )
+                    if key in ("imgs_sizes", "image_sizes") and not image_sizes:
+                        for tensor in tensors:
+                            image_sizes.extend(
+                                tensor.reshape(-1, 2).to(dtype=torch.int64).tolist()
+                            )
+
+            patch_size = image_patch_dim(self.processor)
+            spatial_merge_size = int(getattr(self.processor, "spatial_merge_size", 1))
+            merged_patch_size = patch_size * spatial_merge_size
+            raw_patches = sum(
+                (height // patch_size) * (width // patch_size)
+                for height, width in image_sizes
+            )
+            merged_image_positions = sum(
+                (height // merged_patch_size) * (width // merged_patch_size)
+                for height, width in image_sizes
+            )
+            shown_ids = token_ids[:512].tolist()
+            image_token_id = getattr(self.processor, "image_token_id", None)
+            expanded_image_tokens = (
+                int((token_ids == image_token_id).sum().item())
+                if isinstance(image_token_id, int)
+                else None
+            )
+            logger.info(
+                "SFT multimodal diagnostic: %s",
+                json.dumps(
+                    {
+                        "sample": sample.__key__,
+                        "processor": type(self.processor).__name__,
+                        "processor_name": getattr(self.processor, "name_or_path", None),
+                        "tokenizer_name": getattr(tokenizer, "name_or_path", None),
+                        "source_image_placeholders": image_parts,
+                        "processed_images": len(image_sizes),
+                        "placeholder_image_match": image_parts == len(image_sizes),
+                        "image_sizes": image_sizes,
+                        "patch_size": patch_size,
+                        "spatial_merge_size": spatial_merge_size,
+                        "raw_vision_patches": raw_patches,
+                        "merged_image_positions": merged_image_positions,
+                        "image_token_patch_match": expanded_image_tokens
+                        == merged_image_positions,
+                        "special_token_counts": special_token_counts,
+                        "multimodal_shapes": multimodal_shapes,
+                        "turns": [
+                            {
+                                "role": message["role"],
+                                "token_count": len(message["token_ids"]),
+                                "decoded": tokenizer.decode(
+                                    message["token_ids"].tolist(),
+                                    skip_special_tokens=False,
+                                    clean_up_tokenization_spaces=False,
+                                ),
+                            }
+                            for message in message_log
+                        ],
+                        "token_count": len(token_ids),
+                        "shown_token_count": len(shown_ids),
+                        "token_ids": shown_ids,
+                        "tokens": tokenizer.convert_ids_to_tokens(shown_ids),
+                        "decoded": tokenizer.decode(
+                            shown_ids,
+                            skip_special_tokens=False,
+                            clean_up_tokenization_spaces=False,
+                        ),
+                    },
+                    default=str,
+                ),
+            )
         length = sum(len(message["token_ids"]) for message in message_log)
         loss_multiplier = 1.0
         if length >= self.max_sequence_length:

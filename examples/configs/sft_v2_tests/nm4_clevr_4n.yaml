@@ -49,6 +49,8 @@ policy:
     env_vars:
       # FLA's TileLang KDA backward faults on sm103; use its Triton fallback.
       FLA_TILELANG: "0"
+      # Log one encoded sample per data-parallel loader to verify image expansion.
+      NRL_SFT_MULTIMODAL_DIAGNOSTICS: "1"
     # The checkpoint was saved with MXFP8 defaults. TP=4 produces a local GDP
     # projection dimension of 4632, which is not divisible by MXFP8's block
     # size of 32. Run this correctness smoke test in BF16.
