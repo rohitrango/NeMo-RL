@@ -202,7 +202,9 @@ fi
 # NOTE: LOG_DIR must be on a shared filesystem visible to both the submit host and
 # all compute nodes. File-based signaling between the submit host and the containers
 # (STARTED_RAY_HEAD, ray_worker_units, ENDED, sandbox readiness) relies on this.
-BASE_LOG_DIR=${BASE_LOG_DIR:-$SLURM_SUBMIT_DIR}
+SUBMIT_DIR=${SUBMIT_DIR:-$SLURM_SUBMIT_DIR}
+BASE_LOG_DIR=${BASE_LOG_DIR:-$SUBMIT_DIR}
+CONTAINER_WORKDIR=${CONTAINER_WORKDIR:-$SUBMIT_DIR}
 # On a Slurm requeue/restart, suffix the restart count so we don't clobber the
 # previous attempt's logs (and signal files) under the same job ID.
 if [[ -n "${SLURM_RESTART_COUNT:-}" ]]; then
@@ -261,7 +263,7 @@ COMMON_SRUN_ARGS+=" --no-container-mount-home"
 COMMON_SRUN_ARGS+=" --mpi=pmix"
 COMMON_SRUN_ARGS+=" --container-mounts=$MOUNTS"
 COMMON_SRUN_ARGS+=" --container-image=$CONTAINER"
-COMMON_SRUN_ARGS+=" --container-workdir=$SLURM_SUBMIT_DIR"
+COMMON_SRUN_ARGS+=" --container-workdir=$CONTAINER_WORKDIR"
 # Pass partition/account explicitly for overlapping srun calls.
 COMMON_SRUN_ARGS+=" -p $SLURM_JOB_PARTITION"
 COMMON_SRUN_ARGS+=" -A $SLURM_JOB_ACCOUNT"
@@ -1132,7 +1134,7 @@ else
   log_phase "generating attach helper (scontrol show job)"
   CONTAINER_CWD=$(scontrol show job $SLURM_JOB_ID | grep -oP 'WorkDir=\K[^ ]+' | head -1)
   echo "[INFO]: Ray Cluster is idled, run this on the slurm head node to get a shell to the head node:"
-  cat <<EOF >$SLURM_SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh
+  cat <<EOF >$SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh
 # No args launches on the head node (node 0)
 # Args 1-N launch on worker nodes (nodes 1 through N-1)
 # Optional: set COMMAND='...' to run non-interactively instead of opening an interactive shell
@@ -1162,12 +1164,12 @@ else
   fi
 fi
 EOF
-  chmod +x $SLURM_SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh
-  echo "     COMMAND='echo hello' bash $SLURM_SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh    # run a non-interactive command on head node"
-  echo "     bash $SLURM_SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh    # to attach to head node (i.e., 'worker 0')"
+  chmod +x $SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh
+  echo "     COMMAND='echo hello' bash $SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh    # run a non-interactive command on head node"
+  echo "     bash $SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh    # to attach to head node (i.e., 'worker 0')"
   if [[ $SLURM_JOB_NUM_NODES -gt 1 ]]; then
-    echo "     bash $SLURM_SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh 1  # to attach to worker 1"
-    echo "     bash $SLURM_SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh 2  # to attach to worker 2, etc."
+    echo "     bash $SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh 1  # to attach to worker 1"
+    echo "     bash $SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh 2  # to attach to worker 2, etc."
   fi
   sleep infinity
 fi
