@@ -47,9 +47,6 @@ from megatron.core.models.gpt.gpt_layer_specs import (
 )
 from megatron.core.resharding.copy_services.gloo_copy_service import GlooCopyService
 from megatron.core.resharding.copy_services.nccl_copy_service import NCCLCopyService
-from megatron.core.resharding.copy_services.nccl_m2n_copy_service import (
-    NCCLM2NCopyService,
-)
 from megatron.core.resharding.refit import (
     prepare_swap_model_weights,
     swap_model_weights,
@@ -111,6 +108,18 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     is_nccl_reshard_param,
     restore_refit_info_placements,
 )
+
+NCCLM2NCopyService: Any | None
+try:
+    from megatron.core.resharding.copy_services.nccl_m2n_copy_service import (
+        NCCLM2NCopyService,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != (
+        "megatron.core.resharding.copy_services.nccl_m2n_copy_service"
+    ):
+        raise
+    NCCLM2NCopyService = None
 
 
 def _inference_optimized_transformer_layer_spec(config: Any) -> Any:
@@ -1306,6 +1315,11 @@ class MegatronGenerationRefitMixin:
                 "nccl_m2n"; "nvshmem" is currently broken, see the issue
                 below).
         """
+        if refit_backend == "nccl_m2n" and NCCLM2NCopyService is None:
+            raise ModuleNotFoundError(
+                'refit_backend="nccl_m2n" requires a Megatron-LM revision that '
+                "provides NCCLM2NCopyService."
+            )
         if refit_backend == "nvshmem":
             warnings.warn(
                 'refit_backend="nvshmem" is currently broken; prefer "nccl" or '
@@ -1393,6 +1407,7 @@ class MegatronGenerationRefitMixin:
 
             self.refit_copy_service = NVSHMEMCopyService(group=self.refit_pg)
         elif refit_backend == "nccl_m2n":
+            assert NCCLM2NCopyService is not None
             self.refit_copy_service = NCCLM2NCopyService(group=self.refit_pg)
         elif refit_backend == "nccl":
             self.refit_copy_service = NCCLCopyService(group=self.refit_pg)

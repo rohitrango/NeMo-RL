@@ -12,12 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from dataclasses import replace
 from typing import Any, Callable
 
 import torch
-from megatron.core.inference.config import ImageProcessingConfig, VideoProcessingConfig
+from megatron.core.inference import config as mcore_inference_config
+from megatron.core.inference.config import ImageProcessingConfig
 from megatron.core.inference.utils import device_memory_summary
+
+VideoProcessingConfig = getattr(
+    mcore_inference_config, "VideoProcessingConfig", None
+)
 
 
 def sample_vision_tensors(data, index: int):
@@ -220,6 +227,11 @@ def build_video_preprocessing_config(
     video_num_frames = generation_config.get("video_num_frames")
     if image_config is None or video_num_frames is None:
         return None
+    if VideoProcessingConfig is None:
+        raise ModuleNotFoundError(
+            "Megatron video generation requires a Megatron-LM revision that "
+            "provides VideoProcessingConfig."
+        )
 
     # Video configs.
     video_kwargs: dict[str, Any] = {}

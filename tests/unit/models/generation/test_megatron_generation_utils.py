@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from nemo_rl.models.generation.megatron import utils as megatron_utils
 from nemo_rl.models.generation.megatron.utils import (
     build_image_preprocessing_config,
     build_video_preprocessing_config,
@@ -138,6 +139,25 @@ def test_build_video_config_is_not_enabled_by_temporal_patch_size_alone():
     )
 
 
+@pytest.mark.skipif(
+    megatron_utils.VideoProcessingConfig is not None,
+    reason="Megatron-LM provides VideoProcessingConfig",
+)
+def test_build_video_config_rejects_missing_mcore_support():
+    image_config = build_image_preprocessing_config(_image_processor())
+
+    with pytest.raises(ModuleNotFoundError, match="provides VideoProcessingConfig"):
+        build_video_preprocessing_config(
+            image_config,
+            {"video_num_frames": 8},
+            frame_manifest_magic=b"manifest",
+        )
+
+
+@pytest.mark.skipif(
+    megatron_utils.VideoProcessingConfig is None,
+    reason="Megatron-LM does not provide VideoProcessingConfig",
+)
 def test_build_video_config_uses_default_temporal_patch_size():
     image_config = build_image_preprocessing_config(_image_processor())
 
@@ -152,6 +172,10 @@ def test_build_video_config_uses_default_temporal_patch_size():
     assert video_config.temporal_patch_size == 1
 
 
+@pytest.mark.skipif(
+    megatron_utils.VideoProcessingConfig is None,
+    reason="Megatron-LM does not provide VideoProcessingConfig",
+)
 def test_build_video_config_overrides_patch_budget_without_mutating_image_config():
     image_config = build_image_preprocessing_config(_image_processor())
 

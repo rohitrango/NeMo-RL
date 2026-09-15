@@ -180,6 +180,25 @@ def test_mcore_nccl_m2n_builds_hybrid_group_and_copy_service(
     )
 
 
+def test_mcore_nccl_m2n_rejects_missing_copy_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.generation.megatron import megatron_worker as worker_module
+
+    worker = object.__new__(worker_module.MegatronGenerationRefitMixin)
+    monkeypatch.setattr(worker_module, "NCCLM2NCopyService", None)
+
+    with pytest.raises(ModuleNotFoundError, match="provides NCCLM2NCopyService"):
+        worker.init_collective_mcore_generation(
+            "127.0.0.1",
+            1234,
+            4,
+            rank_offset=2,
+            refit_execution_batch_bytes=123,
+            refit_backend="nccl_m2n",
+        )
+
+
 def test_megatron_fp8_refit_tasks_match_payload_mode() -> None:
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
