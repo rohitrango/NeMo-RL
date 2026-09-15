@@ -24,6 +24,7 @@ from nemo_rl.data.multimodal_utils import (
     PackedTensor,
     encode_multimodal_for_wire,
     get_preprocess,
+    image_patch_dim,
     multimodal_row_tags,
     reassemble_packed_multimodal,
     uses_image_placeholder,
@@ -64,6 +65,7 @@ def test_packed_data_basic():
         "NemotronH_Nano_Omni_Reasoning_V3Processor",
         "NemotronH_Super_Omni_Reasoning_V3Processor",
         "NemotronH_Omni_Reasoning_V3Processor",
+        "PixtralProcessor",
     ],
 )
 def test_placeholder_processors_use_patchify(processor_name):
@@ -78,6 +80,25 @@ def test_placeholder_processors_use_patchify(processor_name):
         "preprocess_mode": None,
         "preprocess_kwargs": {},
     }
+
+
+def test_image_patch_dim_reads_processor_patch_size():
+    processor = type("PixtralProcessor", (), {"patch_size": 14})()
+
+    assert image_patch_dim(processor) == 14
+    assert get_preprocess(processor, "pixel_values") == {
+        "preprocess_mode": "patchify",
+        "preprocess_kwargs": {"patch_dim": 14},
+    }
+
+
+def test_image_patch_dim_reads_nested_image_processor():
+    image_processor = type("PixtralImageProcessor", (), {"patch_size": 14})()
+    processor = type(
+        "PixtralProcessor", (), {"image_processor": image_processor}
+    )()
+
+    assert image_patch_dim(processor) == 14
 
 
 def test_shard_by_batch_size_with_packed_data():

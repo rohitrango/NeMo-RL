@@ -71,8 +71,10 @@ _PLACEHOLDER_STYLE_PROCESSOR_NAMES = frozenset(
         "NemotronH_Nano_Omni_Reasoning_V3Processor",
         "NemotronH_Super_Omni_Reasoning_V3Processor",
         "NemotronH_Omni_Reasoning_V3Processor",
+        "PixtralProcessor",
     }
 )
+_DEFAULT_IMAGE_PATCH_DIM = 16
 
 
 # different media namings maybe used in the raw dataset,
@@ -107,6 +109,32 @@ def uses_image_placeholder(processor: Any) -> bool:
         rather than tokenized ``apply_chat_template``.
     """
     return type(processor).__name__ in _PLACEHOLDER_STYLE_PROCESSOR_NAMES
+
+
+def image_patch_dim(processor: Any) -> int:
+    """Spatial patch size used to flatten ``pixel_values`` into ViT patches.
+
+    Reads ``patch_size`` from the processor, then its image processor. That is
+    how ``nt4_processor`` (Pixtral, ``patch_size: 14``) differs from RADIO/Omni
+    (16) without a second hardcoded path.
+    """
+    candidates: list[Any] = [processor]
+    image_processor = getattr(processor, "image_processor", None)
+    if image_processor is not None:
+        candidates.append(image_processor)
+        image_config = getattr(image_processor, "config", None)
+        if image_config is not None:
+            candidates.append(image_config)
+    for source in candidates:
+        value = getattr(source, "patch_size", None)
+        if isinstance(value, int) and value > 0:
+            return value
+        if isinstance(value, dict):
+            height = value.get("height")
+            width = value.get("width")
+            if height == width and isinstance(height, int) and height > 0:
+                return height
+    return _DEFAULT_IMAGE_PATCH_DIM
 
 
 # Wire-transport registries for multimodal fields. These are NOT the origin
@@ -1349,7 +1377,7 @@ def get_preprocess(processor: Any, key: str) -> dict[str, Any]:
     if uses_image_placeholder(processor) and key == "pixel_values":
         return {
             "preprocess_mode": "patchify",
-            "preprocess_kwargs": {"patch_dim": 16},
+            "preprocess_kwargs": {"patch_dim": image_patch_dim(processor)},
         }
     return {"preprocess_mode": None, "preprocess_kwargs": {}}
 
@@ -1595,7 +1623,7 @@ def _stack_ragged_pixel_values(
         [item.unsqueeze(0) for item in tiles],
         dim_to_pack=0,
         preprocess_mode="patchify",
-        preprocess_kwargs={"patch_dim": 16},
+        preprocess_kwargs={"patch_dim": image_patch_dim(processor)},
     ).as_tensor()
     assert stacked is not None
     processed["pixel_values"] = stacked

@@ -297,6 +297,19 @@ def test_setup_rejects_a_validation_checkpoint_metric() -> None:
         )
 
 
+def test_setup_copies_checkpointing_pretrained_checkpoint_onto_policy() -> None:
+    from nemo_rl.algorithms.sft_v2 import setup_sft_v2
+
+    pretrained = {"path": "/ckpt/iter_0000000", "format": "megatron_bridge"}
+    config = _valid_setup_config(sft_overrides={"val_period": 10})
+    config.checkpointing["pretrained_checkpoint"] = pretrained
+
+    with pytest.raises(ValueError, match="has no validation loop"):
+        setup_sft_v2(config, MagicMock())
+
+    assert config.policy["pretrained_checkpoint"] is pretrained
+
+
 @pytest.mark.parametrize(
     ("megatron_overrides", "policy_multiple", "message"),
     [

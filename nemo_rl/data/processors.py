@@ -377,8 +377,6 @@ def vlm_preference_preprocessor(
     THD input; the canonical ``NemotronOmniModel`` inserts media embeddings
     before selecting this rank's context-parallel tokens.
     """
-    from nemo_rl.data.multimodal_utils import PackedTensor
-
     completions = datum_dict["completions"]
     if len(completions) != 2:
         raise ValueError("VLM preference training requires exactly two completions")
@@ -386,15 +384,15 @@ def vlm_preference_preprocessor(
     if ordered[0]["rank"] == ordered[1]["rank"]:
         raise ValueError("Tied preference ranks are not supported")
 
-    placeholder_style_processors = {
-        "NemotronNanoVLV2Processor",
-        "NemotronH_Nano_Omni_Reasoning_V3Processor",
-        "NemotronH_Super_Omni_Reasoning_V3Processor",
-        "NemotronH_Omni_Reasoning_V3Processor",
+    from nemo_rl.data.multimodal_utils import (
+        PackedTensor,
+        image_patch_dim,
+        uses_image_placeholder,
     }
+
     message_processor = (
         _NemotronOmniPreferenceProcessorProxy(processor)
-        if type(processor).__name__ in placeholder_style_processors
+        if uses_image_placeholder(processor)
         else processor
     )
 
@@ -432,7 +430,7 @@ def vlm_preference_preprocessor(
                     dim_to_pack=0,
                 )
             pixel_values.preprocess_mode = "patchify"
-            pixel_values.preprocess_kwargs = {"patch_dim": 16}
+            pixel_values.preprocess_kwargs = {"patch_dim": image_patch_dim(processor)}
             imgs_sizes = message.get("imgs_sizes")
             if isinstance(imgs_sizes, PackedTensor) and "num_frames" not in message:
                 sizes = imgs_sizes.as_tensor()

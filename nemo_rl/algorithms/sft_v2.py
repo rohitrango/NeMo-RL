@@ -419,6 +419,11 @@ def setup_sft_v2(
 ) -> SFTV2ActorArgs:
     """Build the V2 cluster, TQPolicy, placement, and resume state."""
     set_seed(master_config.sft.seed)
+    # Workers read policy.pretrained_checkpoint. YAML stores the block under
+    # checkpointing, so copy it here the same way SFT v1 does.
+    checkpointing_pretrained = master_config.checkpointing.get("pretrained_checkpoint")
+    if checkpointing_pretrained is not None:
+        master_config.policy["pretrained_checkpoint"] = checkpointing_pretrained
     if master_config.data.get("backend") != "energon":
         raise ValueError("SFTv2 requires data.backend=energon.")
     if not master_config.policy["megatron_cfg"]["enabled"]:
