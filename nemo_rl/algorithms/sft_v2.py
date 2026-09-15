@@ -334,6 +334,14 @@ class SFTSingleControllerActor:
                 metrics[key] = np.mean(values).item()
             else:
                 metrics[key] = np.sum(values).item()
+        answer_tokens = metrics.get("num_answer_tokens", 0)
+        answer_sequences = metrics.get("num_answer_sequences", 0)
+        if answer_tokens:
+            metrics["answer_token_ce"] = metrics["answer_nll_sum"] / answer_tokens
+        if answer_sequences:
+            metrics["answer_exact_match_accuracy"] = (
+                metrics["answer_exact_match_count"] / answer_sequences
+            )
         for key, value in train_results.get("moe_metrics", {}).items():
             metrics[f"moe/{key}"] = value
         for key, value in train_results.get("mtp_metrics", {}).items():

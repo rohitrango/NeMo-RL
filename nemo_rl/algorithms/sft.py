@@ -379,6 +379,9 @@ def prepare_sft_batch(
                 "sample_mask": sample_mask,
             }
         )
+        for key in ("answer_token_mask", "answer_start_mask"):
+            if key in cat_and_padded:
+                prepared[key] = cat_and_padded[key]
         prepared.update(cat_and_padded.get_multimodal_dict(as_tensors=False))
         # get_multimodal_dict only carries PackedTensor leaves and the optional
         # sequence-aligned tensors, so per-sample provenance has to come across

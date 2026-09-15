@@ -34,6 +34,7 @@ from nemo_rl.data.energon.multimodal.task_encoders.generic_sft import (
     GenericSFTTaskEncoder,
     HFMultimodalSFTProcessorAdapter,
     SFTProcessorAdapter,
+    add_answer_diagnostics,
     log_multimodal_diagnostic,
     _normalize_messages,
 )
@@ -847,6 +848,12 @@ class NemotronMultiModalProcessorAdapter(_NemotronVisualProcessorAdapter):
             message_log,
             visual_occurrences,
             image_token_id=image_token_id,
+        )
+        add_answer_diagnostics(
+            message_log=message_log,
+            source_messages=list(pending_sample.messages),
+            tokenizer=self.processor,
+            sample_key=sample.sample_key,
         )
         expanded_length = sum(len(message["token_ids"]) for message in message_log)
         for message_index, keyed_inputs in inputs_by_message.items():

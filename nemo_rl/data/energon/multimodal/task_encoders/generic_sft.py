@@ -57,6 +57,127 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 logger = logging.getLogger(__name__)
 
 
+def _assistant_text(message: dict[str, Any]) -> str:
+    content = message.get("content", "")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        text = "".join(
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    else:
+        text = str(content)
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    return text.strip()
+
+
+def add_answer_diagnostics(
+    *,
+    message_log: list[dict[str, Any]],
+    source_messages: list[dict[str, Any]],
+    tokenizer: Any,
+    sample_key: str,
+) -> None:
+    """Mark raw answer tokens and optionally dump one decoded example."""
+    if os.environ.get("NRL_SFT_ANSWER_DIAGNOSTICS") != "1":
+        return
+    tokenizer = getattr(tokenizer, "tokenizer", tokenizer)
+    for message in message_log:
+        tokens = message.get("token_ids")
+        if isinstance(tokens, torch.Tensor):
+            message["answer_token_mask"] = torch.zeros_like(tokens)
+            message["answer_start_mask"] = torch.zeros_like(tokens)
+
+    flat_tokens = torch.cat([message["token_ids"] for message in message_log])
+    flat_answer_mask = torch.zeros_like(flat_tokens)
+    flat_answer_start_mask = torch.zeros_like(flat_tokens)
+    flat_loss_mask = torch.cat(
+        [
+            message.get(
+                "token_loss_mask",
+                torch.ones_like(message["token_ids"])
+                if message.get("role") == "assistant"
+                else torch.zeros_like(message["token_ids"]),
+            )
+            for message in message_log
+        ]
+    ).bool()
+    cursor = 0
+    answer_texts = [
+        _assistant_text(message)
+        for message in source_messages
+        if message.get("role") == "assistant"
+    ]
+    for answer_text in answer_texts:
+        if not answer_text:
+            continue
+        answer_ids = tokenizer(
+            answer_text, return_tensors="pt", add_special_tokens=False
+        )["input_ids"][0].to(flat_tokens.device)
+        candidates = [
+            start
+            for start in range(cursor, len(flat_tokens) - len(answer_ids) + 1)
+            if torch.equal(flat_tokens[start : start + len(answer_ids)], answer_ids)
+            and bool(flat_loss_mask[start : start + len(answer_ids)].all())
+        ]
+        if not candidates:
+            raise ValueError(
+                f"Could not locate answer {answer_text!r} in supervised tokens "
+                f"for sample {sample_key!r}."
+            )
+        start = candidates[0]
+        flat_answer_mask[start : start + len(answer_ids)] = 1
+        flat_answer_start_mask[start] = 1
+        cursor = start + len(answer_ids)
+
+    offset = 0
+    for message in message_log:
+        length = len(message["token_ids"])
+        message["answer_token_mask"] = flat_answer_mask[offset : offset + length]
+        message["answer_start_mask"] = flat_answer_start_mask[
+            offset : offset + length
+        ]
+        offset += length
+
+    dump_path = os.environ.get("NRL_SFT_ASSISTANT_TOKEN_DUMP")
+    if not dump_path:
+        return
+    os.makedirs(os.path.dirname(os.path.abspath(dump_path)), exist_ok=True)
+    try:
+        fd = os.open(dump_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return
+    assistant_ids = flat_tokens[flat_loss_mask].cpu().tolist()
+    assistant_answer_mask = flat_answer_mask[flat_loss_mask].cpu().tolist()
+    payload = {
+        "sample_key": sample_key,
+        "answers": answer_texts,
+        "decoded_assistant_response": tokenizer.decode(
+            assistant_ids, clean_up_tokenization_spaces=False
+        ),
+        "tokens": [
+            {
+                "assistant_index": index,
+                "token_id": token_id,
+                "token": tokenizer.convert_ids_to_tokens(token_id),
+                "decoded": tokenizer.decode(
+                    [token_id], clean_up_tokenization_spaces=False
+                ),
+                "class": "answer" if is_answer else "template",
+            }
+            for index, (token_id, is_answer) in enumerate(
+                zip(assistant_ids, assistant_answer_mask, strict=True)
+            )
+        ],
+    }
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+
+
 def log_multimodal_diagnostic(
     *,
     processor: Any,
@@ -335,6 +456,12 @@ class HFMultimodalSFTProcessorAdapter:
             add_generation_prompt=self.add_generation_prompt,
             tools=sample.tools,
         )
+        add_answer_diagnostics(
+            message_log=message_log,
+            source_messages=messages,
+            tokenizer=self.processor,
+            sample_key=sample.__key__,
+        )
         image_parts = sum(
             part.get("type") == "image"
             for message in messages
@@ -364,6 +491,13 @@ class HFMultimodalSFTProcessorAdapter:
                 message["token_ids"] = message["token_ids"][
                     : min(4, self.max_sequence_length // len(message_log))
                 ]
+                if "answer_token_mask" in message:
+                    message["answer_token_mask"] = message["answer_token_mask"][
+                        : len(message["token_ids"])
+                    ]
+                    message["answer_start_mask"] = message["answer_start_mask"][
+                        : len(message["token_ids"])
+                    ]
                 for key, value in list(message.items()):
                     if isinstance(value, PackedTensor):
                         message[key] = PackedTensor.empty_like(value)

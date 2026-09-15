@@ -233,6 +233,9 @@ def prepare_packed_sft_batch(
             "source_ids": source_ids,
         }
     )
+    for key in ("answer_token_mask", "answer_start_mask"):
+        if key in flat:
+            prepared[key] = flat[key]
     prepared.update(flat.get_multimodal_dict(as_tensors=False))
     return prepared
 

@@ -1117,6 +1117,10 @@ class NLLLossFn(LossFunction):
         # placeholder global_valid_*=1 normalization per metric.
         self.metric_normalizations: dict[str, MetricNormalizer] = {
             "loss": MetricNormalizer.TOKENS,
+            "answer_nll_sum": MetricNormalizer.NONE,
+            "answer_exact_match_count": MetricNormalizer.NONE,
+            "num_answer_tokens": MetricNormalizer.NONE,
+            "num_answer_sequences": MetricNormalizer.NONE,
             "num_unmasked_tokens": MetricNormalizer.NONE,
             "num_valid_samples": MetricNormalizer.NONE,
         }
@@ -1129,6 +1133,7 @@ class NLLLossFn(LossFunction):
         global_valid_toks: Tensor,
         dpo_loss: bool = False,
         dpo_average_log_probs: bool = False,
+        next_token_predictions: Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         # logits shape: [batch_size, seq_len, vocab_size]
         # Get the next token logits for each position
@@ -1152,11 +1157,51 @@ class NLLLossFn(LossFunction):
                 global_normalization_factor=global_valid_toks,
             )
 
-        return loss, {
+        metrics = {
             "loss": loss.item() if loss.ndim == 0 else loss,
             "num_unmasked_tokens": mask.sum().item(),
             "num_valid_samples": sample_mask.sum().item(),
         }
+        answer_token_mask = data.get("answer_token_mask")
+        if answer_token_mask is not None:
+            if next_token_predictions is None:
+                raise ValueError(
+                    "answer_token_mask requires next-token predictions for exact "
+                    "match diagnostics."
+                )
+            answer_mask = answer_token_mask[:, 1:].to(mask.dtype) * mask
+            answer_start_mask = data.get("answer_start_mask")
+            if answer_start_mask is None:
+                raise ValueError("answer_token_mask requires answer_start_mask.")
+            answer_starts = answer_start_mask[:, 1:].bool() & answer_mask.bool()
+            target_ids = data["input_ids"][:, 1:]
+            token_correct = next_token_predictions == target_ids
+            exact_match_count = 0
+            answer_sequence_count = 0
+            for row in range(answer_mask.shape[0]):
+                starts = torch.where(answer_starts[row])[0]
+                answer_sequence_count += len(starts)
+                for index, start in enumerate(starts):
+                    end = (
+                        int(starts[index + 1])
+                        if index + 1 < len(starts)
+                        else answer_mask.shape[1]
+                    )
+                    selected = answer_mask[row, int(start) : end].bool()
+                    exact_match_count += int(
+                        token_correct[row, int(start) : end][selected].all().item()
+                    )
+            metrics.update(
+                {
+                    "answer_nll_sum": -(
+                        next_token_logprobs * answer_mask
+                    ).sum().item(),
+                    "answer_exact_match_count": exact_match_count,
+                    "num_answer_tokens": answer_mask.sum().item(),
+                    "num_answer_sequences": answer_sequence_count,
+                }
+            )
+        return loss, metrics
 
 
 class PreferenceLossDataDict(TypedDict):
