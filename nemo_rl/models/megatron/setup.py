@@ -1902,7 +1902,7 @@ def _create_megatron_config(
         dataset=None,
         tokenizer=TokenizerConfig(
             tokenizer_type="HuggingFaceTokenizer",
-            tokenizer_model=hf_model_name,
+            tokenizer_model=config["tokenizer"]["name"],
         ),
     )
 
@@ -2832,7 +2832,7 @@ def finalize_megatron_setup(
 
     tokenizer_config = TokenizerConfig(
         tokenizer_type="HuggingFaceTokenizer",
-        tokenizer_model=hf_model_name,
+        tokenizer_model=config["tokenizer"]["name"],
         hf_tokenizer_kwargs={
             "trust_remote_code": True,
             "use_fast": True,

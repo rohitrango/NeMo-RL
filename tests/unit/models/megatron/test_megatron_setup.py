@@ -2616,7 +2616,11 @@ class TestCreateMegatronConfigGlooProcessGroups:
             "train_iters": 10,
         }
         megatron_cfg.update(megatron_overrides)
-        return {"megatron_cfg": megatron_cfg, "train_global_batch_size": 8}
+        return {
+            "tokenizer": {"name": "test-tokenizer"},
+            "megatron_cfg": megatron_cfg,
+            "train_global_batch_size": 8,
+        }
 
     def _dist_config_passed_to_container(self, config):
         """Return the dist config _create_megatron_config hands to ConfigContainer.
@@ -2633,7 +2637,9 @@ class TestCreateMegatronConfigGlooProcessGroups:
             patch("nemo_rl.models.megatron.setup.OptimizerConfig"),
             patch("nemo_rl.models.megatron.setup.DistributedDataParallelConfig"),
             patch("nemo_rl.models.megatron.setup.SchedulerConfig"),
-            patch("nemo_rl.models.megatron.setup.TokenizerConfig"),
+            patch(
+                "nemo_rl.models.megatron.setup.TokenizerConfig"
+            ) as mock_tokenizer_config,
             patch("nemo_rl.models.megatron.setup.LoggerConfig"),
         ):
             _create_megatron_config(
@@ -2644,6 +2650,10 @@ class TestCreateMegatronConfigGlooProcessGroups:
                 dtype=torch.bfloat16,
             )
 
+        mock_tokenizer_config.assert_called_once_with(
+            tokenizer_type="HuggingFaceTokenizer",
+            tokenizer_model="test-tokenizer",
+        )
         return mock_container.call_args.kwargs["dist"]
 
     @pytest.mark.parametrize("value", [True, False])
@@ -2686,7 +2696,11 @@ class TestCreateMegatronConfigOptimizerFp8Recipe:
         }
         if fp8_cfg is not None:
             megatron_cfg["fp8_cfg"] = fp8_cfg
-        return {"megatron_cfg": megatron_cfg, "train_global_batch_size": 8}
+        return {
+            "tokenizer": {"name": "test-tokenizer"},
+            "megatron_cfg": megatron_cfg,
+            "train_global_batch_size": 8,
+        }
 
     @staticmethod
     def _optimizer_passed_to_container(
@@ -2762,6 +2776,7 @@ class TestCreateMegatronConfigFP8Buffers:
         from nemo_rl.models.megatron.setup import _create_megatron_config
 
         config = {
+            "tokenizer": {"name": "test-tokenizer"},
             "megatron_cfg": {
                 "optimizer": {"use_distributed_optimizer": True},
                 "scheduler": {},
@@ -2829,6 +2844,7 @@ class TestCreateMegatronConfigOptimizerOffload:
             optimizer_config["overlap_cpu_optimizer_d2h_h2d"] = transfer_overlap
 
         config = {
+            "tokenizer": {"name": "test-tokenizer"},
             "megatron_cfg": {
                 "optimizer": optimizer_config,
                 "scheduler": {},
@@ -3796,6 +3812,7 @@ class TestFinalizeMegatronSetup:
         mock_auto_bridge.from_hf_pretrained.return_value = mock_bridge
 
         config = {
+            "tokenizer": {"name": "test-tokenizer"},
             "megatron_cfg": {
                 "tensor_model_parallel_size": 2,
                 "optimizer": {
@@ -3804,7 +3821,7 @@ class TestFinalizeMegatronSetup:
                 "distributed_data_parallel_config": {
                     "overlap_param_gather": False,
                 },
-            }
+            },
         }
 
         result = finalize_megatron_setup(
@@ -3828,6 +3845,9 @@ class TestFinalizeMegatronSetup:
         mock_get_model_config.assert_called_once_with(mock_model)
         assert mock_update_model_config.call_args.args[1] is runtime_model_config
         mock_build_tokenizer.assert_called_once()
+        assert (
+            mock_build_tokenizer.call_args.args[0].tokenizer_model == "test-tokenizer"
+        )
         mock_auto_bridge.from_hf_pretrained.assert_called_once_with(
             "test-model", trust_remote_code=True
         )

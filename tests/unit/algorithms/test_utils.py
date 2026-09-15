@@ -187,6 +187,24 @@ def test_get_processor_forwards_tokenizer_kwargs():
     }
 
 
+def test_get_processor_applies_custom_chat_template():
+    """An explicit template replaces both tokenizer and processor templates."""
+    processor = MagicMock()
+    processor.chat_template = "stale-processor-template"
+    processor.tokenizer.chat_template = "stale-tokenizer-template"
+    processor.tokenizer.pad_token = "<pad>"
+
+    with patch("nemo_rl.algorithms.utils.AutoProcessor") as mock_auto_processor:
+        mock_auto_processor.from_pretrained.return_value = processor
+        result = get_tokenizer(
+            {"name": "test-processor", "chat_template": "custom-template"},
+            get_processor=True,
+        )
+
+    assert result.tokenizer.chat_template == "custom-template"
+    assert result.chat_template == "custom-template"
+
+
 @patch("nemo_rl.algorithms.utils.AutoTokenizer")
 @patch("nemo_rl.algorithms.utils.get_deepseek_v4_tokenizer")
 def test_get_tokenizer_uses_vllm_deepseek_v4_renderer(
