@@ -388,7 +388,7 @@ def vlm_preference_preprocessor(
         PackedTensor,
         image_patch_dim,
         uses_image_placeholder,
-    }
+    )
 
     message_processor = (
         _NemotronOmniPreferenceProcessorProxy(processor)
