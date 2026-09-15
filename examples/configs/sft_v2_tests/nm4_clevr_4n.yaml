@@ -1,0 +1,131 @@
+defaults:
+  - sft_vlm_nm4_nano_energon_tp4ep4_v2.yaml
+
+sft:
+  max_num_epochs: 1
+  max_num_steps: 20
+  max_consecutive_step_failures: 3
+
+policy:
+  # AutoBridge needs a complete HF model directory with config.json.
+  model_name: /data/nemotron4/Mistral-Medium-3.5-128B
+  # Energon and Megatron must use the matching 262k Pixtral processor tokenizer.
+  tokenizer:
+    name: /data/nemotron4/processor
+    # The bundled template accepts text strings only. CLEVR uses OpenAI-style
+    # content lists, so render image parts as Pixtral placeholders first.
+    chat_template: |-
+      {%- macro render_content(content) -%}
+        {%- if content is string -%}
+          {{- content -}}
+        {%- else -%}
+          {%- for part in content -%}
+            {%- if part['type'] == 'image' -%}
+              {{- '<image>' -}}
+            {%- elif part['type'] == 'text' -%}
+              {{- part['text'] -}}
+            {%- else -%}
+              {{- raise_exception('Unsupported content type: ' + part['type']) -}}
+            {%- endif -%}
+          {%- endfor -%}
+        {%- endif -%}
+      {%- endmacro -%}
+      {%- for message in messages -%}
+        {{- render_content(message['content']) -}}
+        {%- if message['role'] == 'assistant' -%}
+          {{- '\n\n' -}}
+        {%- else -%}
+          {{- '\n' -}}
+        {%- endif -%}
+      {%- endfor -%}
+  train_global_batch_size: 4
+  max_total_sequence_length: 2048
+  megatron_cfg:
+    context_parallel_size: 1
+    expert_model_parallel_size: 16
+    # The checkpoint pins FlashAttention, but FA2 rejects NM4's 256-wide heads
+    # on sm103. Let Transformer Engine select a supported backend per layer.
+    attention_backend: auto
+    env_vars:
+      # FLA's TileLang KDA backward faults on sm103; use its Triton fallback.
+      FLA_TILELANG: "0"
+    # The checkpoint was saved with MXFP8 defaults. TP=4 produces a local GDP
+    # projection dimension of 4632, which is not divisible by MXFP8's block
+    # size of 32. Run this correctness smoke test in BF16.
+    model_overrides:
+      fp8: null
+      fp8_param: false
+      fp8_quantizer_factory: null
+      quant_recipe: null
+      moe_router_padding_for_quantization: false
+      moe_router_padding_for_fp8: false
+    # SFT-v2 normally derives this before worker construction. Keep the
+    # standalone checkpoint-load check on the same value.
+    train_iters: ${sft.max_num_steps}
+
+data:
+  _override_: true
+  backend: energon
+  max_input_seq_length: ${policy.max_total_sequence_length}
+  add_bos: false
+  add_eos: false
+  add_generation_prompt: false
+  shuffle: true
+  num_workers: 0
+  energon:
+    num_workers: 1
+    prefetch_factor: 2
+    cache_pool_num_workers: 4
+    gc_collect_every_n_steps: 100000
+    model_family: nemotron
+    max_samples_per_sequence: 16
+    processor_adapter: hf_multimodal
+    topology_mapper: default
+    task_encoder:
+      name: generic_sft
+      options: {}
+      packing:
+        name: balanced_greedy_knapsack
+        buffer_size: 64
+        options:
+          max_sequence_length: ${policy.max_total_sequence_length}
+          sequence_length_pad_multiple: 64
+          balanced_knapsack_delta: 5
+    cookers:
+      - name: generic_conversation
+        options: {}
+  train:
+    path: /data/nemorl-datasets/clevr
+    split: train
+    virtual_epoch_length: 4375
+  validation: null
+
+logger:
+  wandb_enabled: false
+  log_dir: logs/nm4-clevr-4n
+  wandb:
+    project: nemotron-super-sft
+    name: nm4-clevr-4n
+  tensorboard:
+    log_dir: logs/nm4-clevr-4n
+
+cluster:
+  gpus_per_node: 4
+  num_nodes: 4
+
+data_plane:
+  enabled: true
+  impl: local
+  max_partitions: 2
+
+checkpointing:
+  pretrained_checkpoint:
+    path: /data/models/nm4_nano_bridge
+    format: megatron_bridge
+  checkpoint_dir: /data/nemorl-runs/nm4-clevr-4n
+  enabled: false
+  metric_name: null
+  higher_is_better: false
+  keep_top_k: 5
+  save_period: 100
+  checkpoint_must_save_by: "00:03:40:00"
