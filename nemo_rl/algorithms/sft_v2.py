@@ -164,9 +164,16 @@ class SFTSingleControllerActor:
         """Run SFT training."""
         try:
             self._trainer.prepare_for_training()
+            if (
+                self._master_config.sft.val_at_start
+                and self._save_state.total_steps == 0
+            ):
+                self._log_validation()
             while self._save_state.total_steps < self._max_steps:
                 metrics = self._run_train_step()
                 self._logger.log_metrics(metrics, self._save_state.total_steps)
+                if self._should_validate():
+                    self._log_validation()
                 metric = self._checkpoint_metric(metrics)
                 self._timeout.mark_iteration()
                 save_by_timeout = self._timeout.check_save()
@@ -219,6 +226,30 @@ class SFTSingleControllerActor:
         results = ray.get(futures)
         if results != [True] * self._placement_plan.logical_world_size:
             raise RuntimeError(f"Unexpected SFT loader setup results: {results!r}.")
+        if config.data.get("validation") is not None:
+            val_global_batch_size = config.sft.val_global_batch_size
+            if val_global_batch_size % self._placement_plan.logical_world_size:
+                raise ValueError(
+                    "sft.val_global_batch_size must be divisible by the logical "
+                    f"DP size: {val_global_batch_size} % "
+                    f"{self._placement_plan.logical_world_size} != 0."
+                )
+            futures = self._trainer.worker_group.run_all_workers_single_data(
+                "setup_sft_validation_dataloader",
+                run_rank_0_only_axes=list(REPLICATED_AXES),
+                data_config=config.data,
+                batch_size=(
+                    val_global_batch_size // self._placement_plan.logical_world_size
+                ),
+                max_sequence_length=config.data["max_input_seq_length"],
+                placement_fingerprint=self._placement_plan.placement_hash,
+                only_unmask_final=config.sft.only_unmask_final,
+            )
+            results = ray.get(futures)
+            if results != [True] * self._placement_plan.logical_world_size:
+                raise RuntimeError(
+                    f"Unexpected SFT validation loader setup results: {results!r}."
+                )
 
     def _load_envelopes(self) -> list[StepEnvelope]:
         futures = self._trainer.worker_group.run_all_workers_single_data(
@@ -306,11 +337,7 @@ class SFTSingleControllerActor:
             for key, value in placed_phases.items():
                 metrics[f"placed_{key}"] = float(value)
         phase_names = sorted(
-            {
-                phase
-                for envelope in envelopes
-                for phase in envelope.load_phase_seconds
-            }
+            {phase for envelope in envelopes for phase in envelope.load_phase_seconds}
         )
         for phase in phase_names:
             values = [
@@ -320,6 +347,124 @@ class SFTSingleControllerActor:
             metrics[f"loader_{metric_phase}_max"] = max(values)
             metrics[f"loader_{metric_phase}_mean"] = statistics.fmean(values)
         metrics.update(self._policy_metrics(train_results))
+        return metrics
+
+    def _should_validate(self) -> bool:
+        step = self._save_state.total_steps
+        config = self._master_config.sft
+        return bool(
+            (config.val_period > 0 and step % config.val_period == 0)
+            or (config.val_at_end and step == self._max_steps)
+        )
+
+    def _log_validation(self) -> None:
+        step = self._save_state.total_steps
+        print(f"Running SFT validation at step {step}", flush=True)
+        started = time.monotonic()
+        metrics = self._run_validation()
+        self._logger.log_metrics(metrics, step, prefix="validation")
+        self._logger.log_metrics(
+            {"total_time": time.monotonic() - started},
+            step,
+            prefix="timing/validation",
+        )
+        print(
+            "Validation step=%d loss=%.6f answer_token_ce=%.6f "
+            "answer_exact_match_accuracy=%.6f samples=%d"
+            % (
+                step,
+                metrics["loss"],
+                metrics.get("answer_token_ce", float("nan")),
+                metrics.get("answer_exact_match_accuracy", float("nan")),
+                metrics["num_valid_samples"],
+            ),
+            flush=True,
+        )
+        self._trainer.prepare_for_training()
+
+    def _run_validation(self) -> dict[str, Any]:
+        self._owner_call("reset_sft_validation_dataloader")
+        totals = {
+            "loss_nll_sum": 0.0,
+            "num_unmasked_tokens": 0.0,
+            "answer_nll_sum": 0.0,
+            "answer_exact_match_count": 0.0,
+            "num_answer_tokens": 0.0,
+            "num_answer_sequences": 0.0,
+            "num_valid_samples": 0.0,
+        }
+        batch_count = 0
+        while True:
+            if (
+                self._master_config.sft.val_batches > 0
+                and batch_count >= self._master_config.sft.val_batches
+            ):
+                break
+            futures = self._trainer.worker_group.run_all_workers_single_data(
+                "load_next_sft_validation_batch",
+                run_rank_0_only_axes=list(REPLICATED_AXES),
+                only_unmask_final=self._master_config.sft.only_unmask_final,
+                make_sequence_length_divisible_by=self._master_config.policy[
+                    "make_sequence_length_divisible_by"
+                ],
+            )
+            envelopes = ray.get(futures)
+            if all(envelope is None for envelope in envelopes):
+                break
+            if any(envelope is None for envelope in envelopes):
+                self._owner_call("abort_sft_validation_batch")
+                raise RuntimeError(
+                    "SFT validation loaders exhausted on different DP batches."
+                )
+            placed = cast(list[StepEnvelope], envelopes)
+            logical_ranks = [envelope.logical_rank for envelope in placed]
+            expected = list(range(self._placement_plan.logical_world_size))
+            if logical_ranks != expected:
+                self._owner_call("abort_sft_validation_batch")
+                raise RuntimeError(
+                    "SFT validation envelopes arrived for ranks "
+                    f"{logical_ranks}; expected {expected}."
+                )
+            try:
+                result = self._trainer.evaluate_placed_microbatches(
+                    [envelope.meta for envelope in placed],
+                    self._loss_fn,
+                    gbs=sum(len(envelope.meta.sample_ids) for envelope in placed),
+                    mbs=self._master_config.sft.val_micro_batch_size,
+                )
+                batch_metrics = self._policy_metrics(result)
+                tokens = float(batch_metrics["num_unmasked_tokens"])
+                totals["loss_nll_sum"] += float(result["loss"]) * tokens
+                totals["num_unmasked_tokens"] += tokens
+                for key in (
+                    "answer_nll_sum",
+                    "answer_exact_match_count",
+                    "num_answer_tokens",
+                    "num_answer_sequences",
+                    "num_valid_samples",
+                ):
+                    totals[key] += float(batch_metrics.get(key, 0.0))
+                self._owner_call("commit_sft_validation_batch")
+            except Exception:
+                self._owner_call("abort_sft_validation_batch")
+                raise
+            batch_count += 1
+
+        if totals["num_unmasked_tokens"] == 0:
+            raise RuntimeError("SFT validation produced no supervised tokens.")
+        metrics = {
+            "loss": totals["loss_nll_sum"] / totals["num_unmasked_tokens"],
+            "num_batches": batch_count,
+            **{key: value for key, value in totals.items() if key != "loss_nll_sum"},
+        }
+        if totals["num_answer_tokens"]:
+            metrics["answer_token_ce"] = (
+                totals["answer_nll_sum"] / totals["num_answer_tokens"]
+            )
+        if totals["num_answer_sequences"]:
+            metrics["answer_exact_match_accuracy"] = (
+                totals["answer_exact_match_count"] / totals["num_answer_sequences"]
+            )
         return metrics
 
     @staticmethod
@@ -455,24 +600,16 @@ def setup_sft_v2(
             raise ValueError("Energon SFT requires a supported packing algorithm.")
         if dynamic_batching["enabled"]:
             raise ValueError("Energon packing does not support dynamic batching.")
-    # SFTConfig carries validation knobs that default to on (val_period=10,
-    # val_at_start=True) and this loop has no validation path, so reject them
-    # rather than accepting a config whose validation silently never runs.
-    if (
+    validation_requested = (
         master_config.sft.val_period != 0
         or master_config.sft.val_at_start
         or master_config.sft.val_at_end
-    ):
-        raise ValueError(
-            "SFTv2 has no validation loop. Set sft.val_period=0, "
-            "sft.val_at_start=false and sft.val_at_end=false."
-        )
-    # sft_worker builds its loader with split_role="train" only, so a validation
-    # source would be accepted and never read.
-    if master_config.data.get("validation") is not None:
-        raise ValueError("SFTv2 reads no validation source. Set data.validation=null.")
-    # Same reason: only train metrics exist here, so a val: name would leave
-    # keep_top_k ranking every checkpoint on a metric that is never written.
+    )
+    if validation_requested and master_config.data.get("validation") is None:
+        raise ValueError("SFTv2 validation was requested but data.validation is null.")
+    if master_config.sft.val_period < 0:
+        raise ValueError("sft.val_period must be non-negative.")
+    # Checkpoint ranking still consumes the current training-step metrics.
     metric_name = master_config.checkpointing["metric_name"]
     if metric_name is not None and not metric_name.startswith("train:"):
         raise ValueError(

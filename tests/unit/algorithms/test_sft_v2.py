@@ -265,10 +265,9 @@ def test_checkpoint_metric_rejects_a_metric_no_step_produces() -> None:
             {"policy_overrides": {"dynamic_batching": {"enabled": True}}},
             "fixed batching",
         ),
-        ({"sft_overrides": {"val_period": 10}}, "has no validation loop"),
         (
-            {"data_overrides": {"validation": {"path": "/dataset"}}},
-            "reads no validation source",
+            {"sft_overrides": {"val_period": 10}},
+            "data.validation is null",
         ),
         (
             {"data_overrides": {"max_input_seq_length": None}},
@@ -301,10 +300,10 @@ def test_setup_copies_checkpointing_pretrained_checkpoint_onto_policy() -> None:
     from nemo_rl.algorithms.sft_v2 import setup_sft_v2
 
     pretrained = {"path": "/ckpt/iter_0000000", "format": "megatron_bridge"}
-    config = _valid_setup_config(sft_overrides={"val_period": 10})
+    config = _valid_setup_config(data_overrides={"backend": "hf"})
     config.checkpointing["pretrained_checkpoint"] = pretrained
 
-    with pytest.raises(ValueError, match="has no validation loop"):
+    with pytest.raises(ValueError, match="requires data.backend=energon"):
         setup_sft_v2(config, MagicMock())
 
     assert config.policy["pretrained_checkpoint"] is pretrained

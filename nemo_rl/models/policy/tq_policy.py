@@ -82,9 +82,7 @@ def _aggregate_train_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         for k, v in r["all_mb_metrics"].items():
             all_mb_metrics[k].extend(v)
     out["all_mb_metrics"] = dict(all_mb_metrics)
-    phase_names = {
-        name for result in results for name in result.get("step_phases", {})
-    }
+    phase_names = {name for result in results for name in result.get("step_phases", {})}
     if phase_names:
         out["step_phases"] = {
             name: max(
@@ -612,6 +610,50 @@ class TQPolicy(TQDriverMixin, Policy):
             "stamp_pad": stamp_pad,
             "dispatch": time.monotonic() - started,
         }
+
+    def evaluate_placed_microbatches(
+        self,
+        dp_metas: list[KVBatchMeta],
+        loss_fn: LossFunction,
+        *,
+        gbs: int,
+        mbs: int,
+    ) -> dict[str, Any]:
+        """Evaluate one producer-assigned metadata batch per logical DP rank."""
+        dp_world = self.sharding_annotations.get_axis_size("data_parallel")
+        if len(dp_metas) != dp_world:
+            raise ValueError(
+                "Placed metadata must contain exactly one batch per DP rank: "
+                f"got {len(dp_metas)} batches for dp_world={dp_world}."
+            )
+        eval_metas = [
+            replace(meta, task_name="train")
+            for meta in self._stamp_placed_pad_seqlen(dp_metas)
+        ]
+        futures = self.worker_group.run_all_workers_sharded_data(
+            "train_presharded",
+            meta=eval_metas,
+            in_sharded_axes=["data_parallel"],
+            replicate_on_axes=[
+                "context_parallel",
+                "tensor_parallel",
+                "pipeline_parallel",
+            ],
+            output_is_replicated=[
+                "context_parallel",
+                "tensor_parallel",
+                "pipeline_parallel",
+            ],
+            common_kwargs={
+                "loss_fn": loss_fn,
+                "eval_mode": True,
+                "gbs": gbs,
+                "mbs": mbs,
+            },
+        )
+        return _aggregate_train_results(
+            self.worker_group.get_all_worker_results(futures)
+        )
 
     def _stamp_placed_pad_seqlen(
         self, dp_metas: list[KVBatchMeta]
