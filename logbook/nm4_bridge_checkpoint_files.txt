@@ -1,0 +1,5 @@
+/data/models/nm4_nano_bridge/__0_0.distcp 60181546578
+/data/models/nm4_nano_bridge/__1_0.distcp 46719476992
+/data/models/nm4_nano_bridge/__2_0.distcp 46719476992
+/data/models/nm4_nano_bridge/__3_0.distcp 46719476992
+/data/models/nm4_nano_bridge/.metadata 8839855
