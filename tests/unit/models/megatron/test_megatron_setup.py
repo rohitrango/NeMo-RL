@@ -827,6 +827,19 @@ class TestApplyMoeConfig:
 
         assert model_cfg.moe_aux_loss_coeff == coefficient
 
+    def test_moe_router_fusion_is_applied_only_when_configured(self):
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = SimpleNamespace(moe_router_fusion=True)
+        config = {"megatron_cfg": self._base_moe_megatron_cfg()}
+
+        _apply_moe_config(model_cfg, config)
+        assert model_cfg.moe_router_fusion is True
+
+        config["megatron_cfg"]["moe_router_fusion"] = False
+        _apply_moe_config(model_cfg, config)
+        assert model_cfg.moe_router_fusion is False
+
     @staticmethod
     def _base_moe_megatron_cfg() -> dict:
         return {

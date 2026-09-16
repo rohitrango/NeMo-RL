@@ -1258,6 +1258,8 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
     # Setting moe_router_dtype to higher precision (e.g. fp64) can improve numerical stability,
     # especially when using many experts.
     model_cfg.moe_router_dtype = config["megatron_cfg"]["moe_router_dtype"]
+    if "moe_router_fusion" in config["megatron_cfg"]:
+        model_cfg.moe_router_fusion = config["megatron_cfg"]["moe_router_fusion"]
 
     # The below two configs (and "freeze_moe_router") are used to stabilize moe training
     # by preventing updates to the moe router. We found that this is helpful in reducing

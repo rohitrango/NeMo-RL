@@ -395,6 +395,8 @@ class MegatronConfig(TypedDict):
     freeze_audio_encoder: NotRequired[bool]
     freeze_audio_projector: NotRequired[bool]
     moe_router_dtype: str | None
+    # Omit to retain the checkpoint/provider default.
+    moe_router_fusion: NotRequired[bool]
     moe_router_load_balancing_type: str | list[str]
     moe_router_bias_update_rate: float
     # Optional so model-provider defaults remain effective when it is unset.
