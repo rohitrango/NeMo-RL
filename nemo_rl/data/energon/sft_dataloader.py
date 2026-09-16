@@ -397,6 +397,7 @@ def _task_encoder(
         packer = get_packer(
             packing.name,
             packing.options.max_sequence_length,
+            max_sequences_per_bin=packing.options.max_sequences_per_bin,
             balanced_knapsack_delta=packing.options.balanced_knapsack_delta,
         )
         sequence_length_pad_multiple = packing.options.sequence_length_pad_multiple
@@ -536,7 +537,9 @@ def build_energon_sft_loader(
                 logical_world_size=logical_world_size,
             ),
             packing_algorithm=None if packing is None else packing.name,
-            max_sequences_per_bin=None,
+            max_sequences_per_bin=(
+                None if packing is None else packing.options.max_sequences_per_bin
+            ),
             sequence_length_pad_multiple=(
                 1 if packing is None else packing.options.sequence_length_pad_multiple
             ),

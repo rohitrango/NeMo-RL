@@ -33,6 +33,7 @@ class EnergonPackingOptions(BaseModel, extra="forbid"):
 
     max_sequence_length: Annotated[int, Field(ge=1)]
     sequence_length_pad_multiple: Annotated[int, Field(ge=1)]
+    max_sequences_per_bin: Annotated[int, Field(ge=1)] | None = None
     balanced_knapsack_delta: Annotated[int, Field(ge=0)] | None = None
 
     @model_validator(mode="after")
