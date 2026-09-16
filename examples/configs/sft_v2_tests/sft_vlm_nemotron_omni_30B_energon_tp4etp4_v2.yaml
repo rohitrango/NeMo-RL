@@ -6,8 +6,6 @@ sft:
 
 policy:
   model_name: /data/models/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16
-  tokenizer:
-    chat_template: default
   train_global_batch_size: 16
   train_micro_batch_size: 1
   max_total_sequence_length: 1024
