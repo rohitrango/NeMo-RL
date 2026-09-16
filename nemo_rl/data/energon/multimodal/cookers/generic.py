@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Any
 
 from megatron.energon import CrudeSample, basic_sample_keys, stateless
+from PIL import Image
 
 from nemo_rl.data.energon.multimodal.model_families import (
     ALL_MODEL_FAMILIES,
@@ -93,6 +95,27 @@ def _get_media_value(sample: CrudeSample, entry: dict[str, Any]) -> Any:
     )
 
 
+def _image_metadata(value: Any, metadata: Any, sample: CrudeSample) -> Any:
+    if metadata is not None and not isinstance(metadata, dict):
+        return metadata
+    metadata = dict(metadata or {})
+    if "width" in metadata and "height" in metadata:
+        return metadata
+    payload = value.get(sample) if callable(getattr(value, "get", None)) else value
+    if isinstance(payload, tuple) and len(payload) == 1:
+        payload = payload[0]
+    if isinstance(payload, (bytes, bytearray, memoryview)):
+        with Image.open(BytesIO(bytes(payload))) as image:
+            width, height = image.size
+    elif isinstance(payload, Image.Image):
+        width, height = payload.size
+    else:
+        return metadata
+    metadata.setdefault("width", width)
+    metadata.setdefault("height", height)
+    return metadata
+
+
 @supports_model_families(ALL_MODEL_FAMILIES)
 @stateless
 def cook_conversation(sample: CrudeSample) -> CanonicalSFTSample:
@@ -117,11 +140,15 @@ def cook_conversation(sample: CrudeSample) -> CanonicalSFTSample:
         if modality not in _MEDIA_TYPES:
             raise ValueError(f"Unsupported media type {modality!r}.")
         assert isinstance(modality, str)
+        value = _get_media_value(sample, entry)
+        metadata = entry.get("metadata")
+        if modality == "image":
+            metadata = _image_metadata(value, metadata, sample)
         media.append(
             MediaRef(
                 modality=modality,
-                value=_get_media_value(sample, entry),
-                metadata=freeze_media_metadata(entry.get("metadata")),
+                value=value,
+                metadata=freeze_media_metadata(metadata),
             )
         )
 
