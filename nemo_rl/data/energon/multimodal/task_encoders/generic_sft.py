@@ -25,6 +25,7 @@ from typing import Any, Protocol, cast
 
 import torch
 from megatron.energon import SampleDecoder, stateless
+from PIL import Image
 
 from nemo_rl.data.energon.multimodal.model_families import (
     ALL_MODEL_FAMILIES,
@@ -401,6 +402,20 @@ def _normalize_messages(
     return messages
 
 
+def _zero_image_content(messages: list[dict[str, Any]]) -> None:
+    """Replace image payloads with same-size black images for diagnostics."""
+    for message in messages:
+        for part in message["content"]:
+            if part.get("type") != "image":
+                continue
+            image = part.get("image")
+            if not isinstance(image, Image.Image):
+                raise TypeError(
+                    "NRL_SFT_ZERO_IMAGES requires decoded PIL image payloads."
+                )
+            part["image"] = Image.new(image.mode, image.size, 0)
+
+
 class HFMultimodalSFTProcessorAdapter:
     """Hugging Face implementation of the generic processor boundary."""
 
@@ -447,6 +462,8 @@ class HFMultimodalSFTProcessorAdapter:
 
     def encode(self, sample: CanonicalSFTSample) -> EncodedSFTSample:
         messages = _normalize_messages(sample)
+        if os.environ.get("NRL_SFT_ZERO_IMAGES") == "1":
+            _zero_image_content(messages)
         message_log = get_formatted_message_log(
             messages,
             self.processor,
