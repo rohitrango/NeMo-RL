@@ -224,6 +224,8 @@ class SequencePackingConfig(TypedDict):
     # execute each DP rank's assigned bins largest-first for allocator reuse.
     microbatch_order: NotRequired[Literal["packer", "largest_first"]]
     fuse_loss: NotRequired[bool]
+    # Exclude padding tokens from MoE routing and router auxiliary statistics.
+    mask_padding_from_moe: NotRequired[bool]
     pair_grouping_key: NotRequired[Literal["pair_index"]]
     max_sequences_per_bin: NotRequired[int]
 

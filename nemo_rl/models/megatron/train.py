@@ -188,6 +188,11 @@ def model_forward(
     multimodal_data = data_dict.get_multimodal_dict(
         as_tensors=True, device=input_ids_cp_sharded.device
     )
+    # This mask is token-layout metadata, not a model input that can be
+    # forwarded straight from the source batch. process_microbatch has already
+    # packed/CP-sharded it alongside input_ids and passes that aligned copy via
+    # the explicit argument below.
+    multimodal_data.pop("media_token_validity_mask", None)
     # VLM wrappers normally derive their own positions or expand the token sequence,
     # so position_ids are dropped for multimodal batches.
     # A model that consumes caller-packed THD inputs keeps them:
@@ -203,13 +208,19 @@ def model_forward(
     # Pass MTP loss mask to exclude prompt tokens from MTP loss
     if mtp_loss_mask is not None:
         additional_kwargs["loss_mask"] = mtp_loss_mask
-    padding_mask = _prepare_padding_mask_for_model(model, padding_mask)
+    # VLM wrappers that own CP slicing need the full mask while they merge
+    # media into the token row. They also own the later TP sequence-parallel
+    # scatter, alongside their externally constructed decoder embeddings.
+    if not model_slices_context_parallel_inputs:
+        padding_mask = _prepare_padding_mask_for_model(model, padding_mask)
     if padding_mask is not None:
         additional_kwargs["padding_mask"] = padding_mask
 
     # Only sent when the model advertises the parameter, so it never reaches a
-    # forward that would swallow it into **kwargs and quietly ignore it.
-    if media_token_validity_mask is not None:
+    # forward that would swallow it into **kwargs and quietly ignore it. A packed
+    # padding mask is already in the final model layout and lets the VLM derive
+    # the same validity information without preferring a stale source-row mask.
+    if media_token_validity_mask is not None and padding_mask is None:
         additional_kwargs["media_token_validity_mask"] = media_token_validity_mask
 
     if defer_fp32_logits:

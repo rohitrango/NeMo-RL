@@ -438,6 +438,33 @@ class TestProcessMicrobatch:
 
     @patch("nemo_rl.models.megatron.data.get_context_parallel_rank", return_value=0)
     @patch(
+        "nemo_rl.models.megatron.data.get_context_parallel_world_size", return_value=1
+    )
+    def test_process_microbatch_masks_prepacked_padding_from_moe(
+        self, mock_cp_world, mock_cp_rank
+    ):
+        from nemo_rl.models.megatron.data import process_microbatch
+
+        data = self._prepacked_batch()
+        # A validity mask attached before the source rows are materialized as a
+        # physical pack can still have the source-bin width.
+        data["media_token_validity_mask"] = torch.ones(1, 4, dtype=torch.bool)
+        result = process_microbatch(
+            data,
+            seq_length_key="input_lengths",
+            pack_sequences=True,
+            create_packed_seq_padding_mask=True,
+            model_slices_context_parallel_inputs=True,
+        )
+
+        assert torch.equal(
+            result.padding_mask,
+            torch.tensor([[False, False, False, True, False, False, False, True]]),
+        )
+        assert torch.equal(result.media_token_validity_mask, ~result.padding_mask)
+
+    @patch("nemo_rl.models.megatron.data.get_context_parallel_rank", return_value=0)
+    @patch(
         "nemo_rl.models.megatron.data.get_context_parallel_world_size", return_value=2
     )
     def test_process_microbatch_cp_slices_each_prepacked_source(
