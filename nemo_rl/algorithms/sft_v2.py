@@ -441,9 +441,15 @@ class SFTSingleControllerActor:
                     "answer_exact_match_count",
                     "num_answer_tokens",
                     "num_answer_sequences",
-                    "num_valid_samples",
                 ):
                     totals[key] += float(batch_metrics.get(key, 0.0))
+                # ``num_valid_samples`` from the loss counts physical rows. With
+                # sequence packing, one row can contain several source samples,
+                # so it under-reports validation coverage. The loader envelope
+                # retains the source ids before packing and is authoritative.
+                totals["num_valid_samples"] += sum(
+                    len(envelope.source_ids) for envelope in placed
+                )
                 self._owner_call("commit_sft_validation_batch")
             except Exception:
                 self._owner_call("abort_sft_validation_batch")

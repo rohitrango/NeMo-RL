@@ -174,6 +174,39 @@ def test_train_step_aborts_policy_and_loader_on_training_failure() -> None:
     assert controller._save_state.total_steps == 0
 
 
+def test_validation_counts_source_samples_before_packing(monkeypatch: Any) -> None:
+    controller = _controller()
+    controller._master_config.sft = SimpleNamespace(
+        val_batches=1,
+        only_unmask_final=True,
+        val_micro_batch_size=1,
+    )
+    controller._master_config.policy = {"make_sequence_length_divisible_by": 1}
+    envelopes = [_envelope(0, source_count=3), _envelope(1, source_count=2)]
+    controller._trainer.worker_group.run_all_workers_single_data.return_value = object()
+    controller._trainer.evaluate_placed_microbatches.return_value = {
+        "loss": 2.0,
+        "grad_norm": 0.0,
+        "all_mb_metrics": {
+            "num_unmasked_tokens": [8],
+            # Physical packed rows, deliberately smaller than the five sources.
+            "num_valid_samples": [2],
+            "answer_nll_sum": [3.0],
+            "answer_exact_match_count": [1],
+            "num_answer_tokens": [2],
+            "num_answer_sequences": [2],
+        },
+    }
+    monkeypatch.setattr("nemo_rl.algorithms.sft_v2.ray.get", lambda _: envelopes)
+
+    metrics = controller._run_validation()
+
+    assert metrics["num_valid_samples"] == 5
+    assert metrics["loss"] == 2.0
+    assert metrics["answer_token_ce"] == 1.5
+    assert metrics["answer_exact_match_accuracy"] == 0.5
+
+
 def _save_controller(**checkpointing: Any) -> object:
     controller = _controller()
     controller._master_config.checkpointing = {
