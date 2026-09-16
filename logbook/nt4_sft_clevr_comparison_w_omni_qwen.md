@@ -15,7 +15,7 @@ checkpoint. The diagnostics separate answer-token cross entropy and answer
 exact-match accuracy from the ordinary SFT loss, which also supervises chat
 template tokens.
 
-## Step-100 training results
+## Initial diagnostic step-100 training results
 
 | Model | Slurm job | Loss | Grad norm | Answer-token CE | Answer exact match |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -69,9 +69,33 @@ Assistant-token dumps:
   encode the examples.
 - Omni Nano used TP=4, EP=4, CP=1, ETP=1 on one four-GPU node.
 
-## Validation follow-up
+## Full CLEVR valA validation
 
-The original comparison had `checkpointing.enabled: false`, so it did not
-preserve step-100 weights. A matched rerun will evaluate the complete CLEVR
-validation split before training (step 0) and after 100 steps (step 100). The
-full-validation results will be appended here.
+The matched rerun evaluates all 5,000 CLEVR valA source examples before
+training and after 100 optimizer steps. These are teacher-forced metrics:
+
+- `Loss` is CE over every supervised assistant/template token.
+- `Answer-token CE` includes only the raw answer tokens.
+- `Answer exact match` requires the teacher-forced argmax prediction to match
+  every raw answer token. It is not autoregressive generation accuracy.
+
+| Model | Slurm job | Step | Loss | Answer-token CE | Answer exact match | Sources |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| NT4 Nano | 3775506 | 0 | 8.048137 | 10.986673 | 0.0000 | 5,000 |
+| NT4 Nano | 3775506 | 100 | 0.622899 | 1.245606 | 0.4596 | 5,000 |
+| Qwen VL | 3775507 | 0 | 9.353258 | 13.540986 | 0.0000 | 5,000 |
+| Qwen VL | 3775507 | 100 | 0.010812 | 0.063142 | 0.9790 | 5,000 |
+| Omni Nano | 3775508 | 0 | 2.202190 | 8.601472 | 0.0010 | 5,000 |
+| Omni Nano | 3775508 | 100 | 0.041173 | 0.160820 | 0.9582 | 5,000 |
+
+The matching final training-batch values from these reruns are:
+
+| Model | Step-100 train loss | Step-100 grad norm | Step-100 train answer-token CE |
+| --- | ---: | ---: | ---: |
+| NT4 Nano | 0.538354 | 6.771293 | 1.076549 |
+| Qwen VL | 0.000406 | 0.754948 | 0.002279 |
+| Omni Nano | 0.017680 | 4.301732 | 0.070708 |
+
+All three jobs completed successfully. The NT4 forward path also exercised
+the NM4 LLaVA media-alignment guard, which compares valid image placeholders
+with projected feature rows; no mismatch was detected.
