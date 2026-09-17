@@ -57,18 +57,6 @@ def _requirement(pyproject: Path, extra: str, name: str) -> Requirement:
     return matches[0]
 
 
-def _override_requirement(name: str) -> Requirement:
-    """The lone requirement for `name` in uv's override list."""
-    uv = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["tool"]["uv"]
-    matches = [
-        req
-        for req in map(Requirement, uv["override-dependencies"])
-        if canonicalize_name(req.name) == canonicalize_name(name)
-    ]
-    assert len(matches) == 1, f"expected exactly one override for {name}, got {matches}"
-    return matches[0]
-
-
 def _bounds(spec: SpecifierSet) -> tuple[Version, Version]:
     """Inclusive lower and exclusive upper bound of a lone `~=X.Y[.Z]` specifier."""
     specifiers = list(spec)
@@ -117,5 +105,19 @@ def test_mcore_energon_floor_is_within_megatron_lm_range(
 
 @pytest.mark.parametrize("package", ["av", "opencv-python-headless"])
 def test_royalty_sensitive_codecs_are_excluded(package: str) -> None:
-    requirement = _override_requirement(package)
-    assert str(requirement.marker) == 'sys_platform == "never"'
+    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text())
+    canonical_name = canonicalize_name(package)
+    overrides = [
+        override
+        for override in lock["manifest"]["overrides"]
+        if canonicalize_name(override["name"]) == canonical_name
+    ]
+
+    assert len(overrides) == 1, (
+        f"expected exactly one uv.lock override for {package}, got {overrides}"
+    )
+    assert overrides[0].get("marker") == "sys_platform == 'never'"
+    assert all(
+        canonicalize_name(locked_package["name"]) != canonical_name
+        for locked_package in lock["package"]
+    ), f"{package} must not be resolved in uv.lock"
