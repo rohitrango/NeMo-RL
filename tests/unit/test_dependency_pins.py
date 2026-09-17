@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Guards on pins we declare directly even though a submodule already declares them.
+"""Guards on dependency pins and exclusions declared in the root project.
 
 `megatron-energon` reaches us transitively as
 nemo-rl[mcore] -> megatron-bridge[te,ssm] -> megatron-core[dev,mlm] -> megatron-energon,
@@ -54,6 +54,18 @@ def _requirement(pyproject: Path, extra: str, name: str) -> Requirement:
     assert len(matches) == 1, (
         f"expected exactly one {name} requirement in [{extra}] of {pyproject}, got {matches}"
     )
+    return matches[0]
+
+
+def _override_requirement(name: str) -> Requirement:
+    """The lone requirement for `name` in uv's override list."""
+    uv = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["tool"]["uv"]
+    matches = [
+        req
+        for req in map(Requirement, uv["override-dependencies"])
+        if canonicalize_name(req.name) == canonicalize_name(name)
+    ]
+    assert len(matches) == 1, f"expected exactly one override for {name}, got {matches}"
     return matches[0]
 
 
@@ -101,3 +113,9 @@ def test_mcore_energon_floor_is_within_megatron_lm_range(
         f"the floor; widening it past upstream either makes `uv lock` unsatisfiable or "
         f"silently has no effect."
     )
+
+
+@pytest.mark.parametrize("package", ["av", "opencv-python-headless"])
+def test_royalty_sensitive_codecs_are_excluded(package: str) -> None:
+    requirement = _override_requirement(package)
+    assert str(requirement.marker) == 'sys_platform == "never"'
