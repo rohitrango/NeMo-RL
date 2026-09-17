@@ -574,6 +574,28 @@ def test_patchify_preserves_pixel_order_within_a_patch():
     torch.testing.assert_close(packed[0, 0], image.reshape(12))
 
 
+def test_patchify_orders_patches_row_major():
+    image = torch.arange(16, dtype=torch.float32).reshape(1, 1, 4, 4)
+    packed = PackedTensor(
+        [image],
+        dim_to_pack=0,
+        preprocess_mode="patchify",
+        preprocess_kwargs={"patch_dim": 2},
+    ).as_tensor()
+
+    torch.testing.assert_close(
+        packed[0],
+        torch.tensor(
+            [
+                [0.0, 1.0, 4.0, 5.0],
+                [2.0, 3.0, 6.0, 7.0],
+                [8.0, 9.0, 12.0, 13.0],
+                [10.0, 11.0, 14.0, 15.0],
+            ]
+        ),
+    )
+
+
 def test_patchify_accepts_already_patchified_segments():
     raw = PackedTensor(
         [torch.ones(1, 3, 32, 32)],
@@ -637,6 +659,26 @@ def test_concat_rejects_mixed_preprocess_settings():
 
     with pytest.raises(AssertionError, match="same preprocess setting"):
         PackedTensor.concat([padded, plain])
+
+
+def test_concat_rejects_different_patch_dims():
+    first = PackedTensor(
+        torch.ones(1, 3, 32, 32),
+        dim_to_pack=0,
+        preprocess_mode="patchify",
+        preprocess_kwargs={"patch_dim": 16},
+    )
+    second = PackedTensor(
+        torch.ones(1, 3, 32, 32),
+        dim_to_pack=0,
+        preprocess_mode="patchify",
+        preprocess_kwargs={"patch_dim": 8},
+    )
+
+    with pytest.raises(AssertionError, match="same preprocess setting"):
+        PackedTensor.concat([first, second])
+    with pytest.raises(AssertionError, match="same preprocess setting"):
+        PackedTensor.flattened_concat([first, second])
 
 
 def test_packedtensor_dedup_uses_provenance_not_prompt_position():

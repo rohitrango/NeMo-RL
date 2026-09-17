@@ -203,10 +203,9 @@ def multimodal_row_tags(
 
     Carries ``shapes`` (per-row, and unrecoverable once ``to_wire`` flattens)
     and the field's preprocessing settings. Deliberately *not* a pad target: the
-    width padding lands at is scratch that the model discards -- mcore crops it
-    via ``imgs_sizes`` before patchification, and the AutoModel path rejects
-    mixed-resolution batches outright -- so each consumer pads to its own view
-    and nothing batch-wide has to be agreed across shards.
+    width padding lands at is scratch that the model discards. Mcore consumes
+    pre-patchified pixels without spatial dimensions, while AutoModel pads at
+    materialization, so nothing batch-wide has to be agreed across shards.
     """
     tags: list[dict[str, Any]] = [{} for _ in range(sample_count)]
     for key, value in multimodal.items():
@@ -290,7 +289,7 @@ def _patchify_segments(segments: list[torch.Tensor], *, patch_dim: int) -> torch
     """Cut pixel segments into vision patches and pack them into one sequence.
 
     Each ``[N, channels, H, W]`` segment is processed at its native resolution
-    into a ``[C_i, P²]`` block, where ``C_i`` is its spatial patch count and
+    into a ``[C_i, P²]`` block, where ``C_i`` is ``N * rows * columns`` and
     ``P²`` is the flattened patch width (``channels * patch_dim**2``). Blocks
     are packed along dimension zero, then a batch dimension is added to produce
     ``[1, total_C, P²]``. Already-patchified segments in that final layout are
@@ -407,8 +406,10 @@ class PackedTensor:
             dim_to_pack: Dimension along which ``as_tensor`` concatenates.
             preprocess_mode: Optional preprocessing applied by ``as_tensor``.
                 Supported values are ``pad_to_max_shape`` and ``patchify``.
-            preprocess_kwargs: Extra arguments for ``preprocess_mode``. Patchify
-                accepts ``patch_dim``.
+                Patchify requires ``dim_to_pack=0`` and changes 4-D inputs into
+                a 3-D ``[1, total_patches, P²]`` tensor.
+            preprocess_kwargs: Extra arguments for ``preprocess_mode``.
+                Patchify requires ``patch_dim``.
         """
         assert tensors is not None, "Input tensors to PackedTensor cannot be None"
 
