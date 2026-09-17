@@ -298,7 +298,9 @@ def process_microbatch(
         flash_attn_kwargs = {}
 
     # Add vlm kwargs to model call
-    vlm_kwargs = mb.get_multimodal_dict(as_tensors=True, device=input_ids.device)
+    vlm_kwargs = mb.get_multimodal_dict(
+        True, input_ids.device, None, "pad_to_max_shape"
+    )
     if len(vlm_kwargs) > 0:
         # if there are multimodal kwargs, we don't need to add position_ids (computed internally)
         position_ids = None

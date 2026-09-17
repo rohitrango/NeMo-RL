@@ -377,7 +377,11 @@ def vlm_preference_preprocessor(
     THD input; the canonical ``NemotronOmniModel`` inserts media embeddings
     before selecting this rank's context-parallel tokens.
     """
-    from nemo_rl.data.multimodal_utils import PackedTensor
+    from nemo_rl.data.multimodal_utils import (
+        PackedTensor,
+        get_preprocess,
+        uses_image_placeholder,
+    )
 
     completions = datum_dict["completions"]
     if len(completions) != 2:
@@ -386,14 +390,9 @@ def vlm_preference_preprocessor(
     if ordered[0]["rank"] == ordered[1]["rank"]:
         raise ValueError("Tied preference ranks are not supported")
 
-    placeholder_style_processors = {
-        "NemotronNanoVLV2Processor",
-        "NemotronH_Nano_Omni_Reasoning_V3Processor",
-        "NemotronH_Omni_Reasoning_V3Processor",
-    }
     message_processor = (
         _NemotronOmniPreferenceProcessorProxy(processor)
-        if type(processor).__name__ in placeholder_style_processors
+        if uses_image_placeholder(processor)
         else processor
     )
 
@@ -407,7 +406,7 @@ def vlm_preference_preprocessor(
 
         # Mirror the canonical Nemotron Omni metadata. Record native image sizes
         # before patchification removes the spatial dimensions.
-        for raw_message in message_log:
+        for raw_message in message_log if uses_image_placeholder(processor) else []:
             message = cast(Any, raw_message)
             pixel_values = message.get("pixel_values")
             if not isinstance(pixel_values, PackedTensor):
@@ -430,8 +429,11 @@ def vlm_preference_preprocessor(
                     torch.tensor(image_sizes, dtype=torch.long),
                     dim_to_pack=0,
                 )
-            pixel_values.preprocess_mode = "patchify"
-            pixel_values.preprocess_kwargs = {"patch_dim": 16}
+            message["pixel_values"] = PackedTensor(
+                pixel_values.tensors,
+                pixel_values.dim_to_pack,
+                **get_preprocess(processor, "pixel_values"),
+            )
             imgs_sizes = message.get("imgs_sizes")
             if isinstance(imgs_sizes, PackedTensor) and "num_frames" not in message:
                 sizes = imgs_sizes.as_tensor()

@@ -299,12 +299,13 @@ def _patchify_segments(segments: list[torch.Tensor], *, patch_dim: int) -> torch
     if patch_dim <= 0:
         raise ValueError(f"patch_dim must be positive, got {patch_dim}")
 
+    patch_features = 3 * patch_dim**2
     flattened: list[torch.Tensor] = []
     for segment in segments:
         if segment.ndim == 3:
-            if segment.shape[0] != 1:
+            if segment.shape[0] != 1 or segment.shape[-1] != patch_features:
                 raise ValueError(
-                    "Pre-patchified segments must be [1, total_C, P²], "
+                    f"Pre-patchified segments must be [1, total_C, P²] with P²={patch_features}, "
                     f"got shape {tuple(segment.shape)}"
                 )
             flattened.append(segment[0])
@@ -429,6 +430,10 @@ class PackedTensor:
                 f"Unknown preprocess_mode {preprocess_mode!r}; expected None, "
                 "'pad_to_max_shape', or 'patchify'"
             )
+        if preprocess_mode == "patchify" and not (preprocess_kwargs or {}).get(
+            "patch_dim"
+        ):
+            raise ValueError("patchify requires patch_dim")
         self.preprocess_mode = preprocess_mode
         self.preprocess_kwargs: dict[str, Any] = dict(preprocess_kwargs or {})
         if (_row_offsets is None) != (_segment_indices is None):
@@ -558,8 +563,9 @@ class PackedTensor:
         return copied
 
     def as_tensor(
-        self, device: Optional[torch.device] = None
+        self, device: torch.device | None = None, mode: str | None = None
     ) -> Optional[torch.Tensor]:
+        mode = mode or self.preprocess_mode
         if device is not None:
             # Move only non-None tensors to device, preserve Nones
             for i, item in enumerate(self.tensors):
@@ -572,7 +578,7 @@ class PackedTensor:
         if len(non_none_tensors) == 0:
             return None
 
-        if self.preprocess_mode == "patchify":
+        if mode == "patchify":
             if self.dim_to_pack != 0:
                 raise ValueError(
                     f"patchify requires dim_to_pack=0, got {self.dim_to_pack}"
@@ -586,7 +592,7 @@ class PackedTensor:
         # feature sequences. Concatenation already permits the packing
         # dimension to vary; when explicitly requested, pad every other
         # dimension to the largest size in the batch.
-        if self.preprocess_mode == "pad_to_max_shape":
+        if mode == "pad_to_max_shape":
             ranks = {tensor.ndim for tensor in non_none_tensors}
             if len(ranks) != 1:
                 raise ValueError(
@@ -1272,9 +1278,11 @@ def get_dim_to_pack_along(processor, key: str) -> int:
 def get_preprocess(processor: Any, key: str) -> dict[str, Any]:
     """Return materialization preprocessing for one processor input."""
     if uses_image_placeholder(processor) and key == "pixel_values":
+        image_processor = getattr(processor, "image_processor", processor)
+        patch_dim = getattr(image_processor, "patch_size", 16)
         return {
             "preprocess_mode": "patchify",
-            "preprocess_kwargs": {"patch_dim": 16},
+            "preprocess_kwargs": {"patch_dim": patch_dim},
         }
     return {"preprocess_mode": None, "preprocess_kwargs": {}}
 
@@ -1287,6 +1295,7 @@ def extract_multimodal_model_inputs(
     if (
         uses_image_placeholder(processor)
         and "pixel_values" in processed
+        and isinstance(processed["pixel_values"], torch.Tensor)
         and "imgs_sizes" not in processed
         and processed["pixel_values"].ndim == 4
     ):
@@ -1301,6 +1310,21 @@ def extract_multimodal_model_inputs(
             len(processed["imgs_sizes"]),
             dtype=torch.long,
         )
+    sizes = processed.get("imgs_sizes")
+    if uses_image_placeholder(processor) and isinstance(sizes, torch.Tensor):
+        pixels = processed["pixel_values"]
+        segments = pixels if isinstance(pixels, list) else [pixels]
+        preprocess = get_preprocess(processor, "pixel_values")
+        patch_dim = preprocess["preprocess_kwargs"]["patch_dim"]
+        pixel_count = sum(
+            segment.shape[1]
+            if segment.ndim == 3
+            else segment.numel() // (3 * patch_dim**2)
+            for segment in segments
+        )
+        size_count = int(torch.prod(sizes // patch_dim, dim=1).sum())
+        if pixel_count != size_count:
+            raise ValueError("pixel_values and imgs_sizes have different patch counts")
 
     input_ids = processed.get("input_ids")
     if input_ids is None:
@@ -1328,7 +1352,7 @@ def extract_multimodal_model_inputs(
         if key not in processed:
             continue
         value = processed[key]
-        if not isinstance(value, torch.Tensor):
+        if not isinstance(value, (torch.Tensor, list)):
             raise ValueError(
                 f"Processor model input {key!r} must be a torch.Tensor, got "
                 f"{type(value).__name__}."
@@ -1478,13 +1502,9 @@ def media_sources_equal(
 def _materialize_ragged_pixel_values(
     processed: dict[str, Any], processor: Any
 ) -> dict[str, Any]:
-    """Fold a ragged per-image ``pixel_values`` list into one patch sequence.
+    """Preserve a ragged per-image ``pixel_values`` list for materialization.
 
-    Processors with dynamic per-image resolution return a list of CHW tensors
-    rather than a stacked batch. ``imgs_sizes`` is derived from the *unpadded*
-    shapes first, since those exact sizes are what the projector slices with;
-    patchification happens afterwards so downstream sees the single tensor its
-    ``torch.Tensor`` contract expects.
+    Tiles remain separate until ``PackedTensor.as_tensor`` materializes them.
     """
     processed = dict(processed)
     pixel_values = processed.get("pixel_values")
@@ -1510,20 +1530,13 @@ def _materialize_ragged_pixel_values(
 def _stack_ragged_pixel_values(
     processed: dict[str, Any], tiles: list[torch.Tensor], processor: Any
 ) -> None:
-    """Derive image sizes, then patchify native-shape tiles into one tensor."""
+    """Derive image sizes and preserve native-shape tiles for patchification."""
     if uses_image_placeholder(processor) and "imgs_sizes" not in processed:
         processed["imgs_sizes"] = torch.tensor(
             [[int(item.shape[-2]), int(item.shape[-1])] for item in tiles],
             dtype=torch.long,
         )
-    stacked = PackedTensor(
-        [item.unsqueeze(0) for item in tiles],
-        dim_to_pack=0,
-        preprocess_mode="patchify",
-        preprocess_kwargs={"patch_dim": 16},
-    ).as_tensor()
-    assert stacked is not None
-    processed["pixel_values"] = stacked
+    processed["pixel_values"] = [item.unsqueeze(0) for item in tiles]
 
 
 def _restore_tensors(processed: dict[str, Any]) -> None:
