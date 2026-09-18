@@ -504,9 +504,13 @@ constraint-dependencies = [
 ]
 
 # Workaround for https://github.com/NVIDIA/cutlass/issues/3259: libs-base
-# and libs-cu13 wheels overlap and race on shared paths. libs-cu13 is a
-# functional superset at 4.5.2, so drop libs-base to make installs deterministic.
-exclude-dependencies = ["nvidia-cutlass-dsl-libs-base"]
+# and libs-cu13 wheels overlap and race on shared paths in CUTLASS DSL 4.5.x.
+# CUTLASS DSL 4.6.0 splits required Python code into libs-core via libs-base,
+# so keep the exclusion scoped to the affected 4.5.x dependency edges.
+exclude-dependencies = [
+  { package = { name = "nvidia-cutlass-dsl", version = "4.5.0" }, dependencies = ["nvidia-cutlass-dsl-libs-base"] },
+  { package = { name = "nvidia-cutlass-dsl", version = "4.5.2" }, dependencies = ["nvidia-cutlass-dsl-libs-base"] },
+]
 
 conflicts = [
   [{ extra = "fsdp" }, { extra = "sglang" }],
