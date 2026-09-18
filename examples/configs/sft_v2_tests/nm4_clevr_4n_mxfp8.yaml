@@ -1,0 +1,18 @@
+defaults:
+  - nm4_clevr_4n.yaml
+
+policy:
+  megatron_cfg:
+    fp8_cfg:
+      enabled: true
+      fp8: e4m3
+      fp8_recipe: mxfp8
+      fp8_param: true
+    te_precision_config_file: examples/configs/sft_v2_tests/nm4_mxfp8_tp4_precision.yaml
+    model_overrides:
+      fp8: null
+      fp8_param: false
+      fp8_quantizer_factory: null
+      quant_recipe: null
+      moe_router_padding_for_quantization: true
+      moe_router_padding_for_fp8: false

@@ -301,6 +301,67 @@ def _encode_with_marker_splices(
     return torch.tensor(ids, dtype=torch.long), positions
 
 
+def _processor_template_tokens_and_mask(
+    messages: list[dict[str, Any]],
+    processor: Any,
+    *,
+    train_only_on_last_assistant_turn: bool,
+    assistant_turn_loss: list[bool] | None,
+) -> tuple[torch.Tensor, torch.Tensor, list[int]]:
+    """Render the configured processor template without materializing media."""
+    tokenizer = processor.tokenizer
+    chunks: list[torch.Tensor] = []
+    masks: list[torch.Tensor] = []
+    placeholder_positions: list[int] = []
+    previous = ""
+    assistant_index = 0
+    assistant_message_indices = [
+        index for index, message in enumerate(messages) if message["role"] == "assistant"
+    ]
+    if not assistant_message_indices:
+        raise NoTrainableTokensError(
+            "Processor chat-template conversation has no assistant turn."
+        )
+    last_assistant_index = assistant_message_indices[-1]
+    offset = 0
+    for message_index, message in enumerate(messages):
+        formatted = processor.apply_chat_template(
+            messages[: message_index + 1],
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        if isinstance(formatted, list):
+            if len(formatted) != 1:
+                raise ValueError("Processor chat template returned several conversations.")
+            formatted = formatted[0]
+        boundary = next(
+            (
+                index
+                for index, (old, new) in enumerate(zip(previous, formatted, strict=False))
+                if old != new
+            ),
+            min(len(previous), len(formatted)),
+        )
+        chunk, positions = _encode_with_marker_splices(
+            formatted[boundary:],
+            tokenizer,
+            image_token_id=tokenizer.convert_tokens_to_ids("<image>"),
+        )
+        train_turn = message["role"] == "assistant"
+        if train_turn and assistant_turn_loss is not None:
+            train_turn = assistant_turn_loss[assistant_index]
+        if train_turn and train_only_on_last_assistant_turn:
+            train_turn = message_index == last_assistant_index
+        chunks.append(chunk)
+        masks.append(torch.full_like(chunk, int(train_turn)))
+        placeholder_positions.extend(offset + position for position in positions)
+        offset += len(chunk)
+        previous = formatted
+        if message["role"] == "assistant":
+            assistant_index += 1
+    return torch.cat(chunks), torch.cat(masks), placeholder_positions
+
+
 def tokenize_nemotron_conversation(
     messages: list[dict[str, Any]],
     *,
@@ -327,13 +388,20 @@ def tokenize_nemotron_conversation(
         raise ValueError(
             "Tool-response boundaries are unsupported with skip_chat_template."
         )
-    if train_only_on_last_assistant_turn and prompt_format != "nemotron6-moe":
+    if train_only_on_last_assistant_turn and prompt_format not in {
+        "nemotron6-moe",
+        "processor_chat_template",
+    }:
         raise ValueError(
-            "train_only_on_last_assistant_turn is supported only for nemotron6-moe."
+            "train_only_on_last_assistant_turn is supported only for "
+            "nemotron6-moe and processor_chat_template."
         )
     if assistant_turn_loss is not None:
-        if prompt_format != "nemotron6-moe":
-            raise ValueError("Explicit assistant loss is supported only for nemotron6-moe.")
+        if prompt_format not in {"nemotron6-moe", "processor_chat_template"}:
+            raise ValueError(
+                "Explicit assistant loss is supported only for nemotron6-moe "
+                "and processor_chat_template."
+            )
         if train_only_on_last_assistant_turn:
             raise ValueError(
                 "Explicit assistant loss is incompatible with last-assistant-only loss."
@@ -367,26 +435,45 @@ def tokenize_nemotron_conversation(
             if prompt_format == "nemotron-h-5p5-reasoning"
             else None
         )
-        if prompt_format == "nemotron6-moe":
+        if prompt_format == "processor_chat_template":
+            if tool_response_as_turn_boundary:
+                raise ValueError(
+                    "Processor chat-template formatting does not support "
+                    "tool-response turn boundaries."
+                )
+            tokens, token_loss_mask, placeholder_positions = (
+                _processor_template_tokens_and_mask(
+                    rendered_messages,
+                    processor,
+                    train_only_on_last_assistant_turn=(
+                        train_only_on_last_assistant_turn
+                    ),
+                    assistant_turn_loss=assistant_turn_loss,
+                )
+            )
+        elif prompt_format == "nemotron6-moe":
             _validate_nemotron6_tokenizer(tokenizer)
         elif prompt_format != "nemotron-h-5p5-reasoning":
             raise ValueError(f"Unsupported Nemotron prompt format {prompt_format!r}.")
-        rendered_text = tokenizer.apply_chat_template(
-            rendered_messages,
-            tokenize=False,
-            add_generation_prompt=False,
-            chat_template=template,
-            truncate_history_thinking=False,
-        )
-        if isinstance(rendered_text, list):
-            if len(rendered_text) != 1:
-                raise ValueError("Nemotron chat template returned several conversations.")
-            rendered_text = rendered_text[0]
-        tokens, placeholder_positions = _encode_with_marker_splices(
-            rendered_text,
-            tokenizer,
-            image_token_id=tokenizer.convert_tokens_to_ids("<image>"),
-        )
+        if prompt_format != "processor_chat_template":
+            rendered_text = tokenizer.apply_chat_template(
+                rendered_messages,
+                tokenize=False,
+                add_generation_prompt=False,
+                chat_template=template,
+                truncate_history_thinking=False,
+            )
+            if isinstance(rendered_text, list):
+                if len(rendered_text) != 1:
+                    raise ValueError(
+                        "Nemotron chat template returned several conversations."
+                    )
+                rendered_text = rendered_text[0]
+            tokens, placeholder_positions = _encode_with_marker_splices(
+                rendered_text,
+                tokenizer,
+                image_token_id=tokenizer.convert_tokens_to_ids("<image>"),
+            )
 
         if prompt_format == "nemotron-h-5p5-reasoning":
             target = tokens.clone()
@@ -417,7 +504,7 @@ def tokenize_nemotron_conversation(
                     if len(next_special):
                         target[system_position : next_special[0]] = IGNORE_INDEX
             token_loss_mask = (target != IGNORE_INDEX).to(dtype=torch.long)
-        else:
+        elif prompt_format == "nemotron6-moe":
             token_loss_mask = torch.zeros_like(tokens)
             assistant_indices = _nemotron6_assistant_indices(
                 tokens,

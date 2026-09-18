@@ -226,6 +226,7 @@ def _normalize_assistant_thinking(
         message["role"] != "assistant"
         or sample.__subflavors__.get("skip_chat_template", False)
         or relax_thinking_trace_check
+        or prompt_format == "processor_chat_template"
     ):
         return
     content = message["content"]
@@ -597,7 +598,11 @@ class _NemotronVisualProcessorAdapter:
             raise ValueError("video_default_fps must be greater than zero.")
         if video_decode_thread_count < 0:
             raise ValueError("video_decode_thread_count must be non-negative.")
-        if prompt_format not in {"nemotron-h-5p5-reasoning", "nemotron6-moe"}:
+        if prompt_format not in {
+            "nemotron-h-5p5-reasoning",
+            "nemotron6-moe",
+            "processor_chat_template",
+        }:
             raise ValueError(f"Unsupported Nemotron prompt format {prompt_format!r}.")
         # "default" is the legacy nemo-rl spelling of the reference's "normalized";
         # both select the same non-ultra newline behavior.

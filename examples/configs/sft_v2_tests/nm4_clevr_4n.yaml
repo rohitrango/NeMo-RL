@@ -12,53 +12,30 @@ policy:
   # Energon and Megatron must use the matching 262k Pixtral processor tokenizer.
   tokenizer:
     name: /data/nemotron4/processor
-    # The Pixtral template accepts text strings only. CLEVR uses OpenAI-style
-    # content lists, so render image parts as Pixtral placeholders first.
-    chat_template: |-
-      {%- macro render_content(content) -%}
-        {%- if content is string -%}
-          {{- content -}}
-        {%- else -%}
-          {%- for part in content -%}
-            {%- if part['type'] == 'image' -%}
-              {{- '<image>' -}}
-            {%- elif part['type'] == 'text' -%}
-              {{- part['text'] -}}
-            {%- else -%}
-              {{- raise_exception('Unsupported content type: ' + part['type']) -}}
-            {%- endif -%}
-          {%- endfor -%}
-        {%- endif -%}
-      {%- endmacro -%}
-      {%- for message in messages -%}
-        {{- render_content(message['content']) -}}
-        {%- if message['role'] == 'assistant' -%}
-          {{- '\n\n' -}}
-        {%- else -%}
-          {{- '\n' -}}
-        {%- endif -%}
-      {%- endfor -%}
   train_global_batch_size: 4
-  max_total_sequence_length: 2048
+  max_total_sequence_length: 4096
   megatron_cfg:
     context_parallel_size: 1
+    tensor_model_parallel_size: 4
     expert_model_parallel_size: 16
     # Match the source NM4 training recipe: train the language model and
     # projector, but keep the pretrained vision tower fixed.
     freeze_vision_encoder: true
     freeze_vision_projector: false
     optimizer:
-      # Match the stable VLM smoke recipes while using a much smaller batch
-      # than the source NM4 training run.
       lr: 5.0e-06
-    # The checkpoint pins FlashAttention, but FA2 rejects NM4's 256-wide heads
-    # on sm103. Let Transformer Engine select a supported backend per layer.
+    # attention_backend: auto
     attention_backend: auto
+    flash_attention_version: null
     env_vars:
       # GDP's shared TileLang gated-delta backward faults on sm103; use Triton.
       FLA_TILELANG: "0"
-      # Log one encoded sample per data-parallel loader to verify image expansion.
+      # NVTE_FUSED_ATTN: "0"
       NRL_SFT_MULTIMODAL_DIAGNOSTICS: "1"
+      NVTE_CUTEDSL_FUSED_GROUPED_MLP: "1"
+      NVTE_FWD_LAYERNORM_SM_MARGIN: "40"
+      NVTE_BWD_LAYERNORM_SM_MARGIN: "40"
+      NVTE_INF_LAYERNORM_SM_MARGIN: "40"
     # The checkpoint was saved with MXFP8 defaults. TP=4 produces a local GDP
     # projection dimension of 4632, which is not divisible by MXFP8's block
     # size of 32. Run this correctness smoke test in BF16.
@@ -69,6 +46,11 @@ policy:
       quant_recipe: null
       moe_router_padding_for_quantization: false
       moe_router_padding_for_fp8: false
+      saved_args:
+        attention_backend: auto
+        flash_attention_version: null
+        mimo_vision_encoder_attention_backend: auto
+        mimo_vision_encoder_flash_attention_version: null
     # SFT-v2 normally derives this before worker construction. Keep the
     # standalone checkpoint-load check on the same value.
     train_iters: ${sft.max_num_steps}
@@ -111,7 +93,7 @@ data:
   validation: null
 
 logger:
-  wandb_enabled: false
+  wandb_enabled: true
   log_dir: logs/nm4-clevr-4n
   wandb:
     project: nemotron-super-sft

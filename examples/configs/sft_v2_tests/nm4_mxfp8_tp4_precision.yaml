@@ -1,0 +1,38 @@
+configs:
+  bf16:
+    transformer_engine_config_type: TEQuantizationParams
+    training_recipe: {}
+  mxfp8:
+    transformer_engine_config_type: TEQuantizationParams
+    training_recipe:
+      fp8_quantization_recipe: mxfp8
+    evaluation_recipe: {}
+
+matchers:
+  # At TP=4, NT4's GDP input projection has a 4,632-wide local shard, which
+  # is not divisible by MXFP8's 32-value block size.
+  # gdp_input_projection_bf16:
+  #   config: bf16
+  #   type: glob
+  #   pattern: "*mixer.in_proj"
+  #   enabled: true
+  mtp_bf16:
+    config: bf16
+    type: glob
+    pattern: "*mtp.layers.*"
+    enabled: true
+  vision_encoder_bf16:
+    config: bf16
+    type: glob
+    pattern: "*modality_submodules.*.encoders.*"
+    enabled: true
+  vision_projection_bf16:
+    config: bf16
+    type: glob
+    pattern: "*modality_submodules.*projections.*"
+    enabled: true
+  remaining_modules_mxfp8:
+    config: mxfp8
+    type: glob
+    pattern: "*"
+    enabled: true

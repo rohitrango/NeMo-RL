@@ -58,7 +58,9 @@ class EnergonTaskEncoderOptions(BaseModel, extra="forbid"):
 
     patch_dim: Annotated[int, Field(ge=1)] = 16
     temporal_patch_size: Annotated[int, Field(ge=1)] = 2
-    prompt_format: Literal["nemotron-h-5p5-reasoning", "nemotron6-moe"] = (
+    prompt_format: Literal[
+        "nemotron-h-5p5-reasoning", "nemotron6-moe", "processor_chat_template"
+    ] = (
         "nemotron-h-5p5-reasoning"
     )
     thinking_trace_format: Literal["default", "normalized", "ultra"] = "normalized"
