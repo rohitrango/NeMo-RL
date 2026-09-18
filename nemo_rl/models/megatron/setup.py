@@ -1777,6 +1777,10 @@ def _validate_training_config(config: PolicyConfig, model_cfg: Any) -> None:
     ## perform_initialization = True is a workaround to ensure the correct tensor parallel attributes are set
     ## on the TP-sharded parameters.
     model_cfg.calculate_per_token_loss = True
+    # Accumulate MTP losses as token sums so MCore normalizes their gradients and
+    # logging by the global main-loss token count. This makes MTP invariant to
+    # uneven valid-token distributions across DP/CP ranks and microbatches.
+    model_cfg.mtp_normalize_loss_by_main_tokens = True
     model_cfg.perform_initialization = True
 
     # MoE aux loss validation - disabled to support aux loss normalization in RL SFT.

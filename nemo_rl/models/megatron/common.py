@@ -343,11 +343,11 @@ def get_mtp_metrics(loss_scale: float = 1.0) -> dict[str, Any]:
     This function reduces MTP metrics across ranks and returns a dictionary of metrics.
 
     Args:
-        loss_scale: Scale factor applied to each MTP layer's loss (e.g., 1/num_microbatches).
-            ``MTPLossLoggingHelper`` accumulates the per-microbatch loss across microbatches
-            without dividing, so callers must pass 1/num_microbatches to recover the mean
-            (mirroring ``get_moe_metrics``). Acceptance rate is a ratio of counts and is not
-            scaled. Defaults to 1.0.
+        loss_scale: Compatibility scale applied when only the legacy rank-local
+            mean losses are available (e.g., 1/num_microbatches). When MCore
+            provides globally reduced token sums, the loss is instead normalized
+            by the global main-loss token count. Acceptance rate is a ratio of
+            counts and is not scaled. Defaults to 1.0.
 
     Returns:
         dict[str, Any]: A flat dict of metrics. Each MTP layer's loss is returned
@@ -359,7 +359,18 @@ def get_mtp_metrics(loss_scale: float = 1.0) -> dict[str, Any]:
 
     metrics: dict[str, Any] = {}
     if "loss_values" in tracker:
-        mtp_losses = tracker["loss_values"].float() * loss_scale
+        if tracker.get("token_weighted_logging", False):
+            # These values are sum-reduced over DP+CP by MCore. Dividing the raw
+            # MTP loss by the global main-loss token count mirrors the gradient
+            # normalization used when mtp_normalize_loss_by_main_tokens=True and
+            # remains invariant to empty or uneven CP shards.
+            mtp_losses = tracker["loss_sum_values"].float() / tracker[
+                "main_total_values"
+            ].float().clamp(min=1)
+        else:
+            # Compatibility path for MCore versions/configurations that only
+            # track the legacy rank-local mean loss.
+            mtp_losses = tracker["loss_values"].float() * loss_scale
         mtp_corrects = tracker.get("correct_values", torch.zeros_like(mtp_losses))
         mtp_totals = tracker.get("total_values", torch.ones_like(mtp_losses))
         mtp_num_layers = mtp_losses.shape[0]

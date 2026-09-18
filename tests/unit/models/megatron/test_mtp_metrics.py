@@ -107,6 +107,34 @@ def test_get_mtp_metrics_applies_loss_scale(monkeypatch):
 
 
 @pytest.mark.mcore
+def test_get_mtp_metrics_uses_global_main_token_normalization(monkeypatch):
+    """Token-summed MTP losses use the global main-token count, not rank means."""
+    from nemo_rl.models.megatron.common import get_mtp_metrics
+
+    tracker = {
+        # Deliberately different legacy values ensure this test exercises the
+        # globally sum-reduced path used with CP.
+        "loss_values": torch.tensor([1.0, 2.0]),
+        "loss_sum_values": torch.tensor([24.0, 30.0]),
+        "loss_total_values": torch.tensor([3.0, 4.0]),
+        "main_total_values": torch.tensor([4.0, 5.0]),
+        "correct_values": torch.tensor([1.0, 3.0]),
+        "total_values": torch.tensor([2.0, 6.0]),
+        "token_weighted_logging": True,
+    }
+    _seed_tracker(monkeypatch, tracker)
+
+    metrics = get_mtp_metrics(loss_scale=0.25)
+
+    # The microbatch loss_scale applies only to the legacy sum-of-means path;
+    # raw loss and token sums already aggregate correctly across microbatches.
+    assert metrics["mtp_1_loss"] == pytest.approx(6.0)
+    assert metrics["mtp_2_loss"] == pytest.approx(6.0)
+    assert metrics["mtp_1_acceptance_rate"] == pytest.approx(50.0)
+    assert metrics["mtp_2_acceptance_rate"] == pytest.approx(50.0)
+
+
+@pytest.mark.mcore
 def test_get_mtp_metrics_loss_scale_recovers_mean_over_microbatches(monkeypatch):
     """loss_scale=1/num_microbatches turns the accumulated loss sum into the mean.
 

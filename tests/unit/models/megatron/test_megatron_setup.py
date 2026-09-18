@@ -2436,6 +2436,7 @@ class TestValidateTrainingConfig:
         _validate_training_config(config, model_cfg)
 
         assert model_cfg.calculate_per_token_loss is True
+        assert model_cfg.mtp_normalize_loss_by_main_tokens is True
         assert model_cfg.perform_initialization is True
 
     def test_moe_aux_loss_now_supported(self):

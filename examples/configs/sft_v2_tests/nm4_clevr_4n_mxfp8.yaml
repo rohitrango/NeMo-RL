@@ -16,3 +16,10 @@ policy:
       quant_recipe: null
       moe_router_padding_for_quantization: false
       moe_router_padding_for_fp8: false
+      
+logger:
+  log_dir: logs/nm4-clevr-4n-mxfp8  
+  wandb:
+    name: nm4-clevr-4n-mxfp8
+  tensorboard:
+    log_dir: logs/nm4-clevr-4n-mxfp8

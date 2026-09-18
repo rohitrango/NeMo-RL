@@ -703,6 +703,20 @@ def test_config_validates_nemotron_task_encoder_options():
     assert config.task_encoder.options.thinking_trace_format == "ultra"
     assert config.task_encoder.options.audio_subsampling_factor == 8
 
+    processor_template_config = EnergonLoaderConfig.model_validate(
+        {
+            "model_family": "nemotron",
+            "task_encoder": {
+                "name": "nemotron_multimodal",
+                "options": {"prompt_format": "processor_chat_template"},
+            },
+        }
+    )
+    assert (
+        processor_template_config.task_encoder.options.prompt_format
+        == "processor_chat_template"
+    )
+
     for options in (
         {"audio_subsampling_factor": 3},
         {"min_audio_duration_seconds": 31.0},
