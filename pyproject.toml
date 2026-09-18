@@ -211,9 +211,10 @@ mcore = [
   "flash-attn==2.8.1 ; sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'x86_64')",
   # FlashAttention 4 is the Blackwell-optimized backend. Keep FA2 above as a fallback
   # for attention shapes and architectures that TE does not dispatch to FA4.
-  # Keep this trio aligned with the dependency set validated by the Nemotron-4
-  # training image. quack-kernels 0.6.4 globally patches CUTLASS AST handling
-  # and breaks the gated-delta-product kernel.
+  # These direct pins must match the MCore training dependency set in
+  # 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/dependencies/install.sh.
+  # quack-kernels 0.6.4 globally patches CUTLASS AST handling and breaks the
+  # gated-delta-product kernel.
   "flash-attn-4[cu13]==4.0.0b19 ; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   "quack-kernels==0.6.1 ; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   # mamba-ssm/causal-conv1d LOOK redundant (megatron-bridge[ssm] pulls them), but do not

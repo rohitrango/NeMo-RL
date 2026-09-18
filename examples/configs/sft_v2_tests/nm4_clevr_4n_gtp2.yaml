@@ -1,0 +1,23 @@
+defaults:
+  - nm4_clevr_4n.yaml
+
+policy:
+  megatron_cfg:
+    context_parallel_size: 4
+    tensor_model_parallel_size: 1
+    model_overrides:
+      # 16 GPUs with TP=1, CP=4, and GTP=2 gives DP=2 and four logical
+      # DP×GTP data lanes. EP=16 uses the full world, so expert DP=1 and
+      # expert GTP stays 1.
+      gtp_weight_remat_size: 2
+      expert_gtp_weight_remat_size: 1
+
+logger:
+  log_dir: logs/nm4-clevr-4n-gtp2
+  wandb:
+    name: nm4-clevr-4n-cp4-gtp2
+  tensorboard:
+    log_dir: logs/nm4-clevr-4n-gtp2
+
+checkpointing:
+  checkpoint_dir: /data/nemorl-runs/nm4-clevr-4n-gtp2
