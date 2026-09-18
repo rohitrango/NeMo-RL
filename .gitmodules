@@ -1,7 +1,7 @@
 [submodule "3rdparty/Megatron-Bridge"]
 	path = 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 	url = ssh://git@gitlab-master.nvidia.com:12051/liding/Megatron-Bridge.git
-	branch = main
+	branch = rohit/nm4-mlm-to-bridge
 	shallow = true
 [submodule "3rdparty/Automodel-workspace/Automodel"]
 	path = 3rdparty/Automodel-workspace/Automodel
