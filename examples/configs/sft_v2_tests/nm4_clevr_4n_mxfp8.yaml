@@ -14,5 +14,5 @@ policy:
       fp8_param: false
       fp8_quantizer_factory: null
       quant_recipe: null
-      moe_router_padding_for_quantization: true
+      moe_router_padding_for_quantization: false
       moe_router_padding_for_fp8: false

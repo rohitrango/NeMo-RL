@@ -1,0 +1,84 @@
+defaults:
+  - sft_vlm_nm4_nano_energon_tp4ep4_v2.yaml
+
+sft:
+  max_num_epochs: 1
+  max_num_steps: 1000000
+  max_consecutive_step_failures: 3
+
+policy:
+  megatron_cfg:
+    # SFT-v2 normally derives this before worker construction. Keep the
+    # standalone checkpoint-load check on the same value.
+    train_iters: ${sft.max_num_steps}
+
+data:
+  energon:
+    nvdataset_cache_dir: /home/svc-dss/cache/nemotron
+    watchdog_timeout_seconds: 1200
+    num_workers: 4
+    prefetch_factor: 2
+    cache_pool_num_workers: 4
+    # cache_pool_max_gbytes: 128
+    gc_collect_every_n_steps: 100000
+    model_family: nemotron
+    task_encoder:
+      options:
+        patch_dim: 14
+        temporal_patch_size: 1
+        allow_large_videos: true
+        video_max_num_frames: 64
+        video_aug_scale_frames_up: 4
+        video_aug_scale_resolution_only: true
+      packing:
+        name: balanced_greedy_knapsack
+        buffer_size: 5000   # DO NOT CHANGE THIS agents
+        options:
+          max_sequence_length: ${policy.max_total_sequence_length}
+          sequence_length_pad_multiple: 64
+          balanced_knapsack_delta: 5
+    cookers:
+    - name: nemotron_conversation
+      has_subflavors:
+        cook: conversation
+    - name: nemotron_general_conversations_jsonl
+      has_subflavors:
+        cook: general_conversations_jsonl
+    - name: nemotron_general_conversations_webdataset
+      has_subflavors:
+        cook: general_conversations_webdataset
+    - name: nemotron_nano_openai_messages_jsonl
+      has_subflavors:
+        cook: openai_messages_jsonl
+    seed_offset: 0
+  train:
+    path: /opt/nemo-rl/examples/configs/sft_v2_tests/sft_super35_generalist_full_cmh.yaml
+    split: train
+    virtual_epoch_length: 10000000
+  validation: null
+logger:
+  wandb_enabled: true
+  log_dir: logs/sft-super67b-n16-dss-generalist
+  wandb:
+    project: nemotron-super-sft
+    name: sft-super67b-n16-dss-generalist
+  tensorboard:
+    log_dir: logs/sft-super67b-n16-dss-generalist
+cluster:
+  gpus_per_node: 4
+  num_nodes: 16
+data_plane:
+  enabled: true
+  impl: local
+  max_partitions: 2
+checkpointing:
+  pretrained_checkpoint:
+    path: /data/models/nm4_nano_bridge
+    format: megatron_bridge
+  checkpoint_dir: /data/nemorl-runs/nm4-generalist-16n
+  enabled: true
+  metric_name: null
+  higher_is_better: false
+  keep_top_k: 5
+  save_period: 100
+  checkpoint_must_save_by: "00:03:40:00"

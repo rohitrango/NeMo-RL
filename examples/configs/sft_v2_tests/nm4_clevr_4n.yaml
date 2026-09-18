@@ -15,8 +15,8 @@ policy:
   train_global_batch_size: 4
   max_total_sequence_length: 4096
   megatron_cfg:
-    context_parallel_size: 1
-    tensor_model_parallel_size: 4
+    context_parallel_size: 4
+    tensor_model_parallel_size: 1
     expert_model_parallel_size: 16
     # Match the source NM4 training recipe: train the language model and
     # projector, but keep the pretrained vision tower fixed.
@@ -24,9 +24,8 @@ policy:
     freeze_vision_projector: false
     optimizer:
       lr: 5.0e-06
-    # attention_backend: auto
-    attention_backend: auto
-    flash_attention_version: null
+    attention_backend: flash
+    flash_attention_version: 4
     env_vars:
       # GDP's shared TileLang gated-delta backward faults on sm103; use Triton.
       FLA_TILELANG: "0"
@@ -47,10 +46,10 @@ policy:
       moe_router_padding_for_quantization: false
       moe_router_padding_for_fp8: false
       saved_args:
-        attention_backend: auto
-        flash_attention_version: null
-        mimo_vision_encoder_attention_backend: auto
-        mimo_vision_encoder_flash_attention_version: null
+        attention_backend: flash
+        flash_attention_version: 4
+        mimo_vision_encoder_attention_backend: flash
+        mimo_vision_encoder_flash_attention_version: 4
     # SFT-v2 normally derives this before worker construction. Keep the
     # standalone checkpoint-load check on the same value.
     train_iters: ${sft.max_num_steps}
@@ -96,8 +95,8 @@ logger:
   wandb_enabled: true
   log_dir: logs/nm4-clevr-4n
   wandb:
-    project: nemotron-super-sft
-    name: nm4-clevr-4n
+    project: rohit-sft_v2_up_n4
+    name: nm4-clevr-4n-cp4
   tensorboard:
     log_dir: logs/nm4-clevr-4n
 

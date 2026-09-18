@@ -110,10 +110,15 @@ RUN GITHUB_ARTIFACTORY=github.com \
 
 # Rust toolchain for setuptools-rust extensions in SGLang.
 ENV PATH="/root/.cargo/bin:$PATH"
-RUN curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --no-modify-path --profile minimal \
-    && rustc --version \
-    && cargo --version
+ARG SKIP_RUST_BUILD
+RUN if [[ -n "${SKIP_RUST_BUILD:-}" ]]; then \
+        echo "Skipping Rust toolchain for backend-only image"; \
+    else \
+        curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --no-modify-path --profile minimal \
+        && rustc --version \
+        && cargo --version; \
+    fi
 
 # Install uv and python
 ARG UV_VERSION=0.11.28
@@ -145,7 +150,7 @@ WORKDIR /opt/nemo-rl
 ARG MAX_JOBS
 ARG NVTE_BUILD_MAX_JOBS=8
 ARG NVTE_BUILD_THREADS_PER_JOB=2
-ARG NVTE_CUDA_ARCHS=90;100
+ARG NVTE_CUDA_ARCHS=100a;103a
 ARG NVTE_FRAMEWORK=pytorch
 # Only use for custom vllm installs. Learn more at https://github.com/NVIDIA-NeMo/RL/blob/main/docs/guides/use-custom-vllm.md
 ARG BUILD_CUSTOM_VLLM
@@ -170,8 +175,11 @@ ARG TRTLLM_BUILD_JOBS=24
 ENV UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv
 ENV UV_LINK_MODE=copy
 
-# Ensure DeepEP is built for H100 and B200 (also mcore inference unified memory API now invokes a torch API that requires these to be set)
-ENV TORCH_CUDA_ARCH_LIST="9.0 10.0"
+# Build native DeepEP kernels for the Blackwell GPUs targeted by the Nemotron-4
+# training environment. Keep this aligned with the mcore package-specific build
+# variables in pyproject.toml.
+ARG TORCH_CUDA_ARCH_LIST="10.0 10.3 10.3a"
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
 
 # Build HybridEP with inter-node transport support.
 ENV HYBRID_EP_MULTINODE=1
@@ -201,8 +209,10 @@ ENV LD_LIBRARY_PATH="/opt/nemo_rl_venv/lib/python3.13/site-packages/z3/lib:/opt/
 
 # First copy only the dependency files
 COPY --from=nemo-rl pyproject.toml uv.lock ./
-# Copy in the top level __init__.py/package_info.py since build-custom-vllm.sh needs the nemo_rl package to exist.
-COPY --from=nemo-rl nemo_rl/__init__.py nemo_rl/package_info.py ./nemo_rl/
+# Copy the top-level package bootstrap used while uv evaluates dynamic version
+# metadata. __init__.py imports transformers_compat, so the partial source tree
+# must include it as well.
+COPY --from=nemo-rl nemo_rl/__init__.py nemo_rl/package_info.py nemo_rl/transformers_compat.py ./nemo_rl/
 # The single source of truth for which extras each Ray actor's venv needs. Run as a
 # script by the prefetch below; imported by nemo_rl.distributed.ray_actor_environment_registry
 # at runtime. Kept dependency-free so it can be copied in without the rest of the source.
@@ -228,6 +238,11 @@ elif [ -n "$SEED_KEY" ]; then
 fi
 
 uv venv --seed
+# Fail with a useful diagnostic if the named build context did not provide the
+# root NeMo-RL project file. Using --project below also prevents uv from
+# accidentally selecting a nested third-party pyproject.
+pwd
+grep -n '^mcore = \[' /opt/nemo-rl/pyproject.toml
 # The custom build scripts will alter the pyproject.toml and uv.lock
 if [[ -n "${BUILD_CUSTOM_VLLM:-}" ]]; then
     UV_LINK_MODE=hardlink bash tools/build-custom-vllm.sh ${BUILD_CUSTOM_VLLM_URL:-} ${BUILD_CUSTOM_VLLM_REF:-} ${BUILD_CUSTOM_VLLM_PRECOMPILED_WHEEL_LOCATION:-}
@@ -250,17 +265,17 @@ apt-get update
 apt-get install -y --no-install-recommends libnvidia-ml-dev
 uv cache clean deep-ep
 # Everything is hardlinked against the uv cache; this layer holds exactly one real copy of every wheel.
-UV_LINK_MODE=hardlink uv sync --frozen --no-install-project
+UV_LINK_MODE=hardlink uv sync --project /opt/nemo-rl --frozen --no-install-project
 if [[ -z "${SKIP_VLLM_BUILD:-}" ]]; then
-    UV_LINK_MODE=hardlink uv sync --frozen --extra vllm --no-install-project
+    UV_LINK_MODE=hardlink uv sync --project /opt/nemo-rl --frozen --extra vllm --no-install-project
 fi
 if [[ -z "${SKIP_SGLANG_BUILD:-}" ]]; then
-    UV_LINK_MODE=hardlink uv sync --frozen --extra sglang --no-install-project
+    UV_LINK_MODE=hardlink uv sync --project /opt/nemo-rl --frozen --extra sglang --no-install-project
 fi
-UV_LINK_MODE=hardlink uv sync --frozen --extra mcore --no-install-project
-UV_LINK_MODE=hardlink uv sync --frozen --extra automodel --no-install-project
-UV_LINK_MODE=hardlink uv sync --frozen --extra modelopt --no-install-project
-UV_LINK_MODE=hardlink uv sync --frozen --all-groups --no-install-project
+UV_LINK_MODE=hardlink uv sync --project /opt/nemo-rl --frozen --extra mcore --no-install-project
+UV_LINK_MODE=hardlink uv sync --project /opt/nemo-rl --frozen --extra automodel --no-install-project
+UV_LINK_MODE=hardlink uv sync --project /opt/nemo-rl --frozen --extra modelopt --no-install-project
+UV_LINK_MODE=hardlink uv sync --project /opt/nemo-rl --frozen --all-groups --no-install-project
 
 # Worker-venv prefetch, phase 1: third-party packages only.
 #
@@ -306,7 +321,17 @@ while IFS=$'\t' read -r venv_name stage extras; do
     fi
     venv_path="${NEMO_RL_VENV_DIR}/${venv_name}"
     uv venv --allow-existing "$venv_path"
-    UV_PROJECT_ENVIRONMENT="$venv_path" UV_LINK_MODE=hardlink uv sync --frozen $extras --no-install-project
+    UV_PROJECT_ENVIRONMENT="$venv_path" UV_LINK_MODE=hardlink uv sync --project /opt/nemo-rl --frozen $extras --no-install-project
+    if [[ " $extras " == *" --extra mcore "* ]]; then
+        # nvidia-cutlass-dsl 4.6 split the Python cutlass.cute package into
+        # libs-core while libs-cu13 contains the CUDA runtime. The root uv
+        # workaround excludes libs-base for older CUTLASS releases; that also
+        # removes its dependency edge to libs-core, so restore core explicitly.
+        uv pip install --python "$venv_path/bin/python" --no-deps \
+            nvidia-cutlass-dsl-libs-core==4.6.0
+        "$venv_path/bin/python" -c \
+            "import cutlass.cute, flash_attn.cute, transformer_engine.pytorch, deep_ep; print('MCore FA4 runtime imports passed')"
+    fi
 done < /opt/actor_venvs.tsv
 
 apt-get purge -y libnvidia-ml-dev
