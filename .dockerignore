@@ -50,3 +50,15 @@ code_snapshots*/
 # Runtime env
 *runtime_env.yaml
 !default_runtime_env.yaml
+
+# Empty local workspace placeholder with mode 000; dependencies come from uv.lock.
+/3rdparty/Megatron-LM-workspace/Megatron-LM/
+
+# Local convenience symlink points outside the Docker build context.
+/nt4_processor
+
+# Local Slurm and rootless-container artifacts are not image inputs.
+/*-logs/
+/libpod/
+/*-attach.sh
+/*-attach-codex.sh

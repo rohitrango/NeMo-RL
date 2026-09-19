@@ -1,0 +1,50 @@
+defaults: nm4_clevr_4n.yaml
+
+sft:
+  max_num_steps: 1
+  val_at_start: false
+  val_at_end: false
+
+policy:
+  train_global_batch_size: 4
+  megatron_cfg:
+    tensor_model_parallel_size: 1
+    pipeline_model_parallel_size: 1
+    context_parallel_size: 64
+    expert_model_parallel_size: 64
+    expert_tensor_parallel_size: 1
+    sequence_parallel: false
+    env_vars:
+      NVTE_DEBUG: "1"
+      NVTE_DEBUG_LEVEL: "2"
+    model_overrides:
+      # CP64 exceeds the number of recurrent heads, so GDP must partition
+      # sequence chunks rather than recurrent heads across CP ranks.
+      linear_cp_mode: chunkwise
+      linear_cp_layout: contiguous
+  max_total_sequence_length: 4096
+
+data:
+  max_input_seq_length: ${policy.max_total_sequence_length}
+  energon:
+    task_encoder:
+      packing:
+        options:
+          # Both zigzag attention CP and contiguous GDP CP divide cleanly.
+          sequence_length_pad_multiple: 128
+
+logger:
+  wandb_enabled: false
+  log_dir: logs/nm4-clevr-16n-ep64cp64-chunkwise
+  wandb:
+    name: nm4-clevr-16n-ep64cp64-chunkwise
+  tensorboard:
+    log_dir: logs/nm4-clevr-16n-ep64cp64-chunkwise
+
+cluster:
+  gpus_per_node: 4
+  num_nodes: 16
+
+checkpointing:
+  enabled: false
+  checkpoint_dir: /data/nemorl-runs/nm4-clevr-16n-ep64cp64-chunkwise
