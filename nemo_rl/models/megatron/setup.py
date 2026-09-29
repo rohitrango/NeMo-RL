@@ -1850,6 +1850,9 @@ def _create_megatron_config(
         "overlap_param_gather": overlap_param_gather,
         "reuse_grad_buf_for_mxfp8_param_ag": reuse_grad_buf_for_mxfp8_param_ag,
     }
+    if optimizer_kwargs.get("optimizer") == "muon" and optimizer_kwargs["use_distributed_optimizer"]:
+        # Muon must own whole matrices when DDP reduce-scatters gradients.
+        optimizer_kwargs["use_layer_wise_distributed_optimizer"] = True
     # Fused linear logprobs run the decoder but read output_layer.weight directly
     # instead of calling output_layer.forward(). Megatron's distributed-optimizer
     # overlap_param_gather prefetch chain assumes every param-gather bucket
@@ -2366,6 +2369,7 @@ def setup_model_and_optimizer(
         megatron_cfg.model,
         megatron_cfg.ddp,
         use_torch_fsdp2=megatron_cfg.dist.use_torch_fsdp2,
+        use_layer_wise_distributed_optimizer=megatron_cfg.optimizer.use_layer_wise_distributed_optimizer,
         overlap_param_gather_with_optimizer_step=megatron_cfg.optimizer.overlap_param_gather_with_optimizer_step,
         data_parallel_random_init=megatron_cfg.rng.data_parallel_random_init,
         pre_wrap_hook=pre_wrap_hook,

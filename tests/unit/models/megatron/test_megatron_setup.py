@@ -2780,6 +2780,28 @@ class TestCreateMegatronConfigOptimizerFp8Recipe:
 
         assert optimizer.fp8_recipe is None
 
+    @pytest.mark.parametrize(
+        ("optimizer_name", "distributed", "expected_layer_wise"),
+        [
+            ("muon", True, True),
+            ("muon", False, False),
+            ("adam", True, False),
+        ],
+    )
+    def test_distributed_muon_uses_layer_wise_layout(
+        self, optimizer_name: str, distributed: bool, expected_layer_wise: bool
+    ) -> None:
+        config = self._config(None)
+        config["megatron_cfg"]["optimizer"].update(
+            optimizer=optimizer_name,
+            use_distributed_optimizer=distributed,
+            use_layer_wise_distributed_optimizer=False,
+        )
+
+        optimizer = self._optimizer_passed_to_container(config, fp8_param_enabled=False)
+
+        assert optimizer.use_layer_wise_distributed_optimizer is expected_layer_wise
+
 
 @pytest.mark.mcore
 class TestCreateMegatronConfigFP8Buffers:
@@ -3639,6 +3661,7 @@ class TestSetupModelAndOptimizer:
         # Enable param gather overlap
         mock_megatron_cfg.ddp.overlap_param_gather = True
         mock_megatron_cfg.ddp.align_param_gather = True
+        mock_megatron_cfg.optimizer.use_layer_wise_distributed_optimizer = True
         mock_megatron_cfg.checkpoint.load = None
         mock_megatron_cfg.checkpoint.pretrained_checkpoint = None
 
@@ -3672,6 +3695,7 @@ class TestSetupModelAndOptimizer:
         # Verify get_model was called (the mixed_precision_wrapper should be CustomFloat16Module)
         mock_get_model.assert_called_once()
         call_kwargs = mock_get_model.call_args[1]
+        assert call_kwargs["use_layer_wise_distributed_optimizer"] is True
         # Check that pre_wrap_hook is not empty when freeze_moe_router is True
         assert len(call_kwargs.get("pre_wrap_hook", [])) > 0
 
