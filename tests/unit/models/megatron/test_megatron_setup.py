@@ -25,6 +25,7 @@ nemo_rl.models.megatron.setup, focusing on:
 """
 
 import os
+import pickle
 import warnings
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -174,6 +175,14 @@ class TestValidateModelPaths:
         iter_dir.mkdir(parents=True)
         if complete:
             (iter_dir / "run_config.yaml").write_text("{}\n")
+            (iter_dir / "__0_0.distcp").write_bytes(b"checkpoint shard")
+            (iter_dir / ".metadata").write_bytes(
+                pickle.dumps(
+                    SimpleNamespace(
+                        storage_data={0: SimpleNamespace(relative_path="__0_0.distcp")}
+                    )
+                )
+            )
 
         config = {"model_name": "test-model"}
 
@@ -1187,6 +1196,31 @@ class TestApplyMoeConfig:
 @pytest.mark.mcore
 class TestApplyPrecisionConfig:
     """Tests for _apply_precision_config function."""
+
+    def test_bf16_clears_fp8_inherited_from_checkpoint(self):
+        """A BF16 fine-tuning recipe must not reuse pretrained FP8 settings."""
+        from nemo_rl.models.megatron.setup import _apply_precision_config
+
+        model_cfg = SimpleNamespace(
+            bf16=False,
+            fp16=False,
+            fp8="e4m3",
+            fp8_param=True,
+            quant_recipe=object(),
+            moe_router_padding_for_quantization=True,
+            moe_router_padding_for_fp8=True,
+        )
+
+        _apply_precision_config(
+            model_cfg, {"megatron_cfg": {"pipeline_dtype": "bfloat16"}}, torch.bfloat16
+        )
+
+        assert model_cfg.bf16 is True
+        assert model_cfg.fp8 is None
+        assert model_cfg.fp8_param is False
+        assert model_cfg.quant_recipe is None
+        assert model_cfg.moe_router_padding_for_quantization is False
+        assert model_cfg.moe_router_padding_for_fp8 is False
 
     @staticmethod
     def _quant_recipe(configs: dict[str, dict[str, Any]]) -> SimpleNamespace:
@@ -2263,6 +2297,24 @@ class TestCreateCheckpointConfig:
         assert checkpoint_config.fully_parallel_save is True
         assert checkpoint_config.fully_parallel_load is True
         assert checkpoint_config.load_rng is False
+
+    def test_resume_load_uses_concrete_iteration_payload_without_tracker(self, tmp_path):
+        """A minimal isolated NeMo RL resume must not fall back to pretrained weights."""
+        from nemo_rl.models.megatron.setup import _create_checkpoint_config
+
+        weights_path = tmp_path / "weights"
+        iteration_path = weights_path / "iter_0000000"
+        iteration_path.mkdir(parents=True)
+        (iteration_path / "metadata.json").touch()
+
+        checkpoint_config = _create_checkpoint_config(
+            str(tmp_path / "pretrained"),
+            str(weights_path),
+            str(tmp_path / "optimizer"),
+        )
+
+        assert checkpoint_config.save == str(weights_path)
+        assert checkpoint_config.load == str(iteration_path)
 
     def test_missing_ckpt_cfg_defaults_to_sync_save(self, tmp_path):
         """An absent checkpoint block keeps Megatron Bridge's default (sync save).
@@ -4088,6 +4140,41 @@ class TestDraftSetup:
 
 
 @pytest.mark.mcore
+def test_layerwise_main_params_use_checkpoint_precision():
+    """A chained layer-wise optimizer must keep FP32 checkpoint precision."""
+    from megatron.core.optimizer.layer_wise_optimizer import LayerWiseDistributedOptimizer
+    from megatron.core.optimizer.optimizer import ChainedOptimizer
+    from nemo_rl.models.megatron.setup import _layerwise_main_params_from_checkpoint
+
+    model = torch.nn.Linear(1, 1, bias=False, dtype=torch.bfloat16)
+    model.weight.data.fill_(1.0)
+    main_param = torch.nn.Parameter(torch.zeros(1, 1, dtype=torch.float32))
+    child = SimpleNamespace(
+        float16_groups=[[model.weight]],
+        fp32_from_float16_groups=[[main_param]],
+    )
+    layerwise = object.__new__(LayerWiseDistributedOptimizer)
+    layerwise.model_chunks = [model]
+    layerwise.chained_optimizers = [child]
+
+    def ordinary_reload(state_dict=None):
+        assert state_dict is None
+        main_param.data.copy_(model.weight.data)
+
+    layerwise.reload_model_params = ordinary_reload
+    outer = object.__new__(ChainedOptimizer)
+    outer.model_chunks = [model]
+    outer.chained_optimizers = [layerwise]
+
+    checkpoint_weight = torch.tensor([[1.0001]], dtype=torch.float32)
+    with _layerwise_main_params_from_checkpoint(outer):
+        outer.reload_model_params(state_dict={"model": {"weight": checkpoint_weight}})
+
+    torch.testing.assert_close(main_param, checkpoint_weight)
+    assert layerwise.reload_model_params is ordinary_reload
+
+
+@pytest.mark.mcore
 class TestForceSyncOptimizerFp32FromModel:
     """Tests for _force_sync_optimizer_fp32_from_model.
 
@@ -4300,6 +4387,30 @@ class TestForceSyncOptimizerFp32FromModel:
             torch.testing.assert_close(fake.cpu_clone, fake.gpu_model_param)
             assert fake.level3_called["count"] == 1
 
+    def test_handles_nested_chained_optimizers(self, monkeypatch):
+        """Muon chains can contain another chain whose optimizer property raises."""
+        from nemo_rl.models.megatron import setup as setup_mod
+
+        class _HybridDeviceOptimizer:
+            pass
+
+        class _Chain:
+            def __init__(self, children):
+                self.chained_optimizers = children
+
+            @property
+            def optimizer(self):
+                raise AssertionError("ChainedOptimizer has more than one optimizer")
+
+        self._patch_hdo_class(monkeypatch, _HybridDeviceOptimizer)
+        fake = self._make_distrib_opt(_HybridDeviceOptimizer)
+        nested = _Chain([_Chain([fake.distrib_opt])])
+
+        setup_mod._force_sync_optimizer_fp32_from_model(nested, model=MagicMock())
+
+        torch.testing.assert_close(fake.cpu_clone, fake.gpu_model_param)
+        assert fake.level3_called["count"] == 1
+
     def test_noop_when_not_hybrid_device_optimizer(self, monkeypatch):
         """A non-HybridDeviceOptimizer inner optimizer must be left untouched."""
         from nemo_rl.models.megatron import setup as setup_mod
@@ -4476,6 +4587,117 @@ class TestForceSyncModelFromOptimizerFp32:
         setup_mod._force_sync_model_from_optimizer_fp32(plain_opt)
 
         model_chunk.start_param_sync.assert_not_called()
+
+
+@pytest.mark.mcore
+class TestSyncModelParamsFromLoadedOptimizer:
+    """Regression coverage for MXFP8/Muon checkpoint resume synchronization."""
+
+    def test_prefers_mcore_generic_resynchronization_api(self):
+        """The nested-optimizer aware MCore API is used when available."""
+        from nemo_rl.models.megatron import setup as setup_mod
+
+        sync_model_params = MagicMock()
+        optimizer = SimpleNamespace(
+            quantize_and_sync_model_params_from_main_params=sync_model_params
+        )
+
+        assert setup_mod._sync_model_params_from_loaded_optimizer(optimizer)
+        sync_model_params.assert_called_once_with()
+
+    def test_descends_through_layerwise_optimizer_containers(self):
+        """A wrapper without the API still refreshes each concrete MCore child."""
+        first_sync = MagicMock()
+        second_sync = MagicMock()
+        optimizer = SimpleNamespace(
+            chained_optimizers=[
+                SimpleNamespace(
+                    _active_optimizers=[
+                        SimpleNamespace(
+                            quantize_and_sync_model_params_from_main_params=first_sync
+                        ),
+                        SimpleNamespace(
+                            quantize_and_sync_model_params_from_main_params=second_sync
+                        ),
+                    ]
+                )
+            ]
+        )
+
+        assert setup_mod._sync_model_params_from_loaded_optimizer(optimizer)
+        first_sync.assert_called_once_with()
+        second_sync.assert_called_once_with()
+
+    def test_checkpoint_roundtrip_restores_compute_weights_before_forward(
+        self, tmp_path
+    ):
+        """A restored MXFP8-style optimizer must repair stale compute storage.
+
+        This is a minimal save/load regression for the failure observed in the
+        128-node SFT continuation: checkpoint deserialization restores FP32
+        optimizer masters, but the first forward can otherwise see stale
+        quantized model storage.  The fake optimizer models the public MCore
+        post-load contract without requiring a GPU or distributed world.
+        """
+        from nemo_rl.models.megatron import setup as setup_mod
+
+        class _FakeMxfp8MuonOptimizer:
+            def __init__(self, model, model_chunk):
+                self.model = model
+                self.model_chunk = model_chunk
+                self.main_weight = torch.empty_like(model.weight, dtype=torch.float32)
+
+            def state_dict(self):
+                return {"main_weight": self.main_weight.clone()}
+
+            def load_state_dict(self, state_dict):
+                self.main_weight.copy_(state_dict["main_weight"])
+
+            def quantize_and_sync_model_params_from_main_params(self):
+                # The real MCore implementation quantizes MXFP8 from the FP32
+                # master then force-syncs the DDP parameter buffer.  BF16 is a
+                # CPU-safe stand-in for its model-side compute representation.
+                self.model.weight.data.copy_(
+                    self.main_weight.to(self.model.weight.dtype)
+                )
+                self.model_chunk.start_param_sync(force_sync=True)
+
+        torch.manual_seed(123)
+        source_model = torch.nn.Linear(3, 2, bias=False, dtype=torch.bfloat16)
+        source_chunk = MagicMock()
+        source_optimizer = _FakeMxfp8MuonOptimizer(source_model, source_chunk)
+        source_optimizer.main_weight.copy_(
+            torch.tensor([[1.125, -0.75, 0.5], [-0.25, 0.875, 1.5]])
+        )
+        source_optimizer.quantize_and_sync_model_params_from_main_params()
+
+        inputs = torch.tensor([[0.5, -1.0, 2.0]], dtype=torch.bfloat16)
+        expected_logits = source_model(inputs).detach().clone()
+        checkpoint_path = tmp_path / "optimizer-resume.pt"
+        torch.save(
+            {
+                "model": source_model.state_dict(),
+                "optimizer": source_optimizer.state_dict(),
+            },
+            checkpoint_path,
+        )
+
+        resumed_model = torch.nn.Linear(3, 2, bias=False, dtype=torch.bfloat16)
+        resumed_chunk = MagicMock()
+        resumed_optimizer = _FakeMxfp8MuonOptimizer(resumed_model, resumed_chunk)
+        checkpoint = torch.load(checkpoint_path, weights_only=True)
+        resumed_model.load_state_dict(checkpoint["model"])
+        resumed_optimizer.load_state_dict(checkpoint["optimizer"])
+
+        # Simulate the real MXFP8 failure mode: checkpoint loading restored the
+        # FP32 masters, while the model-side compute storage was left stale.
+        resumed_model.weight.data.zero_()
+        assert not torch.allclose(resumed_model(inputs), expected_logits)
+
+        assert setup_mod._sync_model_params_from_loaded_optimizer(resumed_optimizer)
+
+        torch.testing.assert_close(resumed_model(inputs), expected_logits)
+        resumed_chunk.start_param_sync.assert_called_once_with(force_sync=True)
 
 
 @pytest.mark.mcore
