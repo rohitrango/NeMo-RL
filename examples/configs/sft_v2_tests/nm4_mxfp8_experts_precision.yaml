@@ -1,0 +1,43 @@
+# Keep the dense backbone in BF16 so FP8 perturbations do not compound before
+# MoE routing. Expert GEMMs remain under the global MXFP8 recipe.
+configs:
+  bf16:
+    transformer_engine_config_type: "TEQuantizationParams"
+    training_recipe: {}
+
+matchers:
+  mamba_bf16:
+    config: "bf16"
+    type: "glob"
+    pattern: "*decoder.layers.*.mixer.*"
+    enabled: true
+
+  attention_bf16:
+    config: "bf16"
+    type: "glob"
+    pattern: "*decoder.layers.*.compute_layer.self_attention.*"
+    enabled: true
+
+  dense_mlp_bf16:
+    config: "bf16"
+    type: "glob"
+    pattern: "*decoder.layers.*.mlp.linear_fc*"
+    enabled: true
+
+  mtp_bf16:
+    config: "bf16"
+    type: "glob"
+    pattern: "*mtp.layers.*"
+    enabled: true
+
+  mimo_vision_encoder_bf16:
+    config: "bf16"
+    type: "glob"
+    pattern: "*modality_submodules.*.encoders.*"
+    enabled: true
+
+  mimo_vision_projection_bf16:
+    config: "bf16"
+    type: "glob"
+    pattern: "*modality_submodules.*projections.*"
+    enabled: true

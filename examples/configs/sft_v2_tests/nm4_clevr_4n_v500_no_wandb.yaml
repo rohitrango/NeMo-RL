@@ -1,0 +1,14 @@
+defaults:
+  - nm4_clevr_4n.yaml
+
+logger:
+  wandb_enabled: false
+  log_dir: logs/nt4-clevr-supervl35-v500
+  wandb:
+    name: nt4-clevr-supervl35-v500
+  tensorboard:
+    log_dir: logs/nt4-clevr-supervl35-v500
+
+checkpointing:
+  checkpoint_dir: /data/nemorl/rohit-sft_v2_up_n4/nt4-clevr-supervl35-v500
+  checkpoint_must_save_by: "00:01:40:00"
