@@ -8,14 +8,14 @@ sft:
   only_unmask_final: false
   max_consecutive_step_failures: 3
 checkpointing:
-  enabled: false
+  enabled: true
   checkpoint_dir: /data/nemorl-runs/nm4-generalist-16n-mxfp8-cp64ep64-gbs1
   metric_name: null
   higher_is_better: false
   keep_top_k: 5
   save_period: 100
   checkpoint_must_save_by: 00:03:40:00
-  save_optimizer: false
+  save_optimizer: true
   pretrained_checkpoint:
     path: /data/models/nm4_nano_bridge
     format: megatron_bridge
@@ -195,6 +195,7 @@ policy:
     freeze_vision_projector: false
     attention_backend: flash
     flash_attention_version: 4
+    high_priority_stream_groups: [ep]
     model_overrides:
       moe_router_score_function: sigmoid
       moe_router_topk: 10
@@ -208,6 +209,10 @@ policy:
       moe_router_skip_muon: true
       linear_cp_mode: chunkwise
       linear_cp_layout: contiguous
+      attention_cp_layout: zigzag
+      gdp_cutedsl_kernel: true
+      residual_stream_recompute_num_layers: 4
+      use_transformer_engine_op_fuser: false
       saved_args:
         attention_backend: flash
         flash_attention_version: 4
@@ -225,6 +230,7 @@ policy:
     mtp_num_layers: 2
     mtp_loss_scaling_factor: 0.3
     mtp_use_repeated_layer: true
+    mtp_hsm: true
     recompute_vision: true
     vision_recompute_granularity: full
     vision_recompute_method: block
@@ -285,7 +291,8 @@ data:
     task_encoder:
       name: nemotron_multimodal
       options:
-        prompt_format: processor_chat_template
+        prompt_format: nemotron6-moe
+        thinking_trace_format: ultra
         patch_dim: 14
         temporal_patch_size: 1
         allow_large_videos: true
