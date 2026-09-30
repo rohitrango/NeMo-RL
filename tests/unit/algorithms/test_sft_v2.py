@@ -352,7 +352,7 @@ def test_setup_copies_checkpointing_pretrained_checkpoint_onto_policy() -> None:
                 "moe_flex_dispatcher_backend": "hybridep",
             },
             1,
-            "HybridEP",
+            "moe_hybridep_pad_uneven_dispatch_inputs",
         ),
         (
             {"fp8_cfg": {"enabled": True, "fp8_recipe": "blockwise"}},
@@ -393,6 +393,42 @@ def test_setup_rejects_unsupported_energon_packing_layouts(
     config.policy["make_sequence_length_divisible_by"] = policy_multiple
 
     with pytest.raises(ValueError, match=message):
+        setup_sft_v2(config, MagicMock())
+
+
+def test_setup_allows_energon_hybridep_with_dispatch_padding() -> None:
+    from nemo_rl.algorithms.sft_v2 import setup_sft_v2
+
+    config = _valid_setup_config(
+        data_overrides={
+            "energon": SimpleNamespace(
+                task_encoder=SimpleNamespace(
+                    packing=SimpleNamespace(
+                        name="greedy_knapsack",
+                        options=SimpleNamespace(
+                            max_sequence_length=64,
+                            sequence_length_pad_multiple=4,
+                        ),
+                    )
+                )
+            ),
+        },
+        policy_overrides={
+            "megatron_cfg": {
+                "moe_token_dispatcher_type": "flex",
+                "moe_flex_dispatcher_backend": "hybridep",
+                "model_overrides": {"moe_hybridep_pad_uneven_dispatch_inputs": True},
+            },
+            "sequence_packing": {
+                "enabled": True,
+                "fuse_loss": True,
+                "algorithm": "greedy_knapsack",
+            },
+        },
+    )
+
+    # The mismatched capacity is checked after the HybridEP compatibility gate.
+    with pytest.raises(ValueError, match="Energon pack capacity"):
         setup_sft_v2(config, MagicMock())
 
 

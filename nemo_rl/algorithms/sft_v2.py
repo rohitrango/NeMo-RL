@@ -632,7 +632,14 @@ def setup_sft_v2(
             megatron_cfg.get("moe_token_dispatcher_type") == "flex"
             and megatron_cfg.get("moe_flex_dispatcher_backend") == "hybridep"
         ):
-            raise ValueError("Energon packing does not support HybridEP flex dispatch.")
+            # Energon packs can have different physical lengths across EP ranks.
+            model_overrides = megatron_cfg.get("model_overrides") or {}
+            if not model_overrides.get("moe_hybridep_pad_uneven_dispatch_inputs"):
+                raise ValueError(
+                    "Energon packing with HybridEP requires "
+                    "policy.megatron_cfg.model_overrides."
+                    "moe_hybridep_pad_uneven_dispatch_inputs=true."
+                )
 
         cp_size = megatron_cfg["context_parallel_size"]
         pack_options = energon_packing.options
@@ -684,6 +691,34 @@ def setup_sft_v2(
     loaded_training_info = checkpoint_probe.load_training_info(latest)
     weights_path, optimizer_path = checkpoint_probe.get_resume_paths(latest)
     checkpoint_probe.shutdown()
+
+    # Resume diagnostics are intentionally controlled by environment variables so
+    # they can be enabled by an isolated launcher without extending the public SFT
+    # configuration schema.  A checkpoint directory that merely looks plausible
+    # must never silently fall back to the pretrained model during a resume test.
+    require_resume = os.environ.get("NEMO_RL_REQUIRE_RESUME", "0") == "1"
+    expected_checkpoint = os.environ.get("NEMO_RL_EXPECTED_RESUME_CHECKPOINT")
+    if require_resume:
+        print(
+            "SFTv2 checkpoint preflight: "
+            f"latest={latest!r} weights_path={str(weights_path) if weights_path else None!r} "
+            f"optimizer_path={str(optimizer_path) if optimizer_path else None!r} "
+            f"require_resume={require_resume} expected_checkpoint={expected_checkpoint!r}",
+            flush=True,
+        )
+        if latest is None or weights_path is None or optimizer_path is None:
+            raise RuntimeError(
+                "Resume gate failed: expected a checkpoint with embedded optimizer "
+                f"state, got latest={latest!r}, weights_path={weights_path!r}, "
+                f"optimizer_path={optimizer_path!r}."
+            )
+        if expected_checkpoint and os.path.realpath(latest) != os.path.realpath(
+            expected_checkpoint
+        ):
+            raise RuntimeError(
+                "Resume gate failed: selected checkpoint differs from the launcher "
+                f"expectation: selected={latest!r}, expected={expected_checkpoint!r}."
+            )
 
     cluster_config = master_config.cluster
     num_nodes = cluster_config["num_nodes"]
