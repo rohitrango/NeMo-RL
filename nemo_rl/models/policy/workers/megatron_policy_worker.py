@@ -38,7 +38,6 @@ from megatron.bridge.training.utils.train_utils import (
 )
 from megatron.bridge.utils.common_utils import get_rank_safe
 from megatron.core import parallel_state
-from megatron.core.dist_checkpointing.strategies.torch import get_async_strategy
 from megatron.core.distributed import DistributedDataParallel
 from megatron.core.distributed.fsdp.mcore_fsdp_adapter import (
     FullyShardedDataParallelV1,
@@ -4524,10 +4523,18 @@ class MegatronPolicyWorkerImpl(
             terminate=release_cuda_cache,
         )
         if release_cuda_cache:
-            _, async_modules = get_async_strategy(
-                self.mcore_state.cfg.checkpoint.async_strategy
-            )
-            writer_cls = async_modules["FileSystemWriterAsync"]
+            try:
+                from megatron.core.dist_checkpointing.strategies.torch import get_async_strategy
+            except ImportError:
+                # Megatron-LM main removed the strategy selector and uses NVRx.
+                from nvidia_resiliency_ext.checkpointing.async_ckpt.filesystem_async import (
+                    FileSystemWriterAsync as writer_cls,
+                )
+            else:
+                _, async_modules = get_async_strategy(
+                    self.mcore_state.cfg.checkpoint.async_strategy
+                )
+                writer_cls = async_modules["FileSystemWriterAsync"]
             cleanup_tensor_caches = getattr(writer_cls, "cleanup_tensor_caches", None)
             if cleanup_tensor_caches is not None:
                 cleanup_tensor_caches()
