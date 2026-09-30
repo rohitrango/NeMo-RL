@@ -20,8 +20,11 @@ import threading
 import time
 import warnings
 from collections.abc import Mapping
+from contextlib import contextmanager, nullcontext
 from dataclasses import fields, is_dataclass, replace
 from datetime import timedelta
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Optional, TypeVar, cast
 
 import torch
@@ -143,6 +146,61 @@ except ImportError:
     HAVE_FSDP2 = False
 
 
+@contextmanager
+def _layerwise_main_params_from_checkpoint(optimizer):
+    """Let layer-wise FP32 masters load from checkpoint tensors during Bridge reload."""
+    from megatron.core.optimizer.distrib_optimizer import DistributedOptimizer
+    from megatron.core.optimizer.layer_wise_optimizer import LayerWiseDistributedOptimizer
+
+    patched = []
+
+    def patch(node):
+        if isinstance(node, LayerWiseDistributedOptimizer):
+            original_reload = node.reload_model_params
+
+            def reload(state_dict=None):
+                # Preserve the normal reload for child optimizers and FP32 params.
+                original_reload()
+                if state_dict is None:
+                    return
+
+                # Reuse MCore's checkpoint-name matching, including grouped and
+                # canonicalized parameter names, without changing its source.
+                mapper = SimpleNamespace(
+                    model_chunks=node.model_chunks,
+                    _normalize_state_dict_for_grouped_params=(
+                        DistributedOptimizer._normalize_state_dict_for_grouped_params
+                    ),
+                    _synthesize_state_dict_params_for_model=(
+                        DistributedOptimizer._synthesize_state_dict_params_for_model
+                    ),
+                )
+                checkpoint_params = DistributedOptimizer._build_model_param_to_state_dict_param_map(
+                    mapper, state_dict
+                )
+                with torch.no_grad():
+                    for child in node.chained_optimizers:
+                        if not hasattr(child, "float16_groups"):
+                            continue
+                        for model_group, main_group in zip(
+                            child.float16_groups, child.fp32_from_float16_groups, strict=True
+                        ):
+                            for model_param, main_param in zip(model_group, main_group, strict=True):
+                                main_param.copy_(checkpoint_params[model_param])
+
+            node.reload_model_params = reload
+            patched.append((node, original_reload))
+        for child in getattr(node, "chained_optimizers", ()):
+            patch(child)
+
+    patch(optimizer)
+    try:
+        yield
+    finally:
+        for node, original_reload in patched:
+            node.reload_model_params = original_reload
+
+
 def _force_sync_optimizer_fp32_from_model(optimizer, model):
     """Force-sync the distributed optimizer's FP32 master copies from the BF16 model params.
 
@@ -176,6 +234,11 @@ def _force_sync_optimizer_fp32_from_model(optimizer, model):
     rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
 
     def _sync_distrib_opt(distrib_opt):
+        if hasattr(distrib_opt, "chained_optimizers"):
+            applied_to_child = False
+            for child in distrib_opt.chained_optimizers:
+                applied_to_child |= _sync_distrib_opt(child)
+            return applied_to_child
         try:
             from megatron.core.optimizer.cpu_offloading.hybrid_optimizer import (
                 HybridDeviceOptimizer,
@@ -214,12 +277,7 @@ def _force_sync_optimizer_fp32_from_model(optimizer, model):
             hdo.update_fp32_param_by_new_param()
         return True
 
-    applied = False
-    if hasattr(optimizer, "chained_optimizers"):
-        for sub_opt in optimizer.chained_optimizers:
-            applied |= _sync_distrib_opt(sub_opt)
-    else:
-        applied = _sync_distrib_opt(optimizer)
+    applied = _sync_distrib_opt(optimizer)
 
     if applied and rank == 0:
         print(
@@ -242,10 +300,18 @@ def _force_sync_model_from_optimizer_fp32(optimizer):
     synchronous DP parameter all-gather before any reference-policy or training
     forward. This is the inverse of ``_force_sync_optimizer_fp32_from_model`` and
     is only called for a genuine optimizer-state resume.
+
+    Returns:
+        ``True`` if a HybridDeviceOptimizer was synchronized.
     """
     rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
 
     def _sync_distrib_opt(distrib_opt):
+        if hasattr(distrib_opt, "chained_optimizers"):
+            applied_to_child = False
+            for child in distrib_opt.chained_optimizers:
+                applied_to_child |= _sync_distrib_opt(child)
+            return applied_to_child
         try:
             from megatron.core.optimizer.cpu_offloading.hybrid_optimizer import (
                 HybridDeviceOptimizer,
@@ -273,18 +339,142 @@ def _force_sync_model_from_optimizer_fp32(optimizer):
             model_chunk.start_param_sync(force_sync=True)
         return True
 
-    applied = False
-    if hasattr(optimizer, "chained_optimizers"):
-        for sub_opt in optimizer.chained_optimizers:
-            applied |= _sync_distrib_opt(sub_opt)
-    else:
-        applied = _sync_distrib_opt(optimizer)
+    applied = _sync_distrib_opt(optimizer)
 
     if applied and rank == 0:
         print(
             "WORKAROUND: force-synced BF16 model params from loaded optimizer "
-            "FP32 masters (HybridDeviceOptimizer)"
+            "FP32 masters (HybridDeviceOptimizer)",
+            flush=True,
         )
+    return applied
+
+
+def _sync_model_params_from_loaded_optimizer(optimizer) -> bool:
+    """Rebuild compute weights from restored optimizer masters after a resume.
+
+    A full training checkpoint treats the optimizer's FP32 main parameters as
+    authoritative.  This matters particularly for MXFP8/NVFP4, where the
+    model-side storage has to be re-quantized from those masters before the
+    first forward.  It also matters for nested ``LayerWiseDistributedOptimizer``
+    / Muon chains: walking only the outer optimizer leaves the inner quantized
+    parameter owners untouched.
+
+    Megatron-Core provides ``quantize_and_sync_model_params_from_main_params``
+    precisely for this post-load operation.  Its chained-optimizer
+    implementation recursively stages every nested optimizer and then performs
+    a synchronous parameter gather for every model chunk.  This helper is used
+    after the HDO-specific path, because HDO owns additional CPU-side copies
+    that the generic MCore API cannot see.
+
+    Returns:
+        ``True`` if the generic MCore resynchronization API was invoked.
+    """
+    # Prefer the outer optimizer's implementation: ChainedOptimizer and
+    # MimoOptimizer coordinate staging/gathering among their children.  Some
+    # wrappers used by layer-wise Muon do not expose that API themselves,
+    # however, so descend through only their documented optimizer collections
+    # until reaching a concrete MCore optimizer.  Do not walk arbitrary
+    # attributes (in particular ``.optimizer``): those are frequently the raw
+    # torch optimizer and have neither the MCore synchronization semantics nor
+    # model-chunk ownership.
+    pending = [optimizer]
+    visited = set()
+    invoked = False
+    while pending:
+        candidate = pending.pop(0)
+        candidate_id = id(candidate)
+        if candidate_id in visited:
+            continue
+        visited.add(candidate_id)
+
+        sync_model_params = getattr(
+            candidate, "quantize_and_sync_model_params_from_main_params", None
+        )
+        if callable(sync_model_params):
+            sync_model_params()
+            invoked = True
+            continue
+
+        for children_attr in ("chained_optimizers", "_active_optimizers"):
+            children = getattr(candidate, children_attr, None)
+            if isinstance(children, (list, tuple)):
+                pending.extend(children)
+
+    if not invoked:
+        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        if os.environ.get("NEMO_RL_REQUIRE_RESUME", "0") == "1" and rank == 0:
+            print(
+                "WARNING: no Megatron-Core "
+                "quantize_and_sync_model_params_from_main_params API found "
+                "in the resumed optimizer tree",
+                flush=True,
+            )
+        return False
+
+    rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+    if os.environ.get("NEMO_RL_REQUIRE_RESUME", "0") == "1" and rank == 0:
+        print(
+            "Resynchronized model compute params from loaded optimizer masters "
+            "(Megatron-Core quantize_and_sync_model_params_from_main_params)",
+            flush=True,
+        )
+    return True
+
+
+def _resume_probe_model_digest(model, *, limit: int = 8) -> dict[str, Any]:
+    """Return a compact rank-local fingerprint of model tensors for resume logs."""
+    chunks = model if isinstance(model, (list, tuple)) else [model]
+    tensor_count = 0
+    element_count = 0
+    abs_sum = 0.0
+    sq_sum = 0.0
+    finite = True
+    dtypes: dict[str, int] = {}
+    for chunk in chunks:
+        for parameter in chunk.parameters():
+            if tensor_count >= limit:
+                return {
+                    "tensors": tensor_count,
+                    "elements": element_count,
+                    "abs_sum": abs_sum,
+                    "sq_sum": sq_sum,
+                    "finite": finite,
+                    "dtypes": dtypes,
+                }
+            value = parameter.detach()
+            tensor_count += 1
+            element_count += value.numel()
+            finite &= bool(torch.isfinite(value).all().item())
+            abs_sum += float(value.float().abs().sum().item())
+            sq_sum += float(value.float().square().sum().item())
+            dtypes[str(value.dtype)] = dtypes.get(str(value.dtype), 0) + 1
+    return {
+        "tensors": tensor_count,
+        "elements": element_count,
+        "abs_sum": abs_sum,
+        "sq_sum": sq_sum,
+        "finite": finite,
+        "dtypes": dtypes,
+    }
+
+
+def _resume_probe_optimizer_tree(optimizer) -> list[str]:
+    """Describe the documented MCore optimizer wrapper tree without mutating it."""
+    pending = [optimizer]
+    visited = set()
+    types: list[str] = []
+    while pending:
+        candidate = pending.pop(0)
+        if id(candidate) in visited:
+            continue
+        visited.add(id(candidate))
+        types.append(type(candidate).__qualname__)
+        for children_attr in ("chained_optimizers", "_active_optimizers"):
+            children = getattr(candidate, children_attr, None)
+            if isinstance(children, (list, tuple)):
+                pending.extend(children)
+    return types
 
 
 from nemo_rl.algorithms.logits_sampling_utils import TrainingSamplingParams
@@ -1476,6 +1666,17 @@ def _apply_precision_config(
     model_cfg: Any, config: PolicyConfig, dtype: torch.dtype
 ) -> None:
     """Apply precision and dtype configuration."""
+    fp8_cfg = config["megatron_cfg"].get("fp8_cfg")
+    if not fp8_cfg or not fp8_cfg.get("enabled", False):
+        # A model provider loaded from a pretraining checkpoint can carry FP8
+        # settings even when this fine-tuning recipe requests BF16.
+        model_cfg.fp8 = None
+        model_cfg.fp8_param = False
+        model_cfg.moe_router_padding_for_quantization = False
+        model_cfg.moe_router_padding_for_fp8 = False
+        if hasattr(model_cfg, "quant_recipe"):
+            model_cfg.quant_recipe = None
+
     model_cfg.bf16 = dtype == torch.bfloat16
     model_cfg.fp16 = dtype == torch.float16
 
@@ -1727,10 +1928,31 @@ def _create_checkpoint_config(
     """
     cfg = ckpt_cfg or {}
 
+    load_path = weights_path
+    if weights_path is not None:
+        # NeMo RL checkpoints store the MCore payload beneath the policy root as
+        # ``iter_0000000``.  Bridge accepts that concrete iteration directory,
+        # but cannot otherwise identify the root when a minimal isolated resume
+        # directory contains no tracker file.  In that situation it silently
+        # falls back to ``pretrained_checkpoint`` and skips optimizer restore.
+        # Keep the root as the save destination, but give the loader the direct
+        # payload when it is present.
+        iteration_path = Path(weights_path) / "iter_0000000"
+        if any(
+            (iteration_path / marker).exists()
+            for marker in (
+                "run_config.yaml",
+                "train_state.pt",
+                "metadata.json",
+                ".metadata",
+            )
+        ):
+            load_path = str(iteration_path)
+
     kwargs: dict[str, Any] = dict(
         save_interval=100,
         save=weights_path,
-        load=weights_path,
+        load=load_path,
         load_optim=optimizer_path is not None,
         pretrained_checkpoint=pretrained_path,
         fully_parallel_save=True,
@@ -2134,6 +2356,16 @@ def setup_model_and_optimizer(
         get_position_embedding_ranks=get_position_embedding_ranks,
     )
 
+    resume_diagnostics = os.environ.get("NEMO_RL_REQUIRE_RESUME", "0") == "1"
+    rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+    if resume_diagnostics and rank == 0:
+        runtime_source = Path(__file__)
+        print(
+            "Resume runtime setup.py: "
+            f"path={runtime_source} sha256={hashlib.sha256(runtime_source.read_bytes()).hexdigest()}",
+            flush=True,
+        )
+
     if megatron_cfg.ft and megatron_cfg.ft.enable_ft_package:
         fault_tolerance.setup(megatron_cfg, state)
         fault_tolerance.maybe_setup_simulated_fault(megatron_cfg.ft)
@@ -2406,18 +2638,37 @@ def setup_model_and_optimizer(
             and not preload_policy_from_pretrained_for_draft
         )
 
+    rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+    if resume_diagnostics and rank == 0:
+        print(
+            "Checkpoint resume diagnostics: "
+            f"should_load={should_load_checkpoint} "
+            f"resume_exists={resume_checkpoint_exists} "
+            f"pretrained_exists={pretrained_checkpoint_exists} "
+            f"load={megatron_cfg.checkpoint.load!r} "
+            f"load_optim={megatron_cfg.checkpoint.load_optim} "
+            f"optimizer_present={optimizer is not None}",
+            flush=True,
+        )
+
     # Load checkpoint if applicable
     if should_load_checkpoint:
         if pre_load_checkpoint_hook is not None:
             pre_load_checkpoint_hook(state, model)
-        load_checkpoint(
-            state,
-            model,
-            optimizer,
-            scheduler,
-            checkpointing_context=checkpointing_context,
-            skip_load_to_model_and_opt=HAVE_FSDP2 and megatron_cfg.dist.use_torch_fsdp2,
+        reload_context = (
+            _layerwise_main_params_from_checkpoint(optimizer)
+            if optimizer is not None and megatron_cfg.checkpoint.load_main_params_from_ckpt
+            else nullcontext()
         )
+        with reload_context:
+            load_checkpoint(
+                state,
+                model,
+                optimizer,
+                scheduler,
+                checkpointing_context=checkpointing_context,
+                skip_load_to_model_and_opt=HAVE_FSDP2 and megatron_cfg.dist.use_torch_fsdp2,
+            )
         print("Checkpoint loaded")
 
         # See _force_sync_optimizer_fp32_from_model: required when
@@ -2437,9 +2688,57 @@ def setup_model_and_optimizer(
         # bridge may have just mutated during load_checkpoint.
         if optimizer is not None:
             if megatron_cfg.checkpoint.finetune:
+                if resume_diagnostics and rank == 0:
+                    print(
+                        "Checkpoint resume diagnostics: post-load finetune path; "
+                        "optimizer masters were not restored",
+                        flush=True,
+                    )
                 _force_sync_optimizer_fp32_from_model(optimizer, model)
-            elif resume_checkpoint_exists:
+            elif not megatron_cfg.checkpoint.finetune:
+                if resume_diagnostics and rank == 0:
+                    print(
+                        "Checkpoint resume diagnostics: post-load optimizer-resume path",
+                        flush=True,
+                    )
+                # HDO's private FP32 working copies must be restored first,
+                # but that does not replace MCore's quantized-param refresh.
+                # In particular, a Muon chain can expose an HDO-compatible
+                # member while still owning MXFP8 model storage that only
+                # quantize_and_sync_model_params_from_main_params can rebuild.
+                #
+                # Do not use ``resume_checkpoint_exists`` as the gate here.
+                # The SFT checkpoint manager can materialize a full run
+                # checkpoint through ``pretrained_checkpoint`` while leaving
+                # ``checkpoint.load`` unset.  Such a non-finetune load also
+                # restores optimizer masters and needs the same post-load
+                # rebuild before its first forward.
+                if resume_diagnostics and rank == 0:
+                    print(
+                        "Resume optimizer probe before resync: "
+                        f"tree={_resume_probe_optimizer_tree(optimizer)} "
+                        f"model={_resume_probe_model_digest(model)}",
+                        flush=True,
+                    )
                 _force_sync_model_from_optimizer_fp32(optimizer)
+                _sync_model_params_from_loaded_optimizer(optimizer)
+                if resume_diagnostics and rank == 0:
+                    print(
+                        "Resume optimizer probe after resync: "
+                        f"model={_resume_probe_model_digest(model)}",
+                        flush=True,
+                    )
+        elif resume_diagnostics and rank == 0:
+            print(
+                "Checkpoint resume diagnostics: checkpoint loaded without an optimizer",
+                flush=True,
+            )
+    elif resume_diagnostics:
+        raise RuntimeError(
+            "Resume gate failed in Megatron worker: checkpoint load was skipped; "
+            f"load={megatron_cfg.checkpoint.load!r} "
+            f"pretrained_checkpoint={megatron_cfg.checkpoint.pretrained_checkpoint!r}."
+        )
     torch.distributed.barrier()
 
     draft_model = get_attached_draft_model(model)

@@ -7,18 +7,26 @@ policy:
       enabled: true
       fp8: e4m3
       fp8_recipe: mxfp8
-      fp8_param: false  # setting this to true causes no convergence, maybe we need to pair this with other optimizer settings
-    te_precision_config_file: examples/configs/sft_v2_tests/nm4_mxfp8_tp4_precision.yaml
+      # Same as pretraining --fp8-param-gather and
+      # --reuse-grad-buf-for-mxfp8-param-ag. NeMo-RL derives both from this.
+      fp8_param: true
+    te_precision_config_file: examples/configs/sft_v2_tests/nm4_mxfp8_experts_precision.yaml
     model_overrides:
-      fp8: null
-      fp8_param: false
+      # Set these in the same override as router padding. Megatron checks
+      # them together when the override is applied, before fp8_cfg is copied on.
+      fp8: e4m3
+      fp8_recipe: mxfp8
+      fp8_param: true
       fp8_quantizer_factory: null
       quant_recipe: null
-      moe_router_padding_for_quantization: false
+      moe_router_padding_for_quantization: true
       moe_router_padding_for_fp8: false
-      
+
+checkpointing:
+  checkpoint_dir: /data/nemorl-runs/nm4-clevr-4n-mxfp8
+
 logger:
-  log_dir: logs/nm4-clevr-4n-mxfp8  
+  log_dir: logs/nm4-clevr-4n-mxfp8
   wandb:
     name: nm4-clevr-4n-mxfp8
   tensorboard:
