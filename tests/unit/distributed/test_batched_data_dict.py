@@ -842,6 +842,19 @@ def test_get_multimodal_dict_mixed_content_and_device_move():
     ].device.type == ("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def test_get_multimodal_dict_excludes_packed_sequence_boundaries():
+    """Sequence boundaries are consumed by batch preparation, not model forward."""
+    batch = BatchedDataDict(
+        {
+            "cu_seqlens": PackedTensor([torch.tensor([0, 4])], dim_to_pack=0),
+            "cu_seqlens_padded": PackedTensor([torch.tensor([0, 8])], dim_to_pack=0),
+            "pixel_values": PackedTensor([torch.ones(2, 3)], dim_to_pack=0),
+        }
+    )
+
+    assert set(batch.get_multimodal_dict(as_tensors=True)) == {"pixel_values"}
+
+
 def test_get_multimodal_dict_casts_only_pixels_without_materializing_dedup():
     pixels = PackedTensor(
         [torch.randn(2, 3, 8, 8, dtype=torch.float32)], dim_to_pack=0
