@@ -16,6 +16,7 @@
 
 import importlib
 import os
+import pickle
 import sys
 import time
 from types import ModuleType, SimpleNamespace
@@ -196,10 +197,29 @@ def test_prefer_nvrx_falls_back_to_original_save_when_nvrx_missing(monkeypatch):
 
 
 def _stage_conversion(path) -> None:
-    """Materialize a complete conversion layout (iter_0000000/run_config.yaml)."""
-    os.makedirs(os.path.join(str(path), "iter_0000000"), exist_ok=True)
-    with open(os.path.join(str(path), "iter_0000000", "run_config.yaml"), "w") as f:
+    """Materialize a complete conversion layout."""
+    iteration_path = os.path.join(str(path), "iter_0000000")
+    os.makedirs(iteration_path, exist_ok=True)
+    with open(os.path.join(iteration_path, "run_config.yaml"), "w") as f:
         f.write("{}\n")
+    with open(os.path.join(iteration_path, "__0_0.distcp"), "wb") as f:
+        f.write(b"checkpoint shard")
+    with open(os.path.join(iteration_path, ".metadata"), "wb") as f:
+        pickle.dump(
+            SimpleNamespace(
+                storage_data={0: SimpleNamespace(relative_path="__0_0.distcp")}
+            ),
+            f,
+        )
+
+
+def test_conversion_missing_referenced_shard_is_incomplete(monkeypatch, tmp_path):
+    module = _load_community_import_module(monkeypatch)
+    _stage_conversion(tmp_path)
+    assert module.megatron_conversion_is_complete(str(tmp_path))
+
+    (tmp_path / "iter_0000000" / "__0_0.distcp").unlink()
+    assert not module.megatron_conversion_is_complete(str(tmp_path))
 
 
 def test_import_model_from_hf_name_calls_bridge_save(monkeypatch, tmp_path):
