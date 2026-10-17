@@ -3710,7 +3710,7 @@ def test_setup_auto_enables_skip_reference_logprobs_with_policy_factory(
         def init_collective(self, *_args, **_kwargs):
             return []
 
-        def prepare_refit_info(self, *, refit_payload_mode):
+        def prepare_refit_info(self):
             return {}
 
     def policy_factory(
@@ -3746,9 +3746,6 @@ def test_setup_auto_enables_skip_reference_logprobs_with_policy_factory(
 
         def prepare_refit_info(self, _state):
             pass
-
-        def get_refit_payload_mode(self):
-            return "hf_export"
 
         def init_collective(self, *_args, **_kwargs):
             return []
@@ -3851,7 +3848,7 @@ def test_setup_starts_nemo_gym_for_trtllm(monkeypatch, mock_grpo_components):
         def print_node_ip_and_gpu_id(self):
             pass
 
-        def prepare_refit_info(self, *, refit_payload_mode):
+        def prepare_refit_info(self):
             return {}
 
     class DummyTrtllmGeneration:
@@ -3864,10 +3861,10 @@ def test_setup_starts_nemo_gym_for_trtllm(monkeypatch, mock_grpo_components):
         def prepare_refit_info(self, _state):
             pass
 
-        def get_refit_payload_mode(self):
-            return "hf_export"
+    # is_sharded=False is what an unsharded job returns, and it lets the real
+    # agent-coverage check take its early return instead of scanning a mock dataset.
+    nemo_gym_shard_set = MagicMock(is_sharded=False)
 
-    nemo_gym_shard_set = MagicMock()
     build_nemo_gym_actors = MagicMock(return_value=nemo_gym_shard_set)
     monkeypatch.setattr(grpo_mod, "Logger", lambda *_args, **_kwargs: DummyLogger())
     monkeypatch.setattr(
